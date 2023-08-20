@@ -2,7 +2,7 @@
 
 ## Status
 
-Nacent. Zero functionality.
+Nacent. Zero functionality, though possibly interesting as an example.
 
 ## Overview
 
