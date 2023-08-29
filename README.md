@@ -2,7 +2,7 @@
 
 ## Status
 
-Nacent. Zero functionality, though possibly interesting as an example.
+Unuseless. It can accept integer arguments and return integers.
 
 ## Overview
 
