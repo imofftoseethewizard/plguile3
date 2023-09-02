@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2023-09-02
+
+This release includes a minor version update to mark the completion of
+the call handler interaction protocol between Postgres and Guile.
+While it does not yet handle all types, it handles everything you can
+do with types in the context of `CREATE FUNCTION`: it properly handles
+all combinations of in, out, in/out, parameters and returns an
+appropriately-typed tuple, if there is more than one out or in/out
+parameter.
+
+ChatGPT hallucinated a `deform_array` function in Postgres, but with
+further questioning, it generated `deconstruct_array`. It also
+suggested I use `scm_call_with_values`, a function that was removed
+from the Guile source code in March of 2001.  It also couldn't
+identify the appropriate header file for `get_call_result_type`.  It's
+significantly helpful, but the whole workflow seems clumsy.
+
+This is so far about 13 hours of work.
+
 ## [0.0.3] - 2023-08-29
 
 The type cache has been modified to include to/from functions and is

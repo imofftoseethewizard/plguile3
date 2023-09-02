@@ -2,9 +2,11 @@
 
 #include "postgres.h"
 #include "fmgr.h"
+#include "funcapi.h"
 #include "access/htup_details.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -53,6 +55,7 @@ static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc 
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static SCM scruple_compile_func(Oid func_oid);
+static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 
 static SCM is_int_2_proc;
 static SCM is_int_4_proc;
@@ -104,6 +107,7 @@ void _PG_fini(void) {
     FuncCacheEntry *entry;
 
     hash_seq_init(&status, funcCache);
+
     while ((entry = (FuncCacheEntry *) hash_seq_search(&status)) != NULL) {
         scm_gc_unprotect_object(entry->scm_proc);
     }
@@ -117,7 +121,6 @@ void _PG_fini(void) {
 
 Datum scruple_call(PG_FUNCTION_ARGS) {
 
-    /* Handle a call to a Guile function */
     Oid func_oid = fcinfo->flinfo->fn_oid;
     HeapTuple proc_tuple;
     SCM proc;
@@ -127,10 +130,9 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
     bool found;
     FuncCacheEntry *hash_entry;
 
-    Form_pg_proc proc_struct;
-    Oid rettype_oid;
-
     SCM arg_list = SCM_EOL;
+
+    Datum result;
 
     elog(NOTICE, "scruple_call: begin");
 
@@ -155,29 +157,142 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
 
     // Fetch tuple from pg_proc for the given function Oid
     proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
+
     if (!HeapTupleIsValid(proc_tuple))
         elog(ERROR, "scruple_call: failed to fetch function details.");
+
+    // Loop through all arguments, convert them to SCM and add them to
+    // the list.
+    for (int i = PG_NARGS()-1; i >= 0; i--) {
+
+        Oid arg_type = get_fn_expr_argtype(fcinfo->flinfo, i);
+        Datum arg = PG_GETARG_DATUM(i);
+
+        SCM scm_arg = datum_to_scm(arg, arg_type);
+
+        arg_list = scm_cons(scm_arg, arg_list);
+    }
+
+    result = convert_result_to_datum(scm_apply(proc, arg_list, SCM_EOL), proc_tuple, fcinfo);
+
+    ReleaseSysCache(proc_tuple);
+
+    PG_RETURN_DATUM(result);
+}
+
+Datum
+convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo) {
+
+    Form_pg_proc proc_struct;
+    Oid rettype_oid;
+
+    bool is_null;
+
+    Datum argmodes_datum, argtypes_datum;
+
+    ArrayType *argmodes_array;
+    int num_modes;
+
+    Datum *type_datum;
+    bool *type_nulls;
+    int num_types;
+
+    char *argmodes;
+
+    int num_out_params;
+
+    Datum result_datum;
 
     proc_struct = (Form_pg_proc) GETSTRUCT(proc_tuple);
     rettype_oid = proc_struct->prorettype;
 
-    elog(NOTICE, "scruple_call: return type oid: %d", rettype_oid);
+    elog(NOTICE, "convert_result_to_datum: return type oid: %d", rettype_oid);
 
-    // Loop through all arguments, convert them to SCM and add them to the list
-    for (int i = PG_NARGS()-1; i >= 0; i--) {
-        Oid arg_type = get_fn_expr_argtype(fcinfo->flinfo, i);
-        Datum arg = PG_GETARG_DATUM(i);
+    argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
 
-        // Convert PostgreSQL Datum to Guile SCM
-        SCM scm_arg = datum_to_scm(arg, arg_type);
+    if (is_null)
+        // No out parameters.
+        return scm_to_datum(result, rettype_oid);
 
-        // Append to the argument list
-        arg_list = scm_cons(scm_arg, arg_list);
+    argmodes_array = DatumGetArrayTypeP(argmodes_datum);
+    argmodes = (char *) ARR_DATA_PTR(argmodes_array);
+    num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
+
+    argtypes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proallargtypes, &is_null);
+
+    if (is_null)
+        elog(ERROR, "convert_result_to_datum: null arg types datum");
+
+    deconstruct_array(DatumGetArrayTypeP(argtypes_datum),
+                      OIDOID, sizeof(Oid), true, 'i',
+                      &type_datum, &type_nulls, &num_types);
+
+    if (num_modes != num_types)
+        elog(ERROR, "convert_result_to_datum: num arg modes %d and num types %d differ", num_modes, num_types);
+
+    elog(NOTICE, "convert_result_to_datum: num args: %d", num_types);
+
+    num_out_params = 0;
+
+    for (int i = 0; i < num_types; ++i) {
+        if (argmodes[i] != 'i') {
+            if (type_nulls[i])
+                elog(ERROR, "convert_result_to_datum: arg %d has null type but mode %c", i, argmodes[i]);
+
+            num_out_params++;
+        }
     }
 
-    ReleaseSysCache(proc_tuple);
+    if (num_out_params == 1)
+        result_datum = scm_to_datum(result, rettype_oid);
 
-    return scm_to_datum(scm_apply(proc, arg_list, SCM_EOL), rettype_oid);
+    else {
+        TupleDesc   tuple_desc;
+        HeapTuple   ret_heap_tuple;
+
+        Datum *ret_values;
+        bool *ret_is_null;
+
+        int ret_idx = 0;
+
+        if (scm_c_nvalues(result) != num_out_params)
+            elog(ERROR, "convert_result_to_datum: num values %zu does not equal num out params %d", scm_c_nvalues(result), num_out_params);
+
+        ret_values = (Datum *) palloc0(sizeof(Datum) * num_out_params);
+        ret_is_null = (bool *) palloc0(sizeof(bool) * num_out_params);
+
+        if (get_call_result_type(fcinfo, NULL, &tuple_desc) != TYPEFUNC_COMPOSITE)
+            ereport(ERROR,
+                    (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                     errmsg("function returning record called in context "
+                            "that cannot accept type record")));
+
+        for (int i = 0; i < num_types; ++i) {
+            if (argmodes[i] != 'i') {
+                SCM v = scm_c_value_ref(result, ret_idx);
+                Oid v_type_oid = DatumGetObjectId(type_datum[i]);
+
+                elog(NOTICE, "convert_result_to_datum: v_type_oid: %d", v_type_oid);
+
+                if (v == SCM_EOL)
+                    ret_is_null[ret_idx++] = true;
+                else
+                    ret_values[ret_idx++] = scm_to_datum(v, v_type_oid);
+
+            }
+        }
+
+        ret_heap_tuple = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
+        result_datum = HeapTupleGetDatum(ret_heap_tuple);
+
+        pfree(ret_values);
+        pfree(ret_is_null);
+    }
+
+    pfree(type_datum);
+    pfree(type_nulls);
+
+    return result_datum;
 }
 
 Datum scruple_call_inline(PG_FUNCTION_ARGS) {
@@ -246,18 +361,10 @@ SCM scruple_compile_func(Oid func_oid) {
     if (!HeapTupleIsValid(proc_tuple))
         elog(ERROR, "scruple_compile: Failed to fetch function details.");
 
-    // Extract information from the tuple
-    prosrc_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
-    prosrc = TextDatumGetCString(prosrc_datum);
-
-    // TODO check is_null
-
-    // Now you have the function source in prosrc. Use it as required.
+    initStringInfo(&buf);
 
     proc_struct = (Form_pg_proc) GETSTRUCT(proc_tuple);
     SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proname, &is_null);
-
-    initStringInfo(&buf);
 
     if (!is_null) {
         proc_name = NameStr(proc_struct->proname);
@@ -308,8 +415,17 @@ SCM scruple_compile_func(Oid func_oid) {
         }
     }
 
+    prosrc_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
+    prosrc = TextDatumGetCString(prosrc_datum);
+
+    if (is_null) {
+        elog(ERROR, "scruple_compile: source datum is null.");
+    }
+
     appendStringInfo(&buf, ")\n%s)", prosrc);
+
     elog(NOTICE, "scruple_compile: compiling source:\n%s", buf.data);
+
     scm_eval_string(scm_from_locale_string(buf.data));
     scm_proc = scm_variable_ref(scm_c_lookup(proc_name));
 
