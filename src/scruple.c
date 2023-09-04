@@ -56,6 +56,7 @@ static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
+static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
 
 static SCM is_int_2_proc;
 static SCM is_int_4_proc;
@@ -183,114 +184,68 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
 Datum
 convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo) {
 
-    Form_pg_proc proc_struct;
+    TypeFuncClass typefunc_class;
     Oid rettype_oid;
+    TupleDesc tuple_desc;
 
-    bool is_null;
-
-    Datum argmodes_datum, argtypes_datum;
-
-    ArrayType *argmodes_array;
-    int num_modes;
-
-    Datum *type_datum;
-    bool *type_nulls;
-    int num_types;
-
-    char *argmodes;
-
-    int num_out_params;
-
-    Datum result_datum;
-
-    proc_struct = (Form_pg_proc) GETSTRUCT(proc_tuple);
-    rettype_oid = proc_struct->prorettype;
+    typefunc_class = get_call_result_type(fcinfo, &rettype_oid, &tuple_desc);
 
     elog(NOTICE, "convert_result_to_datum: return type oid: %d", rettype_oid);
 
-    argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
+    switch (typefunc_class) {
 
-    if (is_null)
-        // No out parameters.
+    case TYPEFUNC_SCALAR:	    /* scalar result type                      */
         return scm_to_datum(result, rettype_oid);
 
-    argmodes_array = DatumGetArrayTypeP(argmodes_datum);
-    argmodes = (char *) ARR_DATA_PTR(argmodes_array);
-    num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
+    case TYPEFUNC_COMPOSITE:	    /* determinable rowtype result             */
+        return convert_result_to_composite_datum(result, tuple_desc);
 
-    argtypes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proallargtypes, &is_null);
+    case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
+    case TYPEFUNC_RECORD:	    /* indeterminate rowtype result            */
+    case TYPEFUNC_OTHER:	    /* bogus type, eg pseudotype               */
+        elog(ERROR, "convert_result_to_datum: not implemented");
+        return (Datum) 0;
 
-    if (is_null)
-        elog(ERROR, "convert_result_to_datum: null arg types datum");
+    default:
+        elog(ERROR, "convert_result_to_datum: unknown TypeFuncClass value: %d", typefunc_class);
+        return (Datum) 0;
+    }
+}
 
-    deconstruct_array(DatumGetArrayTypeP(argtypes_datum),
-                      OIDOID, sizeof(Oid), true, 'i',
-                      &type_datum, &type_nulls, &num_types);
+Datum
+convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc) {
 
-    if (num_modes != num_types)
-        elog(ERROR, "convert_result_to_datum: num arg modes %d and num types %d differ", num_modes, num_types);
+    HeapTuple ret_heap_tuple;
 
-    elog(NOTICE, "convert_result_to_datum: num args: %d", num_types);
+    Datum *ret_values;
+    bool *ret_is_null;
 
-    num_out_params = 0;
+    Datum result_datum;
 
-    for (int i = 0; i < num_types; ++i) {
-        if (argmodes[i] != 'i') {
-            if (type_nulls[i])
-                elog(ERROR, "convert_result_to_datum: arg %d has null type but mode %c", i, argmodes[i]);
+    if (scm_c_nvalues(result) != tuple_desc->natts)
+        elog(ERROR, "convert_result_to_datum: num values %zu does not equal num out params %d", scm_c_nvalues(result), tuple_desc->natts);
 
-            num_out_params++;
-        }
+    ret_values = (Datum *) palloc0(sizeof(Datum) * tuple_desc->natts);
+    ret_is_null = (bool *) palloc0(sizeof(bool) * tuple_desc->natts);
+
+    for (int i = 0; i < tuple_desc->natts; ++i) {
+
+        Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
+        SCM v = scm_c_value_ref(result, i);
+
+        // TODO: handle attr->atttypmod
+        elog(NOTICE, "convert_result_to_datum: slot %d, attr->atttypid: %d", i, attr->atttypid);
+        if (v == SCM_EOL)
+            ret_is_null[i] = true;
+        else
+            ret_values[i] = scm_to_datum(v, attr->atttypid);
     }
 
-    if (num_out_params == 1)
-        result_datum = scm_to_datum(result, rettype_oid);
+    ret_heap_tuple = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
+    result_datum = HeapTupleGetDatum(ret_heap_tuple);
 
-    else {
-        TupleDesc   tuple_desc;
-        HeapTuple   ret_heap_tuple;
-
-        Datum *ret_values;
-        bool *ret_is_null;
-
-        int ret_idx = 0;
-
-        if (scm_c_nvalues(result) != num_out_params)
-            elog(ERROR, "convert_result_to_datum: num values %zu does not equal num out params %d", scm_c_nvalues(result), num_out_params);
-
-        ret_values = (Datum *) palloc0(sizeof(Datum) * num_out_params);
-        ret_is_null = (bool *) palloc0(sizeof(bool) * num_out_params);
-
-        if (get_call_result_type(fcinfo, NULL, &tuple_desc) != TYPEFUNC_COMPOSITE)
-            ereport(ERROR,
-                    (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                     errmsg("function returning record called in context "
-                            "that cannot accept type record")));
-
-        for (int i = 0; i < num_types; ++i) {
-            if (argmodes[i] != 'i') {
-                SCM v = scm_c_value_ref(result, ret_idx);
-                Oid v_type_oid = DatumGetObjectId(type_datum[i]);
-
-                elog(NOTICE, "convert_result_to_datum: v_type_oid: %d", v_type_oid);
-
-                if (v == SCM_EOL)
-                    ret_is_null[ret_idx++] = true;
-                else
-                    ret_values[ret_idx++] = scm_to_datum(v, v_type_oid);
-
-            }
-        }
-
-        ret_heap_tuple = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
-        result_datum = HeapTupleGetDatum(ret_heap_tuple);
-
-        pfree(ret_values);
-        pfree(ret_is_null);
-    }
-
-    pfree(type_datum);
-    pfree(type_nulls);
+    pfree(ret_values);
+    pfree(ret_is_null);
 
     return result_datum;
 }

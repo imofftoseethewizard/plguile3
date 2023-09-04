@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2023-09-04
+
+The implementation of the call handler's result marshalling was
+completely rewritten.  While ChatGPT helped me write the initial
+version, it was needlessly long and did not take advantage of the
+features of `funcapi.h`.
+
+Also included in this release is a partial implementation of some test
+tooling.  It is based on the `pgxn/pgxn-tools` dockerfile, but
+extended to include the build dependencies for guile and pgtap.  Yet
+to be done is the integration with `pg-start` to install pgtap, and
+with `pg_prove` to do setup/teardown of scruple.
+
+This is so far about 18 hours of work.
+
 ## [0.1.0] - 2023-09-02
 
 This release includes a minor version update to mark the completion of
