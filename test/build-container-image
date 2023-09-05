@@ -1,0 +1,4 @@
+#! /usr/bin/env bash
+
+docker rmi -f scruple-test
+docker build -t scruple-test $(dirname $0)

@@ -252,7 +252,7 @@ convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc) {
 
 Datum scruple_call_inline(PG_FUNCTION_ARGS) {
     /* Handle an inline Guile statement */
-    elog(NOTICE, "Hello, world!");
+    elog(NOTICE, "scruple_call_inline: not implemented");
     PG_RETURN_NULL();
 }
 

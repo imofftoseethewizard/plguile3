@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+pg-start $1
+
+cd /repo
+make
+make install
+
+cd /opt/src/pgtap/pgtap-$PGTAP_VERSION
+make
+make install
+
+psql -U postgres <<EOF
+
+create extension pgtap;
+create extension scruple;
+
+EOF

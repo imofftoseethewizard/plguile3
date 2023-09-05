@@ -1,0 +1,12 @@
+#! /usr/bin/env bash
+
+cd $(dirname $0)/..
+
+while true; do
+
+    inotifywait -e modify src/scruple.c test/tests.sql
+
+    make
+    make install
+    pg_prove -U postgres test/tests.sql
+done

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2023-09-05
+
+This release includes docker-based local test tooling. To set up
+
+    test/build-container-image
+
+To start a test monitor running Postgres 14
+
+    test/start-test-container 14 && docker logs -f scruple-test-14
+
+That runs `pg-start` builds and installs `pgTAP` and `scruple` and
+then enters an infinite loop containing `inotifywait` watching
+`src/scruple.c` and `test/tests.sql`. When either of those changes, it
+rebuilds and reinstalls `scruple` and then calls `pg_prove` on the
+tests in `test/tests.sql`.
+
+ChatGPT helped in some minor bash and docker nuances and led me to
+`pgTAP` and `pgxn/pgxn-tools`.
+
+This is so far about 20 hours of work.
+
+
 ## [0.1.1] - 2023-09-04
 
 The implementation of the call handler's result marshalling was

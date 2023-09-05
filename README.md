@@ -25,30 +25,19 @@ PostgreSQL server.
 
 ## Development Setup
 
-There are two development configurations currently supported, one in
-docker and one not.  To set up your system to build and test scruple
-on Ubuntu 22.04, run
+To set up
 
-``` bash
-tools/dev-setup-ununtu-22-04.sh
-```
+    test/build-container-image
 
-to install Linux dependencies, and then
+To start a test monitor running Postgres 14
 
-``` bash
-tools/dev-setup-postgres-ubuntu-22-04.sh
-```
+    test/start-test-container 14 && docker logs -f scruple-test-14
 
-to set up a database and configure Postgres.
-
-If you'd like use docker, make sure that docker is installed on your
-system and run
-
-``` bash
-tools/dev-setup-docker-postgres-ubuntu-22-04.sh
-```
-
-These scripts are all intended to be idempotent.
+That runs `pg-start` builds and installs `pgTAP` and `scruple` and
+then enters an infinite loop containing `inotifywait` watching
+`src/scruple.c` and `test/tests.sql`. When either of those changes, it
+rebuilds and reinstalls `scruple` and then calls `pg_prove` on the
+tests in `test/tests.sql`.
 
 ## Installation
 
