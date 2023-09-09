@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2023-09-09
+
+This release includes a modest test suite that covers the function
+call protocol. The increment in the minor version signifies a stable
+point, here regarding only the mechanincs of defining and calling
+Guile functions from Postgres. Although the changelog format doesn't
+specify that even numbered minor versions are stable, that is a common
+usage, and despite that the sub 1.0.0 versions are more or less
+unstructured, I'll adopt the practice now to get in the habit.
+
+This is so far about 22 hours of work.
+
 ## [0.1.2] - 2023-09-05
 
 This release includes docker-based local test tooling. To set up
@@ -25,7 +37,6 @@ ChatGPT helped in some minor bash and docker nuances and led me to
 `pgTAP` and `pgxn/pgxn-tools`.
 
 This is so far about 20 hours of work.
-
 
 ## [0.1.1] - 2023-09-04
 

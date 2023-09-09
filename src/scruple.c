@@ -37,9 +37,13 @@ typedef Datum (*ToDatumFunc)(SCM);
 static Datum scm_to_datum_int2(SCM x);
 static Datum scm_to_datum_int4(SCM x);
 static Datum scm_to_datum_int8(SCM x);
+static Datum scm_to_datum_void(SCM x);
+
 static SCM datum_int2_to_scm(Datum x);
 static SCM datum_int4_to_scm(Datum x);
 static SCM datum_int8_to_scm(Datum x);
+static SCM datum_void_to_scm(Datum x);
+
 static char* scm_to_string(SCM x);
 static bool is_int_2(SCM x);
 static bool is_int_4(SCM x);
@@ -87,6 +91,7 @@ void _PG_init(void) {
     insert_type_cache_entry(TypenameGetTypid("int2"), datum_int2_to_scm, scm_to_datum_int2);
     insert_type_cache_entry(TypenameGetTypid("int4"), datum_int4_to_scm, scm_to_datum_int4);
     insert_type_cache_entry(TypenameGetTypid("int8"), datum_int8_to_scm, scm_to_datum_int8);
+    insert_type_cache_entry(TypenameGetTypid("void"), datum_void_to_scm, scm_to_datum_void);
 
     /* Initialize the Guile interpreter */
     scm_init_guile();
@@ -99,6 +104,7 @@ void _PG_init(void) {
 
     is_int_8_proc = scm_eval_string(scm_from_locale_string("(lambda (x) (and (integer? x) (>= x -9223372036854775808) (<= x 9223372036854775807)))"));
     scm_gc_protect_object(is_int_8_proc);
+
 }
 
 void _PG_fini(void) {
@@ -472,6 +478,16 @@ scm_to_datum_int8(SCM x) {
     }
 
     return Int64GetDatum(scm_to_int64(x));
+}
+
+SCM
+datum_void_to_scm(Datum x) {
+    return SCM_EOL;
+}
+
+Datum
+scm_to_datum_void(SCM x) {
+    return (Datum) 0;
 }
 
 bool

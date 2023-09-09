@@ -17,6 +17,15 @@ PostgreSQL server.
 - Execute SQL queries from within Scheme code
 - Comprehensive testing suite
 
+## Roadmap
+
+The scope of what might constitute a 1.0.0 release isn't clear yet.
+For now, work will continue to add new type support in 0.3.x versions,
+culminating in the 0.4.0 version with fully-tested implementations of
+all scalar types described in Postgres' documentation [Chapter 8: Data
+Types](https://www.postgresql.org/docs/current/datatype.html).
+
+
 ## Requirements
 
 - PostgreSQL 14
@@ -25,7 +34,7 @@ PostgreSQL server.
 
 ## Development Setup
 
-To set up
+Install docker.  To create the test image
 
     test/build-container-image
 
@@ -58,7 +67,7 @@ make
 
 4. Install the extension:
 ```bash
-make install
+sudo make install
 ```
 
 ## Usage
