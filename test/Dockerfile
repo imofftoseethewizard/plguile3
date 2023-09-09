@@ -8,7 +8,8 @@ RUN apt-get update && \
         guile-3.0-dev \
         inotify-tools \
         unzip \
-        wget && \
+        wget \
+        xxd && \
     mkdir -p /opt/src/pgtap/ && \
     cd /opt/src/pgtap && \
     wget https://api.pgxn.org/dist/pgtap/$PGTAP_VERSION/pgtap-$PGTAP_VERSION.zip && \

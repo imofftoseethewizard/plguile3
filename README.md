@@ -20,6 +20,11 @@ PostgreSQL server.
 ## Roadmap
 
 The scope of what might constitute a 1.0.0 release isn't clear yet.
+At a mimimum, it will include support for all built-in types, for
+executing both scheme functions and inline scheme code, for the
+ability to build, prepare, and execute queries, and for global
+settings managing the Guile environment.
+
 For now, work will continue to add new type support in 0.3.x versions,
 culminating in the 0.4.0 version with fully-tested implementations of
 all scalar types described in Postgres' documentation [Chapter 8: Data

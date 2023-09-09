@@ -1,6 +1,8 @@
 begin;
 
-select plan(16);
+select plan(28);
+
+create extension scruple;
 
 --------------------------------------------------------------------------------
 --
@@ -85,6 +87,35 @@ select throws_ok(
   'select f_big_sum(-9223372036854775807::bigint, -2::bigint)',
   'int8 result expected, not: -9223372036854775809',
   'int8: underflow check');
+
+--------------------------------------------------------------------------------
+--
+-- Type real/float4
+--
+
+create function f_real(a real, b real) returns real as '(* a b)' language scruple;
+
+select is(f_real(2.0::real, 1.5::real), 3.0::real, 'float4: simple sum');
+select is(f_real(3.402823e38::real, 2.0::real), 'inf'::real, 'float4: inf overflow');
+select is(f_real(1.4e-45::real, 0.5::real), 0.0::real, 'float4: 0 underflow');
+select is(f_real(-3.402823e38::real, 2.0::real), '-inf'::real, 'float4: negative inf overflow');
+select is(f_real(-1.4e-45::real, 0.5::real), 0.0::real, 'float4: negative 0 underflow');
+select is(f_real('nan'::real, 0.5::real), 'nan'::real, 'float4: nan propagation');
+
+--------------------------------------------------------------------------------
+--
+-- Type double precision/float8
+--
+
+create function f_dp(a double precision, b double precision) returns double precision as
+'(* a b)' language scruple;
+
+select is(f_dp(2.0, 1.5), 3.0::double precision, 'float8: simple sum');
+select is(f_dp(1.7976931348623157e308, 2.0), 'inf', 'float8: inf overflow');
+select is(f_dp(5e-324, 0.5), 0.0::double precision, 'float8: 0 underflow');
+select is(f_dp(-1.7976931348623157e308, 2.0), '-inf', 'float8: negative inf overflow');
+select is(f_dp(-5e-324, 0.5), 0.0::double precision, 'float8: negative 0 underflow');
+select is(f_dp('nan', 0.5), 'nan'::double precision, 'float8: nan propagation');
 
 select * from finish();
 

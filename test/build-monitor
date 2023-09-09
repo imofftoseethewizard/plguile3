@@ -4,7 +4,7 @@ cd $(dirname $0)/..
 
 while true; do
 
-    inotifywait -e modify src/scruple.c test/tests.sql
+    inotifywait -e modify Makefile src/scruple.c src/scruple.scm test/tests.sql
 
     make
     make install

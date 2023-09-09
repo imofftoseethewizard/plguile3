@@ -13,6 +13,9 @@
 #include "utils/hsearch.h"
 #include "utils/syscache.h"
 
+// Defines const char *src_scruple_scm.
+#include "scruple.scm.h"
+
 PG_MODULE_MAGIC;
 
 PGDLLEXPORT Datum scruple_call(PG_FUNCTION_ARGS);
@@ -37,17 +40,23 @@ typedef Datum (*ToDatumFunc)(SCM);
 static Datum scm_to_datum_int2(SCM x);
 static Datum scm_to_datum_int4(SCM x);
 static Datum scm_to_datum_int8(SCM x);
+static Datum scm_to_datum_float4(SCM x);
+static Datum scm_to_datum_float8(SCM x);
 static Datum scm_to_datum_void(SCM x);
 
 static SCM datum_int2_to_scm(Datum x);
 static SCM datum_int4_to_scm(Datum x);
 static SCM datum_int8_to_scm(Datum x);
+static SCM datum_float4_to_scm(Datum x);
+static SCM datum_float8_to_scm(Datum x);
 static SCM datum_void_to_scm(Datum x);
 
 static char* scm_to_string(SCM x);
-static bool is_int_2(SCM x);
-static bool is_int_4(SCM x);
-static bool is_int_8(SCM x);
+static bool is_int2(SCM x);
+static bool is_int4(SCM x);
+static bool is_int8(SCM x);
+static bool is_float4(SCM x);
+static bool is_float8(SCM x);
 
 typedef struct TypeCacheEntry {
     Oid type_oid;          // OID of a PostgreSQL type
@@ -62,9 +71,11 @@ static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
 
-static SCM is_int_2_proc;
-static SCM is_int_4_proc;
-static SCM is_int_8_proc;
+static SCM is_int2_proc;
+static SCM is_int4_proc;
+static SCM is_int8_proc;
+static SCM is_float4_proc;
+static SCM is_float8_proc;
 
 static HTAB *funcCache;
 static HTAB *typeCache;
@@ -91,20 +102,20 @@ void _PG_init(void) {
     insert_type_cache_entry(TypenameGetTypid("int2"), datum_int2_to_scm, scm_to_datum_int2);
     insert_type_cache_entry(TypenameGetTypid("int4"), datum_int4_to_scm, scm_to_datum_int4);
     insert_type_cache_entry(TypenameGetTypid("int8"), datum_int8_to_scm, scm_to_datum_int8);
+    insert_type_cache_entry(TypenameGetTypid("float4"), datum_float4_to_scm, scm_to_datum_float4);
+    insert_type_cache_entry(TypenameGetTypid("float8"), datum_float8_to_scm, scm_to_datum_float8);
     insert_type_cache_entry(TypenameGetTypid("void"), datum_void_to_scm, scm_to_datum_void);
 
     /* Initialize the Guile interpreter */
     scm_init_guile();
 
-    is_int_2_proc = scm_eval_string(scm_from_locale_string("(lambda (x) (and (integer? x) (>= x -32768) (<= x 32767)))"));
-    scm_gc_protect_object(is_int_2_proc);
+    scm_eval_string(scm_from_locale_string((const char *)src_scruple_scm));
 
-    is_int_4_proc = scm_eval_string(scm_from_locale_string("(lambda (x) (and (integer? x) (>= x -2147483648) (<= x 2147483647)))"));
-    scm_gc_protect_object(is_int_4_proc);
-
-    is_int_8_proc = scm_eval_string(scm_from_locale_string("(lambda (x) (and (integer? x) (>= x -9223372036854775808) (<= x 9223372036854775807)))"));
-    scm_gc_protect_object(is_int_8_proc);
-
+    is_int2_proc = scm_variable_ref(scm_c_lookup("int2-compatible?"));
+    is_int4_proc = scm_variable_ref(scm_c_lookup("int4-compatible?"));
+    is_int8_proc = scm_variable_ref(scm_c_lookup("int8-compatible?"));
+    is_float4_proc = scm_variable_ref(scm_c_lookup("float4-compatible?"));
+    is_float8_proc = scm_variable_ref(scm_c_lookup("float8-compatible?"));
 }
 
 void _PG_fini(void) {
@@ -443,7 +454,7 @@ datum_int2_to_scm(Datum x) {
 Datum
 scm_to_datum_int2(SCM x) {
 
-    if (!is_int_2(x)) {
+    if (!is_int2(x)) {
         elog(ERROR, "int2 result expected, not: %s", scm_to_string(x));
     }
 
@@ -458,7 +469,7 @@ datum_int4_to_scm(Datum x) {
 Datum
 scm_to_datum_int4(SCM x) {
 
-    if (!is_int_4(x)) {
+    if (!is_int4(x)) {
         elog(ERROR, "int4 result expected, not: %s", scm_to_string(x));
     }
 
@@ -473,11 +484,41 @@ datum_int8_to_scm(Datum x) {
 Datum
 scm_to_datum_int8(SCM x) {
 
-    if (!is_int_8(x)) {
+    if (!is_int8(x)) {
         elog(ERROR, "int8 result expected, not: %s", scm_to_string(x));
     }
 
     return Int64GetDatum(scm_to_int64(x));
+}
+
+SCM
+datum_float4_to_scm(Datum x) {
+    return scm_from_double((double)DatumGetFloat4(x));
+}
+
+Datum
+scm_to_datum_float4(SCM x) {
+
+    if (!is_float4(x)) {
+        elog(ERROR, "float4 result expected, not: %s", scm_to_string(x));
+    }
+
+    return Float4GetDatum(scm_to_double(x));
+}
+
+SCM
+datum_float8_to_scm(Datum x) {
+    return scm_from_double(DatumGetFloat8(x));
+}
+
+Datum
+scm_to_datum_float8(SCM x) {
+
+    if (!is_float8(x)) {
+        elog(ERROR, "float8 result expected, not: %s", scm_to_string(x));
+    }
+
+    return Float8GetDatum(scm_to_double(x));
 }
 
 SCM
@@ -491,18 +532,28 @@ scm_to_datum_void(SCM x) {
 }
 
 bool
-is_int_2(SCM x) {
-    return scm_is_true(scm_call_1(is_int_2_proc, x));
+is_int2(SCM x) {
+    return scm_is_true(scm_call_1(is_int2_proc, x));
 }
 
 bool
-is_int_4(SCM x) {
-    return scm_is_true(scm_call_1(is_int_4_proc, x));
+is_int4(SCM x) {
+    return scm_is_true(scm_call_1(is_int4_proc, x));
 }
 
 bool
-is_int_8(SCM x) {
-    return scm_is_true(scm_call_1(is_int_8_proc, x));
+is_int8(SCM x) {
+    return scm_is_true(scm_call_1(is_int8_proc, x));
+}
+
+bool
+is_float4(SCM x) {
+    return scm_is_true(scm_call_1(is_float4_proc, x));
+}
+
+bool
+is_float8(SCM x) {
+    return scm_is_true(scm_call_1(is_float8_proc, x));
 }
 
 char *

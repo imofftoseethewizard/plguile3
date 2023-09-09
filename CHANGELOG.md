@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2023-09-09
+
+This release introduces a file to hold auxiliary scheme code used in
+type conversions -- `src/scruple.scm` -- and the tooling to build that
+into `scruple.so` as a static string.  It also includes support for
+floating point types `float4` / `real` and `float8` / `double
+precision`.  The `build-monitor` tool was updated to include the new
+file and to watch the make file as well.
+
+ChatGPT for some reason thought that `xxd` as part of package
+`vim-common` when in fact it is in its own package.  It was very
+helpful in finding that tool and setting up the make file to build the
+auxiliary scheme code into the extension's library file.
+
+This is so far about 24 hours of work.
+
 ## [0.2.0] - 2023-09-09
 
 This release includes a modest test suite that covers the function

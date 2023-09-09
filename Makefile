@@ -30,9 +30,12 @@ override CFLAGS := -Wall -Werror -fPIC $(CFLAGS)
 GUILE_CFLAGS = $(shell pkg-config --cflags guile-3.0)
 GUILE_LIBS = $(shell pkg-config --libs guile-3.0)
 
-# Update the compile and link flags
+# Update the compile and link flags to include Guile dependencies
 override CPPFLAGS += $(GUILE_CFLAGS)
 override SHLIB_LINK += $(GUILE_LIBS)
+
+# Update to include build dir, so that scruple.scm.h is reachable
+override CPPFLAGS += -I$(BUILD_DIR)
 
 # Compile llvm bitcode files for Postgres' JIT
 COMPILE.c.bc = $(CLANG) -Wno-ignored-attributes $(BITCODE_CFLAGS) $(CCFLAGS) $(CPPFLAGS) -emit-llvm -c
@@ -46,14 +49,18 @@ all: $(BUILD_DIR) $(OBJS)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+$(BUILD_DIR)/scruple.scm.h: src/scruple.scm
+	xxd -i $< > $@
+
+$(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/scruple.scm.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/%.o: src/%.c
-	echo $(CFLAGS) $(CPPFLAGS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.bc : src/%.c
 	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ $<
 
-# Rule to deploy extension to Docker container
 docker-install: all
 
 	# Copy necessary files to the Docker container
