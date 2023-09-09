@@ -1,6 +1,6 @@
 begin;
 
-select plan(28);
+select plan(37);
 
 create extension scruple;
 
@@ -116,6 +116,54 @@ select is(f_dp(5e-324, 0.5), 0.0::double precision, 'float8: 0 underflow');
 select is(f_dp(-1.7976931348623157e308, 2.0), '-inf', 'float8: negative inf overflow');
 select is(f_dp(-5e-324, 0.5), 0.0::double precision, 'float8: negative 0 underflow');
 select is(f_dp('nan', 0.5), 'nan'::double precision, 'float8: nan propagation');
+
+--------------------------------------------------------------------------------
+--
+-- Type text
+--
+
+create function f_text_in(a text) returns int as '(string-length a)' language scruple;
+create function f_text_out(a int) returns text as '(format #f "~d" a)' language scruple;
+create function f_text_error(a int) returns text as 'a' language scruple;
+
+select is(f_text_in('Hello, World!'), 13, 'text: text input');
+select is(f_text_out(13), '13', 'text: text output');
+select throws_ok(
+       'select f_text_error(13)',
+       'string result expected, not: 13',
+       'text: wrong return type check');
+
+--------------------------------------------------------------------------------
+--
+-- Type char
+--
+
+create function f_char_in(a char) returns int as '(string-length a)' language scruple;
+create function f_char_out(a int) returns char as '(format #f "~d" a)' language scruple;
+create function f_char_error(a int) returns char as 'a' language scruple;
+
+select is(f_char_in('Hello, World!'), 13, 'char: char input');
+select is(f_char_out(13), '13', 'char: char output');
+select throws_ok(
+       'select f_char_error(13)',
+       'string result expected, not: 13',
+       'char: wrong return type check');
+
+--------------------------------------------------------------------------------
+--
+-- Type varchar
+--
+
+create function f_varchar_in(a varchar) returns int as '(string-length a)' language scruple;
+create function f_varchar_out(a int) returns varchar as '(format #f "~d" a)' language scruple;
+create function f_varchar_error(a int) returns varchar as 'a' language scruple;
+
+select is(f_varchar_in('Hello, World!'), 13, 'varchar: varchar input');
+select is(f_varchar_out(13), '13', 'varchar: varchar output');
+select throws_ok(
+       'select f_varchar_error(13)',
+       'string result expected, not: 13',
+       'varchar: wrong return type check');
 
 select * from finish();
 

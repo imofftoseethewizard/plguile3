@@ -9,4 +9,5 @@ while true; do
     make
     make install
     pg_prove -U postgres test/tests.sql
+
 done

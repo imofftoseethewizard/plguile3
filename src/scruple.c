@@ -42,6 +42,7 @@ static Datum scm_to_datum_int4(SCM x);
 static Datum scm_to_datum_int8(SCM x);
 static Datum scm_to_datum_float4(SCM x);
 static Datum scm_to_datum_float8(SCM x);
+static Datum scm_to_datum_text(SCM x);
 static Datum scm_to_datum_void(SCM x);
 
 static SCM datum_int2_to_scm(Datum x);
@@ -49,6 +50,7 @@ static SCM datum_int4_to_scm(Datum x);
 static SCM datum_int8_to_scm(Datum x);
 static SCM datum_float4_to_scm(Datum x);
 static SCM datum_float8_to_scm(Datum x);
+static SCM datum_text_to_scm(Datum x);
 static SCM datum_void_to_scm(Datum x);
 
 static char* scm_to_string(SCM x);
@@ -104,6 +106,10 @@ void _PG_init(void) {
     insert_type_cache_entry(TypenameGetTypid("int8"), datum_int8_to_scm, scm_to_datum_int8);
     insert_type_cache_entry(TypenameGetTypid("float4"), datum_float4_to_scm, scm_to_datum_float4);
     insert_type_cache_entry(TypenameGetTypid("float8"), datum_float8_to_scm, scm_to_datum_float8);
+    insert_type_cache_entry(TypenameGetTypid("text"), datum_text_to_scm, scm_to_datum_text);
+    insert_type_cache_entry(TypenameGetTypid("bpchar"), datum_text_to_scm, scm_to_datum_text);
+    insert_type_cache_entry(TypenameGetTypid("char"), datum_text_to_scm, scm_to_datum_text);
+    insert_type_cache_entry(TypenameGetTypid("varchar"), datum_text_to_scm, scm_to_datum_text);
     insert_type_cache_entry(TypenameGetTypid("void"), datum_void_to_scm, scm_to_datum_void);
 
     /* Initialize the Guile interpreter */
@@ -522,8 +528,39 @@ scm_to_datum_float8(SCM x) {
 }
 
 SCM
+datum_text_to_scm(Datum x) {
+
+    char *cstr = text_to_cstring(DatumGetTextP(x));
+    SCM scm_str = scm_from_locale_string(cstr);
+
+    pfree(cstr);
+
+    return scm_str;
+}
+
+Datum
+scm_to_datum_text(SCM x) {
+
+    char *cstr;
+    text *pg_text;
+    Datum text_datum;
+
+    if (!scm_is_string(x)) {
+        elog(ERROR, "string result expected, not: %s", scm_to_string(x));
+    }
+
+    cstr = scm_to_locale_string(x);
+    pg_text = cstring_to_text(cstr);
+    text_datum = PointerGetDatum(pg_text);
+
+    free(cstr);
+
+    return text_datum;
+}
+
+SCM
 datum_void_to_scm(Datum x) {
-    return SCM_EOL;
+    return SCM_UNDEFINED;
 }
 
 Datum

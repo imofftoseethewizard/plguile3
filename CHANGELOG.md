@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2023-09-09
+
+This release includes support for `char(n)`, `varchar(n)` and `text`
+types.
+
+I spent some time working on the `numeric` type, and created an srfi-9
+record type for its scheme representation and wrote out the from
+Postgres to Guile conversion. Only when I went to compile it did I
+realize that ChatGPT had given me instructions from the non-public C
+file, not the public interface, so it was all for naught.  That said,
+it's help made the string types quick to support.
+
+This is so far about 26 hours of work.
+
 ## [0.3.0] - 2023-09-09
 
 This release introduces a file to hold auxiliary scheme code used in
