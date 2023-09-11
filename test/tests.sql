@@ -1,8 +1,6 @@
 begin;
 
-select plan(37);
-
-create extension scruple;
+select plan(49);
 
 --------------------------------------------------------------------------------
 --
@@ -164,6 +162,88 @@ select throws_ok(
        'select f_varchar_error(13)',
        'string result expected, not: 13',
        'varchar: wrong return type check');
+
+--------------------------------------------------------------------------------
+--
+-- Type bytea
+--
+
+create function f_bytea_in(a bytea) returns int as '(bytevector-length a)' language scruple;
+create function f_bytea_out(a int) returns bytea as '(make-bytevector a 42)' language scruple;
+create function f_bytea_error(a int) returns bytea as 'a' language scruple;
+
+select is(f_bytea_in('\x7730307421'::bytea), 5, 'bytea: bytea input');
+select is(f_bytea_out(2), '\x2a2a'::bytea, 'bytea: bytea output');
+select throws_ok(
+       'select f_bytea_error(13)',
+       'bytea result expected, not: 13',
+       'bytea: wrong return type check');
+
+--------------------------------------------------------------------------------
+--
+-- Type timestamptz
+--
+
+create function f_tz_id(a timestamptz) returns timestamptz as 'a' language scruple;
+create function f_tz_to_text(a timestamptz) returns text as '(date->string a "~Y-~m-~d ~H:~M:~f ~z")' language scruple;
+
+select is(f_tz_id(t), t, 'timestamptz: identity mapping test')
+from current_timestamp t;
+
+select is(f_tz_to_text(t)::timestamptz, t, 'timestamptz: to scheme value check')
+from current_timestamp t;
+
+--------------------------------------------------------------------------------
+--
+-- Type timestamp
+--
+
+create function f_ts_id(a timestamp) returns timestamp as 'a' language scruple;
+create function f_ts_to_text(a timestamp) returns text as '(date->string a "~Y-~m-~d ~H:~M:~f ~z")' language scruple;
+
+select is(f_ts_id(t::timestamp), t::timestamp, 'timestamp: identity mapping test')
+from current_timestamp t;
+
+select is(f_ts_to_text(t::timestamp)::timestamp, t::timestamp, 'timestamp: to scheme value check')
+from current_timestamp t;
+
+--------------------------------------------------------------------------------
+--
+-- Type date
+--
+
+create function f_dt_id(a date) returns date as 'a' language scruple;
+create function f_dt_to_text(a date) returns text as '(date->string a "~Y-~m-~d")' language scruple;
+
+select is(f_dt_id(t::date), t::date, 'date: identity mapping test')
+from current_date t;
+
+select is(f_dt_to_text(t::date)::date, t::date, 'date: to scheme value check')
+from current_date t;
+
+--------------------------------------------------------------------------------
+--
+-- Type time
+--
+
+create function f_tm_id(a time) returns time as 'a' language scruple;
+create function f_tm_to_text(a time) returns text as '(date->string (time-monotonic->date a) "~H:~M:~f")' language scruple;
+
+select is(f_tm_id(t::time), t::time, 'time: identity mapping test')
+from current_time t;
+
+select is(f_tm_to_text(t::time)::time, t::time, 'time: to scheme value check')
+from current_time t;
+
+--------------------------------------------------------------------------------
+--
+-- Type interval
+--
+
+create function f_itv_id(a interval) returns interval as 'a' language scruple;
+
+select is(f_itv_id(t.itv), t.itv, 'interval: identity mapping test')
+from (select current_timestamp - current_date) t(itv);
 
 select * from finish();
 

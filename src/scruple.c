@@ -10,8 +10,11 @@
 #include "lib/stringinfo.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/date.h"
+#include "utils/datetime.h"
 #include "utils/hsearch.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 
 // Defines const char *src_scruple_scm.
 #include "scruple.scm.h"
@@ -37,23 +40,37 @@ typedef struct {
 typedef SCM (*ToScmFunc)(Datum);
 typedef Datum (*ToDatumFunc)(SCM);
 
-static Datum scm_to_datum_int2(SCM x);
-static Datum scm_to_datum_int4(SCM x);
-static Datum scm_to_datum_int8(SCM x);
-static Datum scm_to_datum_float4(SCM x);
-static Datum scm_to_datum_float8(SCM x);
-static Datum scm_to_datum_text(SCM x);
-static Datum scm_to_datum_void(SCM x);
-
+static SCM datum_bytea_to_scm(Datum x);
+static SCM datum_date_to_scm(Datum x);
+static SCM datum_float4_to_scm(Datum x);
+static SCM datum_float8_to_scm(Datum x);
 static SCM datum_int2_to_scm(Datum x);
 static SCM datum_int4_to_scm(Datum x);
 static SCM datum_int8_to_scm(Datum x);
-static SCM datum_float4_to_scm(Datum x);
-static SCM datum_float8_to_scm(Datum x);
+static SCM datum_interval_to_scm(Datum x);
 static SCM datum_text_to_scm(Datum x);
+static SCM datum_time_to_scm(Datum x);
+static SCM datum_timestamptz_to_scm(Datum x);
 static SCM datum_void_to_scm(Datum x);
 
+static Datum scm_to_datum_bytea(SCM x);
+static Datum scm_to_datum_date(SCM x);
+static Datum scm_to_datum_float4(SCM x);
+static Datum scm_to_datum_float8(SCM x);
+static Datum scm_to_datum_int2(SCM x);
+static Datum scm_to_datum_int4(SCM x);
+static Datum scm_to_datum_int8(SCM x);
+static Datum scm_to_datum_interval(SCM x);
+static Datum scm_to_datum_text(SCM x);
+static Datum scm_to_datum_time(SCM x);
+static Datum scm_to_datum_timestamptz(SCM x);
+static Datum scm_to_datum_void(SCM x);
+
+static Datum datum_date_to_timestamptz(Datum x);
 static char* scm_to_string(SCM x);
+
+static bool is_date(SCM x);
+static bool is_time(SCM x);
 static bool is_int2(SCM x);
 static bool is_int4(SCM x);
 static bool is_int8(SCM x);
@@ -73,11 +90,27 @@ static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
 
+static SCM date_day_proc;
+static SCM date_hour_proc;
+static SCM date_minute_proc;
+static SCM date_month_proc;
+static SCM date_nanosecond_proc;
+static SCM date_second_proc;
+static SCM date_year_proc;
+static SCM date_zone_offset_proc;
+static SCM is_date_proc;
+static SCM is_time_proc;
 static SCM is_int2_proc;
 static SCM is_int4_proc;
 static SCM is_int8_proc;
 static SCM is_float4_proc;
 static SCM is_float8_proc;
+static SCM make_date_proc;
+static SCM make_time_proc;
+static SCM time_duration_symbol;
+static SCM time_monotonic_symbol;
+static SCM time_nanosecond_proc;
+static SCM time_second_proc;
 
 static HTAB *funcCache;
 static HTAB *typeCache;
@@ -101,6 +134,7 @@ void _PG_init(void) {
     typeCache = hash_create("Scruple Type Cache", 128, &typeInfo, HASH_ELEM | HASH_BLOBS);
 
     /* Fill type cache with to_scm and to_datum functions for known types */
+    insert_type_cache_entry(TypenameGetTypid("void"), datum_void_to_scm, scm_to_datum_void);
     insert_type_cache_entry(TypenameGetTypid("int2"), datum_int2_to_scm, scm_to_datum_int2);
     insert_type_cache_entry(TypenameGetTypid("int4"), datum_int4_to_scm, scm_to_datum_int4);
     insert_type_cache_entry(TypenameGetTypid("int8"), datum_int8_to_scm, scm_to_datum_int8);
@@ -110,18 +144,48 @@ void _PG_init(void) {
     insert_type_cache_entry(TypenameGetTypid("bpchar"), datum_text_to_scm, scm_to_datum_text);
     insert_type_cache_entry(TypenameGetTypid("char"), datum_text_to_scm, scm_to_datum_text);
     insert_type_cache_entry(TypenameGetTypid("varchar"), datum_text_to_scm, scm_to_datum_text);
-    insert_type_cache_entry(TypenameGetTypid("void"), datum_void_to_scm, scm_to_datum_void);
+    insert_type_cache_entry(TypenameGetTypid("bytea"), datum_bytea_to_scm, scm_to_datum_bytea);
+    insert_type_cache_entry(TypenameGetTypid("timestamp"), datum_timestamptz_to_scm, scm_to_datum_timestamptz);
+    insert_type_cache_entry(TypenameGetTypid("timestamptz"), datum_timestamptz_to_scm, scm_to_datum_timestamptz);
+    insert_type_cache_entry(TypenameGetTypid("date"), datum_date_to_scm, scm_to_datum_date);
+    insert_type_cache_entry(TypenameGetTypid("time"), datum_time_to_scm, scm_to_datum_time);
+    insert_type_cache_entry(TypenameGetTypid("interval"), datum_interval_to_scm, scm_to_datum_interval);
 
     /* Initialize the Guile interpreter */
     scm_init_guile();
 
     scm_eval_string(scm_from_locale_string((const char *)src_scruple_scm));
 
-    is_int2_proc = scm_variable_ref(scm_c_lookup("int2-compatible?"));
-    is_int4_proc = scm_variable_ref(scm_c_lookup("int4-compatible?"));
-    is_int8_proc = scm_variable_ref(scm_c_lookup("int8-compatible?"));
-    is_float4_proc = scm_variable_ref(scm_c_lookup("float4-compatible?"));
-    is_float8_proc = scm_variable_ref(scm_c_lookup("float8-compatible?"));
+    /* Procedures defined by define-record are inlinable, meaning that instead of being
+       procedures, they are actually syntax transformers.  In non-call contexts, they refer to
+       the original procedure, but in call contexts, they interpolate the body of the
+       procedure. The upshot to this is that using scm_c_lookup gets the syntax transfomer
+       procedure, not the inlined procedure. To fix this, we just eval the name, inducing
+       the syntax transformer to give us proc we need.
+     */
+    date_day_proc         = scm_eval_string(scm_from_locale_string("date-day"));
+    date_hour_proc        = scm_eval_string(scm_from_locale_string("date-hour"));
+    date_minute_proc      = scm_eval_string(scm_from_locale_string("date-minute"));
+    date_month_proc       = scm_eval_string(scm_from_locale_string("date-month"));
+    date_nanosecond_proc  = scm_eval_string(scm_from_locale_string("date-nanosecond"));
+    date_second_proc      = scm_eval_string(scm_from_locale_string("date-second"));
+    date_year_proc        = scm_eval_string(scm_from_locale_string("date-year"));
+    date_zone_offset_proc = scm_eval_string(scm_from_locale_string("date-zone-offset"));
+    is_date_proc          = scm_eval_string(scm_from_locale_string("date?"));
+    is_time_proc          = scm_eval_string(scm_from_locale_string("time?"));
+    make_date_proc        = scm_eval_string(scm_from_locale_string("make-date"));
+    make_time_proc        = scm_eval_string(scm_from_locale_string("make-time"));
+    time_duration_symbol  = scm_eval_string(scm_from_locale_string("time-duration"));
+    time_monotonic_symbol = scm_eval_string(scm_from_locale_string("time-monotonic"));
+    time_nanosecond_proc  = scm_eval_string(scm_from_locale_string("time-nanosecond"));
+    time_second_proc      = scm_eval_string(scm_from_locale_string("time-second"));
+
+    is_float4_proc        = scm_variable_ref(scm_c_lookup("float4-compatible?"));
+    is_float8_proc        = scm_variable_ref(scm_c_lookup("float8-compatible?"));
+    is_int2_proc          = scm_variable_ref(scm_c_lookup("int2-compatible?"));
+    is_int4_proc          = scm_variable_ref(scm_c_lookup("int4-compatible?"));
+    is_int8_proc          = scm_variable_ref(scm_c_lookup("int8-compatible?"));
+
 }
 
 void _PG_fini(void) {
@@ -559,6 +623,240 @@ scm_to_datum_text(SCM x) {
 }
 
 SCM
+datum_bytea_to_scm(Datum x) {
+
+    bytea *bytea_data = DatumGetByteaP(x);
+    char *binary_data = VARDATA(bytea_data);
+    int len = VARSIZE(bytea_data) - VARHDRSZ;
+
+    SCM scm_bytevector = scm_c_make_bytevector(len);
+
+    for (int i = 0; i < len; i++) {
+        scm_c_bytevector_set_x(scm_bytevector, i, binary_data[i]);
+    }
+
+    return scm_bytevector;
+}
+
+Datum
+scm_to_datum_bytea(SCM x) {
+
+    size_t len;
+    bytea *result;
+    char *data_ptr;
+
+    if (!scm_is_bytevector(x)) {
+        elog(ERROR, "bytea result expected, not: %s", scm_to_string(x));
+    }
+
+    len = scm_c_bytevector_length(x);
+    result = (bytea *) palloc(VARHDRSZ + len);
+
+    SET_VARSIZE(result, VARHDRSZ + len);
+
+    data_ptr = VARDATA(result);
+
+    for (size_t i = 0; i < len; i++) {
+        data_ptr[i] = scm_c_bytevector_ref(x, i);
+    }
+
+    return PointerGetDatum(result);
+}
+
+SCM
+datum_timestamptz_to_scm(Datum x) {
+
+    TimestampTz timestamp = DatumGetTimestampTz(x);
+    struct pg_tm tm;
+    fsec_t msec;
+    int tz_offset;
+
+    if (timestamp2tm(timestamp, &tz_offset, &tm, &msec, NULL, NULL)) {
+
+        elog(ERROR, "Invalid timestamp");
+        return SCM_BOOL_F; // Shouldn't reach here; just to satisfy the compiler
+    }
+    else {
+        return scm_call_8(
+            make_date_proc,
+            scm_from_long(msec * 1000),
+            scm_from_int(tm.tm_sec),
+            scm_from_int(tm.tm_min),
+            scm_from_int(tm.tm_hour),
+            scm_from_int(tm.tm_mday),
+            scm_from_int(tm.tm_mon),
+            scm_from_int(tm.tm_year),
+            scm_from_int(tz_offset));
+    }
+}
+
+Datum
+scm_to_datum_timestamptz(SCM x) {
+
+    if (!is_date(x)) {
+        elog(ERROR, "date result expected, not: %s", scm_to_string(x));
+    }
+    else {
+        // Extract the individual components of the SRFI-19 date object
+        SCM nanosecond_scm = scm_call_1(date_nanosecond_proc, x);
+        SCM tz_offset_scm  = scm_call_1(date_zone_offset_proc, x);
+        SCM year_scm       = scm_call_1(date_year_proc, x);
+        SCM month_scm      = scm_call_1(date_month_proc, x);
+        SCM day_scm        = scm_call_1(date_day_proc, x);
+        SCM hour_scm       = scm_call_1(date_hour_proc, x);
+        SCM minute_scm     = scm_call_1(date_minute_proc, x);
+        SCM second_scm     = scm_call_1(date_second_proc, x);
+
+        // Convert from Scheme values to C types
+        long nanoseconds = scm_to_long(nanosecond_scm);
+        int tz_offset    = scm_to_int(tz_offset_scm);
+        int year         = scm_to_int(year_scm);
+        int month        = scm_to_int(month_scm);
+        int day          = scm_to_int(day_scm);
+        int hour         = scm_to_int(hour_scm);
+        int minute       = scm_to_int(minute_scm);
+        int second       = scm_to_int(second_scm);
+
+        // Convert nanoseconds to fractional seconds (microseconds)
+        fsec_t msec = nanoseconds / 1000;
+
+        TimestampTz timestamp;
+        struct pg_tm tm;
+
+        tm.tm_year = year;
+        tm.tm_mon  = month;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min  = minute;
+        tm.tm_sec  = second;
+
+        if (tm2timestamp(&tm, msec, &tz_offset, &timestamp) == 0) {
+            return TimestampTzGetDatum(timestamp);
+        }
+        else {
+            elog(ERROR, "Invalid date components");
+            return 0; // Shouldn't reach here; just to satisfy the compiler
+        }
+    }
+}
+
+SCM
+datum_date_to_scm(Datum x) {
+    return datum_timestamptz_to_scm(datum_date_to_timestamptz(x));
+}
+
+Datum
+scm_to_datum_date(SCM x) {
+    if (!is_date(x)) {
+        elog(ERROR, "date result expected, not: %s", scm_to_string(x));
+    }
+    else {
+        // Extract the individual components of the SRFI-19 date object
+        SCM year_scm       = scm_call_1(date_year_proc, x);
+        SCM month_scm      = scm_call_1(date_month_proc, x);
+        SCM day_scm        = scm_call_1(date_day_proc, x);
+
+        // Convert from Scheme values to C types
+        int year         = scm_to_int(year_scm);
+        int month        = scm_to_int(month_scm);
+        int day          = scm_to_int(day_scm);
+
+        return DateADTGetDatum(date2j(year, month, day) - POSTGRES_EPOCH_JDATE);
+    }
+}
+
+SCM
+datum_time_to_scm(Datum x) {
+
+    struct pg_tm tm;
+    fsec_t msec;
+
+    if (time2tm(DatumGetTimeADT(x), &tm, &msec) == 0) {
+        return scm_call_3(
+            make_time_proc,
+            time_monotonic_symbol,
+            scm_from_long(msec * 1000),
+            scm_from_int(tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600));
+    }
+    else {
+        elog(ERROR, "Invalid time");
+        return SCM_BOOL_F; // Shouldn't reach here; just to satisfy the compiler
+    }
+}
+
+Datum
+scm_to_datum_time(SCM x) {
+    if (!is_time(x)) {
+        elog(ERROR, "time result expected, not: %s", scm_to_string(x));
+        return 0; // Shouldn't reach here; just to satisfy the compiler
+    }
+    else {
+        int seconds = scm_to_int(scm_call_1(time_second_proc, x));
+        int nanoseconds = scm_to_int(scm_call_1(time_nanosecond_proc, x));
+
+        // Convert nanoseconds to fractional seconds (microseconds)
+        fsec_t msec = nanoseconds / 1000;
+
+        TimeADT time;
+        struct pg_tm tm;
+
+        tm.tm_year = 0;
+        tm.tm_mon  = 0;
+        tm.tm_mday = 0;
+        tm.tm_hour = seconds / 3600;
+        tm.tm_min  = (seconds % 3600) / 60;
+        tm.tm_sec  = seconds % 60;
+
+        if (tm2time(&tm, msec, &time) == 0) {
+            return TimeADTGetDatum(time);
+        }
+        else {
+            elog(ERROR, "Invalid date components");
+            return 0; // Shouldn't reach here; just to satisfy the compiler
+        }
+    }
+}
+
+#define NS_PER_USEC 1000
+#define SECS_PER_MONTH (DAYS_PER_MONTH * SECS_PER_DAY)
+
+SCM
+datum_interval_to_scm(Datum x)
+{
+    Interval *interval = DatumGetIntervalP(x);
+
+    return scm_call_3(
+        make_time_proc,
+        time_duration_symbol,
+        scm_from_long((interval->time % USECS_PER_SEC) * NS_PER_USEC),
+        scm_from_long(
+            (int64)interval->month * SECS_PER_MONTH
+            + (int64)interval->day * SECS_PER_DAY
+            + interval->time / USECS_PER_SEC));
+}
+
+Datum
+scm_to_datum_interval(SCM x) {
+
+    SCM seconds = scm_call_1(time_second_proc, x);
+
+    Interval *interval = (Interval *)palloc(sizeof(Interval));
+
+    interval->month = scm_to_int(scm_floor_quotient(seconds, scm_from_int(SECS_PER_MONTH)));
+
+    interval->day = scm_to_int(
+        scm_floor_quotient(
+            scm_floor_remainder(seconds, scm_from_int(SECS_PER_MONTH)),
+            scm_from_int(SECS_PER_DAY)));
+
+    interval->time =
+      scm_to_long(scm_floor_remainder(seconds, scm_from_int(SECS_PER_DAY))) * USECS_PER_SEC
+      + scm_to_long(scm_call_1(time_nanosecond_proc, x)) / NS_PER_USEC;
+
+    return IntervalPGetDatum(interval);
+}
+
+SCM
 datum_void_to_scm(Datum x) {
     return SCM_UNDEFINED;
 }
@@ -566,6 +864,16 @@ datum_void_to_scm(Datum x) {
 Datum
 scm_to_datum_void(SCM x) {
     return (Datum) 0;
+}
+
+bool
+is_date(SCM x) {
+    return scm_is_true(scm_call_1(is_date_proc, x));
+}
+
+bool
+is_time(SCM x) {
+    return scm_is_true(scm_call_1(is_time_proc, x));
 }
 
 bool
@@ -591,6 +899,14 @@ is_float4(SCM x) {
 bool
 is_float8(SCM x) {
     return scm_is_true(scm_call_1(is_float8_proc, x));
+}
+
+Datum
+datum_date_to_timestamptz(Datum x)
+{
+    DateADT date = DatumGetDateADT(x);
+    TimestampTz timestamp = date2timestamptz_opt_overflow(date, NULL);
+    return TimestampTzGetDatum(timestamp);
 }
 
 char *

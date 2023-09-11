@@ -1,4 +1,6 @@
-
+(use-modules
+ (srfi srfi-19)
+ (rnrs bytevectors))
 
 (define (int2-compatible? x)
   (and (integer? x)

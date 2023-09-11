@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2023-09-10
+
+This release includes support for `bytea`, `timestamptz`, `timestamp`,
+`time`, `date`, and `interval`.
+
+ChatGPT has been generally helpful in roughly sketching solutions,
+though the details are never completely correct, and although it's
+definitely a benefit and a time saver, the entire experience feels
+clumsy. At it's best, I describe my intent and I get nearly working
+code, but this is rare and only for the simplest requests.
+
+This is so far about 35 hours of work.
+
 ## [0.3.1] - 2023-09-09
 
 This release includes support for `char(n)`, `varchar(n)` and `text`

@@ -2,19 +2,19 @@
 
 ## Status
 
-Unuseless. It can accept integer arguments and return integers.
+Demoable. Scruple supports creating scheme functions which accept and
+return most numeric argument types, all string types, and most date
+and time types -- notably not `time with time zone` since that's
+conceptually problematic, and I do not condone it.
 
 ## Overview
 
 This project provides a PostgreSQL extension that enables the creation
-of database functions using Guile Scheme. It allows developers to
-write database functions in Scheme and execute them within the
-PostgreSQL server.
+of database functions using Guile Scheme.
 
 ## Features
 
 - Define and run PostgreSQL functions in Guile Scheme
-- Execute SQL queries from within Scheme code
 - Comprehensive testing suite
 
 ## Roadmap
@@ -55,25 +55,16 @@ tests in `test/tests.sql`.
 
 ## Installation
 
-1. Clone the repository:
+For now, it's just a source install.
+
 ```bash
 git clone https://github.com/imofftoseethewizard/scruple.git
-```
-
-2. Navigate to the project directory:
-```bash
 cd scruple
-```
-
-3. Build the extension:
-```bash
 make
-```
-
-4. Install the extension:
-```bash
 sudo make install
 ```
+
+I'll put this on `pgxn` at some point in the future.
 
 ## Usage
 
@@ -101,7 +92,4 @@ For questions, comments, or suggestions, please open an issue on GitHub.
 ## History
 
 This project is a test of using ChatGPT on a green-field programming
-task. It was started in early August of 2023.  So far, about 6 hours
-of time has gone into this, and it's just a complicated version of
-"Hello, World!" at this point.  The one useful bit currently preset is
-that it could be used as a starting point for any Postgres extension.
+task. It was started in early August of 2023.
