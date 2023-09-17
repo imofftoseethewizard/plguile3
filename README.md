@@ -3,7 +3,7 @@
 ## Status
 
 Demoable. Scruple supports creating scheme functions which can accept
-and return nearly all built-in Postgres types.
+and return all built-in Postgres types.
 
 ## Overview
 
@@ -29,14 +29,17 @@ each other in a way that does not sabotage security -- at the very
 least -- and possibly allows the same sort of scoping changes as in
 `plpgsql` using `search_path`, even though that is of questionable
 utility. A v1 release should also include sufficient documentation to
-make the project useful.
+make the project useful. Error messages should be helpful and conform
+to the message, detail, hint format.  It should support all versions
+of Postgres that have not hit their end of life, which at this point
+in time will likely mean 12 to 16.
 
 For now, work will continue to add new type support in 0.3.x versions,
 culminating in the 0.4.0 version with fully-tested implementations of
 all scalar types described in Postgres' documentation [Chapter 8: Data
-Types](https://www.postgresql.org/docs/current/datatype.html). Support
-for `jsonb` type translation is not yet complete, and only happy-path
-testing is currently present for nearly all type transformations.
+Types](https://www.postgresql.org/docs/current/datatype.html). Remaining
+work is mostly testing, to ensure that values returned from scheme do
+not result in crashes, but result in errors instead.
 
 The 0.5.x versions will provide Guile primitives for accessing
 Postgres' Server Programming Interface so that queries may be made

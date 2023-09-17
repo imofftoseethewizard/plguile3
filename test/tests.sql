@@ -1,6 +1,6 @@
 begin;
 
-select plan(77);
+select plan(79);
 
 --------------------------------------------------------------------------------
 --
@@ -257,6 +257,20 @@ from current_time t;
 
 --------------------------------------------------------------------------------
 --
+-- Type timetz
+--
+
+create function f_tmtz_id(a timetz) returns timetz as 'a' language scruple;
+create function f_tmtz_to_text(a timetz) returns text as '(date->string (time-monotonic->date a) "~H:~M:~f")' language scruple;
+
+select is(f_tmtz_id(t), t, 'timetz: identity mapping test')
+from current_time t;
+
+select is(f_tmtz_to_text(t)::timetz, t, 'timetz: to scheme value check')
+from current_time t;
+
+--------------------------------------------------------------------------------
+--
 -- Type interval
 --
 
@@ -470,10 +484,6 @@ from (select '{"foo": ["bar", 42]}'::json) t(json);
 --
 
 create function f_jsonb_id(a jsonb) returns jsonb as 'a' language scruple;
-
-do $$ begin
-raise notice '%', f_jsonb_id('{"foo": ["bar", 42]}'::jsonb)->'foo';
-end $$;
 
 select ok(f_jsonb_id(t.jsonb)->'foo'->>0 = 'bar', 'jsonb: identity mapping test')
 from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);

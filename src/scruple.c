@@ -9,7 +9,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
-#include "parser/parse_coerce.h"
+#include "mb/pg_wchar.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
@@ -18,7 +18,6 @@
 #include "utils/geo_decls.h"
 #include "utils/hsearch.h"
 #include "utils/inet.h"
-#include <utils/jsonb.h>
 #include <utils/jsonfuncs.h>
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
@@ -89,6 +88,7 @@ static SCM datum_point_to_scm(Datum x, Oid type_oid);
 static SCM datum_polygon_to_scm(Datum x, Oid type_oid);
 static SCM datum_text_to_scm(Datum x, Oid type_oid);
 static SCM datum_time_to_scm(Datum x, Oid type_oid);
+static SCM datum_timetz_to_scm(Datum x, Oid type_oid);
 static SCM datum_timestamptz_to_scm(Datum x, Oid type_oid);
 static SCM datum_uuid_to_scm(Datum x, Oid type_oid);
 static SCM datum_void_to_scm(Datum x, Oid type_oid);
@@ -120,6 +120,7 @@ static Datum scm_to_datum_point(SCM x, Oid type_oid);
 static Datum scm_to_datum_polygon(SCM x, Oid type_oid);
 static Datum scm_to_datum_text(SCM x, Oid type_oid);
 static Datum scm_to_datum_time(SCM x, Oid type_oid);
+static Datum scm_to_datum_timetz(SCM x, Oid type_oid);
 static Datum scm_to_datum_timestamptz(SCM x, Oid type_oid);
 static Datum scm_to_datum_uuid(SCM x, Oid type_oid);
 static Datum scm_to_datum_void(SCM x, Oid type_oid);
@@ -155,6 +156,8 @@ static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
 static bool is_enum_type(Oid type_oid);
+static Datum jsonb_from_cstring(char *json, int len);
+
 
 static SCM bit_string_data_proc;
 static SCM bit_string_length_proc;
@@ -231,8 +234,6 @@ static SCM time_second_proc;
 static HTAB *funcCache;
 static HTAB *typeCache;
 
-static Oid text_to_jsonb_cast_func_oid;
-
 void _PG_init(void) {
 
     HASHCTL funcInfo;
@@ -281,6 +282,7 @@ void _PG_init(void) {
     insert_type_cache_entry(TypenameGetTypid("polygon"),     datum_polygon_to_scm,     scm_to_datum_polygon);
     insert_type_cache_entry(TypenameGetTypid("text"),        datum_text_to_scm,        scm_to_datum_text);
     insert_type_cache_entry(TypenameGetTypid("time"),        datum_time_to_scm,        scm_to_datum_time);
+    insert_type_cache_entry(TypenameGetTypid("timetz"),      datum_timetz_to_scm,      scm_to_datum_timetz);
     insert_type_cache_entry(TypenameGetTypid("timestamp"),   datum_timestamptz_to_scm, scm_to_datum_timestamptz);
     insert_type_cache_entry(TypenameGetTypid("timestamptz"), datum_timestamptz_to_scm, scm_to_datum_timestamptz);
     insert_type_cache_entry(TypenameGetTypid("uuid"),        datum_uuid_to_scm,        scm_to_datum_uuid);
@@ -288,10 +290,6 @@ void _PG_init(void) {
     insert_type_cache_entry(TypenameGetTypid("varchar"),     datum_text_to_scm,        scm_to_datum_text);
     insert_type_cache_entry(TypenameGetTypid("void"),        datum_void_to_scm,        scm_to_datum_void);
     insert_type_cache_entry(TypenameGetTypid("xml"),         datum_xml_to_scm,         scm_to_datum_xml);
-
-    find_coercion_pathway(
-        TypenameGetTypid("text"), TypenameGetTypid("jsonb"),
-        COERCION_EXPLICIT, &text_to_jsonb_cast_func_oid);
 
     /* Initialize the Guile interpreter */
     scm_init_guile();
@@ -1064,6 +1062,63 @@ scm_to_datum_time(SCM x, Oid type_oid) {
 }
 
 SCM
+datum_timetz_to_scm(Datum x, Oid type_oid) {
+
+    TimeTzADT *ttz;
+    fsec_t msec;
+    int tz;
+    struct pg_tm tm;
+
+    /* Extract TimeTz struct from the input Datum */
+    ttz = DatumGetTimeTzADTP(x);
+
+    if (timetz2tm(ttz, &tm, &msec, &tz) == 0) {
+
+        int secs = (tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600 + tz) % SECS_PER_DAY;
+
+        if (secs < 0)
+            secs += SECS_PER_DAY;
+
+        return scm_call_3(
+            make_time_proc,
+            time_monotonic_symbol,
+            scm_from_long(msec * 1000),
+            scm_from_int(secs));
+    }
+    else {
+        elog(ERROR, "Invalid time");
+        return SCM_BOOL_F; // Shouldn't reach here; just to satisfy the compiler
+    }
+}
+
+Datum
+scm_to_datum_timetz(SCM x, Oid type_oid) {
+
+    elog(NOTICE, "x");
+    if (!is_time(x)) {
+        elog(ERROR, "time result expected, not: %s", scm_to_string(x));
+        return 0; // Shouldn't reach here; just to satisfy the compiler
+    }
+    else {
+        TimeTzADT *result = (TimeTzADT *) palloc(sizeof(TimeTzADT));
+
+        int seconds = scm_to_int(scm_call_1(time_second_proc, x));
+        int nanoseconds = scm_to_int(scm_call_1(time_nanosecond_proc, x));
+
+        // Get tz from current time
+        struct pg_tm tm;
+        fsec_t fsec;
+        int tz;
+        GetCurrentTimeUsec(&tm, &fsec, &tz);
+
+        result->time = seconds * USECS_PER_SEC + (nanoseconds/NS_PER_USEC) % USECS_PER_DAY;
+        result->zone = tz;
+
+        return TimeTzADTPGetDatum(result);
+    }
+}
+
+SCM
 datum_interval_to_scm(Datum x, Oid type_oid)
 {
     Interval *interval = DatumGetIntervalP(x);
@@ -1830,19 +1885,11 @@ Datum
 scm_to_datum_jsonb(SCM x, Oid type_oid) {
     // Convert SCM string to C string
     char *cstr = scm_to_locale_string(x);
+    int len = scm_to_int(scm_string_length(x));
 
-    // Convert C string to text
-    text *json_text = cstring_to_text(cstr);
+    Datum result = jsonb_from_cstring(cstr, len);
 
-    // Convert text to Datum
-    Datum text_datum = PointerGetDatum(json_text);
-
-    FmgrInfo flinfo;
-    Datum result;
-
-    fmgr_info(text_to_jsonb_cast_func_oid, &flinfo);
-    result = DirectFunctionCall1(flinfo.fn_addr, text_datum);
-
+    elog(NOTICE, "cstr: %s", cstr);
     // Free C string
     free(cstr);
 
@@ -2020,3 +2067,188 @@ is_enum_type(Oid type_oid) {
 
     return result;
 }
+
+
+/* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
+
+static size_t checkStringLen(size_t len);
+static void jsonb_in_object_start(void *pstate);
+static void jsonb_in_object_end(void *pstate);
+static void jsonb_in_array_start(void *pstate);
+static void jsonb_in_array_end(void *pstate);
+static void jsonb_in_object_field_start(void *pstate, char *fname, bool isnull);
+static void jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype);
+
+typedef struct JsonbInState
+{
+	JsonbParseState *parseState;
+	JsonbValue *res;
+} JsonbInState;
+
+Datum
+jsonb_from_cstring(char *json, int len)
+{
+    JsonLexContext *lex;
+    JsonbInState state;
+    JsonSemAction sem;
+
+    memset(&state, 0, sizeof(state));
+    memset(&sem, 0, sizeof(sem));
+    lex = makeJsonLexContextCstringLen(json, len, GetDatabaseEncoding(), true);
+
+    sem.semstate = (void *) &state;
+
+    sem.object_start = jsonb_in_object_start;
+    sem.array_start = jsonb_in_array_start;
+    sem.object_end = jsonb_in_object_end;
+    sem.array_end = jsonb_in_array_end;
+    sem.scalar = jsonb_in_scalar;
+    sem.object_field_start = jsonb_in_object_field_start;
+
+    pg_parse_json_or_ereport(lex, &sem);
+
+    /* after parsing, the item member has the composed jsonb structure */
+    PG_RETURN_POINTER(JsonbValueToJsonb(state.res));
+}
+
+static size_t
+checkStringLen(size_t len)
+{
+	if (len > JENTRY_OFFLENMASK)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("string too long to represent as jsonb string"),
+				 errdetail("Due to an implementation restriction, jsonb strings cannot exceed %d bytes.",
+						   JENTRY_OFFLENMASK)));
+
+	return len;
+}
+
+static void
+jsonb_in_object_start(void *pstate)
+{
+	JsonbInState *_state = (JsonbInState *) pstate;
+
+	_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_OBJECT, NULL);
+}
+
+static void
+jsonb_in_object_end(void *pstate)
+{
+	JsonbInState *_state = (JsonbInState *) pstate;
+
+	_state->res = pushJsonbValue(&_state->parseState, WJB_END_OBJECT, NULL);
+}
+
+static void
+jsonb_in_array_start(void *pstate)
+{
+	JsonbInState *_state = (JsonbInState *) pstate;
+
+	_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, NULL);
+}
+
+static void
+jsonb_in_array_end(void *pstate)
+{
+	JsonbInState *_state = (JsonbInState *) pstate;
+
+	_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
+}
+
+static void
+jsonb_in_object_field_start(void *pstate, char *fname, bool isnull)
+{
+	JsonbInState *_state = (JsonbInState *) pstate;
+	JsonbValue	v;
+
+	Assert(fname != NULL);
+	v.type = jbvString;
+	v.val.string.len = checkStringLen(strlen(fname));
+	v.val.string.val = fname;
+
+	_state->res = pushJsonbValue(&_state->parseState, WJB_KEY, &v);
+}
+
+/*
+ * For jsonb we always want the de-escaped value - that's what's in token
+ */
+static void
+jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype)
+{
+	JsonbInState *_state = (JsonbInState *) pstate;
+	JsonbValue	v;
+	Datum		numd;
+
+	switch (tokentype)
+	{
+
+		case JSON_TOKEN_STRING:
+			Assert(token != NULL);
+			v.type = jbvString;
+			v.val.string.len = checkStringLen(strlen(token));
+			v.val.string.val = token;
+			break;
+		case JSON_TOKEN_NUMBER:
+
+			/*
+			 * No need to check size of numeric values, because maximum
+			 * numeric size is well below the JsonbValue restriction
+			 */
+			Assert(token != NULL);
+			v.type = jbvNumeric;
+			numd = DirectFunctionCall3(numeric_in,
+									   CStringGetDatum(token),
+									   ObjectIdGetDatum(InvalidOid),
+									   Int32GetDatum(-1));
+			v.val.numeric = DatumGetNumeric(numd);
+			break;
+		case JSON_TOKEN_TRUE:
+			v.type = jbvBool;
+			v.val.boolean = true;
+			break;
+		case JSON_TOKEN_FALSE:
+			v.type = jbvBool;
+			v.val.boolean = false;
+			break;
+		case JSON_TOKEN_NULL:
+			v.type = jbvNull;
+			break;
+		default:
+			/* should not be possible */
+			elog(ERROR, "invalid json token type");
+			break;
+	}
+
+	if (_state->parseState == NULL)
+	{
+		/* single scalar */
+		JsonbValue	va;
+
+		va.type = jbvArray;
+		va.val.array.rawScalar = true;
+		va.val.array.nElems = 1;
+
+		_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, &va);
+		_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
+		_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
+	}
+	else
+	{
+		JsonbValue *o = &_state->parseState->contVal;
+
+		switch (o->type)
+		{
+			case jbvArray:
+				_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
+				break;
+			case jbvObject:
+				_state->res = pushJsonbValue(&_state->parseState, WJB_VALUE, &v);
+				break;
+			default:
+				elog(ERROR, "unexpected parent of nested structure");
+		}
+	}
+}
+
+/* End quoted code */
