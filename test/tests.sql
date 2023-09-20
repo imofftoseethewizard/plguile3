@@ -1,6 +1,6 @@
 begin;
 
-select plan(79);
+select plan(117);
 
 --------------------------------------------------------------------------------
 --
@@ -33,12 +33,16 @@ create function f_double_in_out(a inout int, b inout int) returns record as
 '(values (- a b) (* a b))' language scruple;
 select is(f_double_in_out(12, 13), (-1, 156), 'protocol: inout params');
 
+
 --------------------------------------------------------------------------------
 --
 -- Type smallint/int2
 --
 
 create function f_small_sum(a smallint, b smallint) returns smallint as '(+ a b)'
+language scruple;
+
+create function f_x_int2_string() returns smallint as '"not an integer"'
 language scruple;
 
 select is(f_small_sum(1::smallint, 2::smallint), 3::smallint, 'int2: simple sum');
@@ -52,10 +56,18 @@ select throws_ok(
   'int2 result expected, not: -32769',
   'int2: underflow check');
 
+select throws_ok(
+  'select f_x_int2_string()',
+  'int2 result expected, not: "not an integer"',
+  'int2: wrong type check');
+
 --------------------------------------------------------------------------------
 --
 -- Type int/int4
 --
+
+create function f_x_int4_string() returns int4 as '"not an integer"'
+language scruple;
 
 select throws_ok(
   'select f_sum(2147483647, 1)',
@@ -67,12 +79,20 @@ select throws_ok(
   'int4 result expected, not: -2147483649',
   'int4: underflow check');
 
+select throws_ok(
+  'select f_x_int4_string()',
+  'int4 result expected, not: "not an integer"',
+  'int4: wrong type check');
+
 --------------------------------------------------------------------------------
 --
 -- Type bigint/int8
 --
 
 create function f_big_sum(a bigint, b bigint) returns bigint as '(+ a b)'
+language scruple;
+
+create function f_x_int8_string() returns int8 as '"not an integer"'
 language scruple;
 
 select is(f_big_sum(1::bigint, 2::bigint), 3::bigint, 'int8: simple sum');
@@ -86,12 +106,24 @@ select throws_ok(
   'int8 result expected, not: -9223372036854775809',
   'int8: underflow check');
 
+select throws_ok(
+  'select f_x_int8_string()',
+  'int8 result expected, not: "not an integer"',
+  'int8: wrong type check');
+
 --------------------------------------------------------------------------------
 --
 -- Type real/float4
 --
 
 create function f_real(a real, b real) returns real as '(* a b)' language scruple;
+create function f_int_as_real() returns real as '1' language scruple;
+create function f_rational_as_real() returns real as '1/2' language scruple;
+create function f_x_text_as_real() returns real as '"not a number"' language scruple;
+create function f_decimal_as_real() returns real as '(make-decimal 31415 4)' language scruple;
+create function f_decimal_inf_as_real() returns real as '(make-decimal "Infinity" 0)' language scruple;
+create function f_decimal_neg_inf_as_real() returns real as '(make-decimal "-Infinity" 0)' language scruple;
+create function f_decimal_nan_as_real() returns real as '(make-decimal "NaN" 0)' language scruple;
 
 select is(f_real(2.0::real, 1.5::real), 3.0::real, 'float4: simple sum');
 select is(f_real(3.402823e38::real, 2.0::real), 'inf'::real, 'float4: inf overflow');
@@ -100,6 +132,19 @@ select is(f_real(-3.402823e38::real, 2.0::real), '-inf'::real, 'float4: negative
 select is(f_real(-1.4e-45::real, 0.5::real), 0.0::real, 'float4: negative 0 underflow');
 select is(f_real('nan'::real, 0.5::real), 'nan'::real, 'float4: nan propagation');
 
+select is(f_int_as_real(), 1.0::real, 'float4: coerce int');
+select is(f_rational_as_real(), 0.5::real, 'float4: auto convert from rational');
+
+select throws_ok(
+  'select f_x_text_as_real()',
+  'number result expected, not: "not a number"',
+  'float4: wrong type check');
+
+select is(f_decimal_as_real(), 3.1415::real, 'float4: auto convert from decimal');
+select is(f_decimal_inf_as_real(), 'inf'::real, 'float4: auto convert from decimal -- infinity');
+select is(f_decimal_neg_inf_as_real(), '-inf'::real, 'float4: auto convert from decimal -- negative infinity');
+select is(f_decimal_nan_as_real(), 'nan'::real, 'float4: auto convert from decimal -- nan');
+
 --------------------------------------------------------------------------------
 --
 -- Type double precision/float8
@@ -107,6 +152,13 @@ select is(f_real('nan'::real, 0.5::real), 'nan'::real, 'float4: nan propagation'
 
 create function f_dp(a double precision, b double precision) returns double precision as
 '(* a b)' language scruple;
+create function f_int_as_dp() returns double precision as '1' language scruple;
+create function f_rational_as_dp() returns double precision as '1/2' language scruple;
+create function f_x_text_as_dp() returns double precision as '"not a number"' language scruple;
+create function f_decimal_as_dp() returns double precision as '(make-decimal 31415 4)' language scruple;
+create function f_decimal_inf_as_dp() returns double precision as '(make-decimal "Infinity" 0)' language scruple;
+create function f_decimal_neg_inf_as_dp() returns double precision as '(make-decimal "-Infinity" 0)' language scruple;
+create function f_decimal_nan_as_dp() returns double precision as '(make-decimal "NaN" 0)' language scruple;
 
 select is(f_dp(2.0, 1.5), 3.0::double precision, 'float8: simple sum');
 select is(f_dp(1.7976931348623157e308, 2.0), 'inf', 'float8: inf overflow');
@@ -115,15 +167,89 @@ select is(f_dp(-1.7976931348623157e308, 2.0), '-inf', 'float8: negative inf over
 select is(f_dp(-5e-324, 0.5), 0.0::double precision, 'float8: negative 0 underflow');
 select is(f_dp('nan', 0.5), 'nan'::double precision, 'float8: nan propagation');
 
+select is(f_int_as_dp(), 1.0::double precision, 'float8: coerce int');
+select is(f_rational_as_dp(), 0.5::double precision, 'float8: coerce rational');
+
+select throws_ok(
+  'select f_x_text_as_dp()',
+  'number result expected, not: "not a number"',
+  'float8: wrong type check');
+
+select is(f_decimal_as_dp(), 3.1415::double precision, 'float8: auto convert from decimal');
+select is(f_decimal_inf_as_dp(), 'inf'::double precision, 'float8: auto convert from decimal -- infinity');
+select is(f_decimal_neg_inf_as_dp(), '-inf'::double precision, 'float8: auto convert from decimal -- negative infinity');
+select is(f_decimal_nan_as_dp(), 'nan'::double precision, 'float8: auto convert from decimal -- nan');
+
 --------------------------------------------------------------------------------
 --
 -- Type decimal/numeric
 --
 
 create function f_numeric_id(a numeric) returns numeric as 'a' language scruple;
+create function f_int_as_numeric() returns numeric as '5' language scruple;
+create function f_nan_as_numeric() returns numeric as '+nan.0' language scruple;
+create function f_inf_as_numeric() returns numeric as '+inf.0' language scruple;
+create function f_neg_inf_as_numeric() returns numeric as '-inf.0' language scruple;
+create function f_rational_as_numeric() returns numeric as '1/2' language scruple;
+create function f_large_real_as_numeric() returns numeric as '6.02e23' language scruple;
+create function f_x_string_as_numeric() returns numeric as '"not a number"' language scruple;
+create function f_x_bad_decimal_1() returns numeric as '(make-decimal "a" 0)' language scruple;
+create function f_x_bad_decimal_2() returns numeric as '(make-decimal 0.5 0)' language scruple;
+create function f_x_bad_decimal_3() returns numeric as '(make-decimal 5 -1)' language scruple;
+create function f_x_bad_decimal_4() returns numeric as '(make-decimal 5 0.2)' language scruple;
+create function f_x_bad_decimal_5() returns numeric as '(make-decimal 5 "2")' language scruple;
 
-select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test')
+select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- positive finite')
 from (select '3.1415'::numeric(5,3)) t(v);
+
+select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- negative finite')
+from (select '-2'::numeric(5, 0)) t(v);
+
+select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- infinity')
+from (select 'infinity'::numeric) t(v);
+
+select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- negative infinity')
+from (select '-Infinity'::numeric) t(v);
+
+select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- not a number')
+from (select 'Nan'::numeric) t(v);
+
+select is(f_int_as_numeric(), 5::numeric, 'decimal: integer auto conv');
+select is(f_nan_as_numeric(), 'NaN'::numeric, 'decimal: real auto conv -- nan');
+select is(f_inf_as_numeric(), 'Inf'::numeric, 'decimal: real auto conv -- inf');
+select is(f_neg_inf_as_numeric(), '-Inf'::numeric, 'decimal: real auto conv -- negative infinity');
+select is(f_rational_as_numeric(), 0.5::numeric, 'decimal: real auto conv -- rational');
+select is(f_large_real_as_numeric(), 6.02e23::numeric, 'decimal: large real auto conv');
+
+select throws_ok(
+  'select f_x_string_as_numeric()',
+  'decimal result expected, not: "not a number"',
+  'decimal: wrong type check, string');
+
+select throws_ok(
+  'select f_x_bad_decimal_1()',
+  'invalid decimal result: #<decimal digits: "a" scale: 0>',
+  'decimal: wrong type check, string');
+
+select throws_ok(
+  'select f_x_bad_decimal_2()',
+  'invalid decimal result: #<decimal digits: 0.5 scale: 0>',
+  'decimal: wrong type check, string');
+
+select throws_ok(
+  'select f_x_bad_decimal_3()',
+  'invalid decimal result: #<decimal digits: 5 scale: -1>',
+  'decimal: wrong type check, string');
+
+select throws_ok(
+  'select f_x_bad_decimal_4()',
+  'invalid decimal result: #<decimal digits: 5 scale: 0.2>',
+  'decimal: wrong type check, string');
+
+select throws_ok(
+  'select f_x_bad_decimal_5()',
+  'invalid decimal result: #<decimal digits: 5 scale: "2">',
+  'decimal: wrong type check, string');
 
 --------------------------------------------------------------------------------
 --
@@ -131,9 +257,27 @@ from (select '3.1415'::numeric(5,3)) t(v);
 --
 
 create function f_money_id(a money) returns money as 'a' language scruple;
+create function f_x_money_inexact() returns money as '1.5' language scruple;
+create function f_x_money_rational() returns money as '13/5' language scruple;
+create function f_x_money_string() returns money as '"$1.25"' language scruple;
 
 select is(f_money_id(t.v), t.v, 'money: identity mapping test')
 from (select '2.28'::money) t(v);
+
+select throws_ok(
+  'select f_x_money_inexact()',
+  'int8 result expected, not: 1.5',
+  'money: wrong type check, inexact');
+
+select throws_ok(
+  'select f_x_money_rational()',
+  'int8 result expected, not: 13/5',
+  'money: wrong type check, rational');
+
+select throws_ok(
+  'select f_x_money_string()',
+  'int8 result expected, not: "$1.25"',
+  'money: wrong type check, string');
 
 --------------------------------------------------------------------------------
 --
@@ -213,6 +357,13 @@ from current_timestamp t;
 select is(f_tz_to_text(t)::timestamptz, t, 'timestamptz: to scheme value check')
 from current_timestamp t;
 
+set time zone 'America/Los_Angeles';
+
+select is(f_tz_id(t), t, 'timestamptz: identity mapping test non UTC')
+from current_timestamp t;
+
+set time zone 'UTC';
+
 --------------------------------------------------------------------------------
 --
 -- Type timestamp
@@ -268,6 +419,13 @@ from current_time t;
 
 select is(f_tmtz_to_text(t)::timetz, t, 'timetz: to scheme value check')
 from current_time t;
+
+set time zone 'America/Los_Angeles';
+
+select is(f_tmtz_id(t), t, 'timetz: identity mapping test non UTC')
+from current_time t;
+
+set time zone 'UTC';
 
 --------------------------------------------------------------------------------
 --

@@ -11,27 +11,61 @@
   (scale decimal-scale))
 
 (define (string->decimal s)
-  (let* ((dot-index (string-index s #\.))
-         (length (string-length s))
-         (decimal-point (or dot-index length))
-         (scale (if dot-index
-                             (- length decimal-point 1)
-                             0))
-         (integer-part (if (zero? decimal-point)
-                           0
-                           (string->number (substring/shared s 0 decimal-point))))
-         (fractional-part (if (zero? scale)
-                              0
-                              (string->number (substring/shared s (+ decimal-point 1) length)))))
-    (make-decimal (+ (* integer-part (expt 10 scale)) fractional-part)
-                  scale)))
+  (cond
+   ((string=? s "NaN")       (make-decimal s 0))
+   ((string=? s "Infinity")  (make-decimal s 0))
+   ((string=? s "-Infinity") (make-decimal s 0))
+   (else
+    (let* ((dot-index (string-index s #\.))
+           (length (string-length s))
+           (decimal-point (or dot-index length))
+           (scale (if dot-index
+                      (- length decimal-point 1)
+                      0))
+           (integer-part (if (zero? decimal-point)
+                             0
+                             (string->number (substring/shared s 0 decimal-point))))
+           (fractional-part (if (zero? scale)
+                                0
+                                (string->number (substring/shared s (+ decimal-point 1) length)))))
+      (make-decimal (+ (* integer-part (expt 10 scale)) fractional-part)
+                    scale)))))
 
 (define (decimal->string d)
-  (let ((scale (decimal-scale d)))
-    (if (zero? scale)
-        (number->string (decimal-digits d))
-        (let-values (((integer-part fractional-part) (floor/ (decimal-digits d) (expt 10 scale))))
-          (format #f "~d.~v,'0d" integer-part scale fractional-part)))))
+  (let ((digits (decimal-digits d))
+        (scale (decimal-scale d)))
+    (cond
+     ((equal? digits "NaN")       digits)
+     ((equal? digits "Infinity")  digits)
+     ((equal? digits "-Infinity") digits)
+     ((zero? scale) (number->string digits))
+     (else
+      (let-values (((integer-part fractional-part) (floor/ digits (expt 10 scale))))
+        (format #f "~d.~v,'0d" integer-part scale fractional-part))))))
+
+(define (valid-decimal? d)
+  (and (decimal? d)
+       (let ((digits (decimal-digits d))
+             (scale (decimal-scale d)))
+         (or
+          (equal? digits "NaN")
+          (equal? digits "Infinity")
+          (equal? digits "-Infinity")
+          (and (number? digits)
+               (exact-integer? digits)
+               (number? scale)
+               (exact-integer? scale)
+               (>= scale 0))))))
+
+(define (decimal->inexact d)
+  (let ((digits (decimal-digits d))
+        (scale (decimal-scale d)))
+    (cond
+     ((equal? digits "NaN")       +nan.0)
+     ((equal? digits "Infinity")  +inf.0)
+     ((equal? digits "-Infinity") -inf.0)
+     (else
+      (/ digits (expt 10.0 scale))))))
 
 (define-record-type point
   (make-point x y)
@@ -113,11 +147,3 @@
   (and (integer? x)
        (>= x -9223372036854775808)
        (<= x 9223372036854775807)))
-
-(define (float4-compatible? x)
-  (and (real? x)
-       (inexact? x)))
-
-(define (float8-compatible? x)
-  (and (real? x)
-       (inexact? x)))

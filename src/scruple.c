@@ -134,8 +134,7 @@ static bool is_box(SCM x);
 static bool is_circle(SCM x);
 static bool is_date(SCM x);
 static bool is_decimal(SCM x);
-static bool is_float4(SCM x);
-static bool is_float8(SCM x);
+static bool is_valid_decimal(SCM x);
 static bool is_inet(SCM x);
 static bool is_int2(SCM x);
 static bool is_int4(SCM x);
@@ -175,6 +174,7 @@ static SCM date_year_proc;
 static SCM date_zone_offset_proc;
 static SCM decimal_digits_proc;
 static SCM decimal_scale_proc;
+static SCM decimal_to_inexact_proc;
 static SCM decimal_to_string_proc;
 static SCM inet_address_proc;
 static SCM inet_bits_proc;
@@ -184,8 +184,7 @@ static SCM is_box_proc;
 static SCM is_circle_proc;
 static SCM is_date_proc;
 static SCM is_decimal_proc;
-static SCM is_float4_proc;
-static SCM is_float8_proc;
+static SCM is_valid_decimal_proc;
 static SCM is_inet_proc;
 static SCM is_int2_proc;
 static SCM is_int4_proc;
@@ -327,6 +326,7 @@ void _PG_init(void) {
     is_circle_proc         = scm_eval_string(scm_from_locale_string("circle?"));
     is_date_proc           = scm_eval_string(scm_from_locale_string("date?"));
     is_decimal_proc        = scm_eval_string(scm_from_locale_string("decimal?"));
+    is_valid_decimal_proc  = scm_eval_string(scm_from_locale_string("valid-decimal?"));
     is_inet_proc           = scm_eval_string(scm_from_locale_string("inet?"));
     is_line_proc           = scm_eval_string(scm_from_locale_string("line?"));
     is_lseg_proc           = scm_eval_string(scm_from_locale_string("lseg?"));
@@ -368,13 +368,12 @@ void _PG_init(void) {
     time_nanosecond_proc   = scm_eval_string(scm_from_locale_string("time-nanosecond"));
     time_second_proc       = scm_eval_string(scm_from_locale_string("time-second"));
 
-    decimal_to_string_proc = scm_variable_ref(scm_c_lookup("decimal->string"));
-    is_float4_proc         = scm_variable_ref(scm_c_lookup("float4-compatible?"));
-    is_float8_proc         = scm_variable_ref(scm_c_lookup("float8-compatible?"));
-    is_int2_proc           = scm_variable_ref(scm_c_lookup("int2-compatible?"));
-    is_int4_proc           = scm_variable_ref(scm_c_lookup("int4-compatible?"));
-    is_int8_proc           = scm_variable_ref(scm_c_lookup("int8-compatible?"));
-    string_to_decimal_proc = scm_variable_ref(scm_c_lookup("string->decimal"));
+    decimal_to_string_proc  = scm_variable_ref(scm_c_lookup("decimal->string"));
+    decimal_to_inexact_proc = scm_variable_ref(scm_c_lookup("decimal->inexact"));
+    is_int2_proc            = scm_variable_ref(scm_c_lookup("int2-compatible?"));
+    is_int4_proc            = scm_variable_ref(scm_c_lookup("int4-compatible?"));
+    is_int8_proc            = scm_variable_ref(scm_c_lookup("int8-compatible?"));
+    string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
 
 }
 
@@ -813,11 +812,15 @@ datum_float4_to_scm(Datum x, Oid type_oid) {
 Datum
 scm_to_datum_float4(SCM x, Oid type_oid) {
 
-    if (!is_float4(x)) {
-        elog(ERROR, "float4 result expected, not: %s", scm_to_string(x));
-    }
+    if (scm_is_number(x))
+        return Float4GetDatum(scm_to_double(x));
 
-    return Float4GetDatum(scm_to_double(x));
+    else if (is_decimal(x))
+        return Float4GetDatum(scm_to_double(scm_call_1(decimal_to_inexact_proc, x)));
+
+    else {
+        elog(ERROR, "number result expected, not: %s", scm_to_string(x));
+    }
 }
 
 SCM
@@ -828,11 +831,15 @@ datum_float8_to_scm(Datum x, Oid type_oid) {
 Datum
 scm_to_datum_float8(SCM x, Oid type_oid) {
 
-    if (!is_float8(x)) {
-        elog(ERROR, "float8 result expected, not: %s", scm_to_string(x));
-    }
+    if (scm_is_number(x))
+        return Float8GetDatum(scm_to_double(x));
 
-    return Float8GetDatum(scm_to_double(x));
+    else if (is_decimal(x))
+        return Float8GetDatum(scm_to_double(scm_call_1(decimal_to_inexact_proc, x)));
+
+    else {
+        elog(ERROR, "number result expected, not: %s", scm_to_string(x));
+    }
 }
 
 SCM
@@ -1111,7 +1118,13 @@ scm_to_datum_timetz(SCM x, Oid type_oid) {
         int tz;
         GetCurrentTimeUsec(&tm, &fsec, &tz);
 
-        result->time = seconds * USECS_PER_SEC + (nanoseconds/NS_PER_USEC) % USECS_PER_DAY;
+        elog(NOTICE, "current tz: %d", tz);
+
+        result->time = (seconds - tz) * USECS_PER_SEC + (nanoseconds/NS_PER_USEC) % USECS_PER_DAY;
+
+        if (result->time < 0)
+            result->time += USECS_PER_DAY;
+
         result->zone = tz;
 
         return TimeTzADTPGetDatum(result);
@@ -1164,18 +1177,42 @@ datum_numeric_to_scm(Datum x, Oid type_oid) {
 Datum
 scm_to_datum_numeric(SCM x, Oid type_oid) {
 
-    if (!is_decimal(x)) {
+    char *numeric_str = NULL;
+
+    if (is_decimal(x)) {
+        if (is_valid_decimal(x))
+            numeric_str = scm_to_locale_string(scm_call_1(decimal_to_string_proc, x));
+        else
+            elog(ERROR, "invalid decimal result: %s", scm_to_string(x));
+    }
+    else if (scm_is_number(x)) {
+        if (scm_is_real(x)) {
+            if (scm_to_bool(scm_nan_p(x))) {
+                numeric_str = "NaN";
+            }
+            else if (scm_to_bool(scm_inf_p(x))) {
+                if (scm_to_bool(scm_less_p(scm_from_int(0), x)))
+                    numeric_str = "Infinity";
+                else
+                    numeric_str = "-Infinity";
+            }
+            else if (scm_is_rational(x)) {
+                numeric_str = scm_to_string(scm_exact_to_inexact(x));
+            }
+            else {
+                numeric_str = scm_to_string(x);
+            }
+        }
+    }
+
+    if (numeric_str == NULL) {
         elog(ERROR, "decimal result expected, not: %s", scm_to_string(x));
     }
-    else {
-        SCM s = scm_call_1(decimal_to_string_proc, x);
-        char *numeric_str = scm_to_locale_string(s);
 
-        return DirectFunctionCall3(numeric_in,
-                                   CStringGetDatum(numeric_str),
-                                   ObjectIdGetDatum(InvalidOid),
-                                   Int32GetDatum(-1));
-    }
+    return DirectFunctionCall3(numeric_in,
+                               CStringGetDatum(numeric_str),
+                               ObjectIdGetDatum(InvalidOid),
+                               Int32GetDatum(-1));
 }
 
 SCM
@@ -1932,16 +1969,6 @@ is_decimal(SCM x) {
 }
 
 bool
-is_float4(SCM x) {
-    return scm_is_true(scm_call_1(is_float4_proc, x));
-}
-
-bool
-is_float8(SCM x) {
-    return scm_is_true(scm_call_1(is_float8_proc, x));
-}
-
-bool
 is_inet(SCM x) {
     return scm_is_true(scm_call_1(is_inet_proc, x));
 }
@@ -2001,6 +2028,11 @@ is_time(SCM x) {
     return scm_is_true(scm_call_1(is_time_proc, x));
 }
 
+bool
+is_valid_decimal(SCM x) {
+    return scm_is_true(scm_call_1(is_valid_decimal_proc, x));
+}
+
 Datum
 datum_date_to_timestamptz(Datum x)
 {
@@ -2013,7 +2045,7 @@ char *
 scm_to_string(SCM obj) {
     MemoryContext context = CurrentMemoryContext;
 
-    SCM proc = scm_eval_string(scm_from_locale_string("(lambda (x) (with-output-to-string (lambda () (display x))))"));
+    SCM proc = scm_eval_string(scm_from_locale_string("(lambda (x) (format #f \"~s\" x))"));
     SCM str_scm = scm_call_1(proc, obj);
 
     // Convert SCM string to C string and allocate it in the given memory context

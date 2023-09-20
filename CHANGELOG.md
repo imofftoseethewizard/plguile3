@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2023-09-20
+
+This release includes more tests of the conversion of values between
+Postgres and Guile. There are still code paths which will cause a
+crash and connection reset due to an unexpected value type returned by
+the scheme code, but rather than handling these explicitly in C, a
+later version of scruple will handle them generically by capturing
+Guile exceptions and reporting those instead. Additionally, the module
+scruple.scm will be improved to prevent the formation of records with
+invalid fields.
+
 ## [0.3.4] - 2023-09-17
 
 This release includes support for `timetz` and `jsonb` types.

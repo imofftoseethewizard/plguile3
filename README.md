@@ -51,6 +51,9 @@ The 0.7.x versions will add support for triggers.
 The 0.9.x versions will provide function isolation, and initialization
 and configuration settings.
 
+The 0.11.x versions will normalize error messages and properly trap
+and report errors from Guile.
+
 ## Requirements
 
 - PostgreSQL 14
