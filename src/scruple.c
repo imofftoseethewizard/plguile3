@@ -75,7 +75,7 @@ static SCM datum_box_to_scm(Datum x, Oid type_oid);
 static SCM datum_bytea_to_scm(Datum x, Oid type_oid);
 static SCM datum_circle_to_scm(Datum x, Oid type_oid);
 static SCM datum_date_to_scm(Datum x, Oid type_oid);
-//static SCM datum_enum_to_scm(Datum x, Oid type_oid);
+static SCM datum_enum_to_scm(Datum x, Oid type_oid);
 static SCM datum_float4_to_scm(Datum x, Oid type_oid);
 static SCM datum_float8_to_scm(Datum x, Oid type_oid);
 static SCM datum_inet_to_scm(Datum x, Oid type_oid);
@@ -107,7 +107,7 @@ static Datum scm_to_datum_box(SCM x, Oid type_oid);
 static Datum scm_to_datum_bytea(SCM x, Oid type_oid);
 static Datum scm_to_datum_circle(SCM x, Oid type_oid);
 static Datum scm_to_datum_date(SCM x, Oid type_oid);
-//static Datum scm_to_datum_enum(SCM x, Oid type_oid);
+static Datum scm_to_datum_enum(SCM x, Oid type_oid);
 static Datum scm_to_datum_float4(SCM x, Oid type_oid);
 static Datum scm_to_datum_float8(SCM x, Oid type_oid);
 static Datum scm_to_datum_inet(SCM x, Oid type_oid);
@@ -159,15 +159,14 @@ static bool is_polygon(SCM x);
 static bool is_time(SCM x);
 
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
-//static SCM datum_to_scm(Datum datum, Oid type_oid);
+static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
-//static bool is_enum_type(Oid type_oid);
+static bool is_enum_type(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
-
 
 static SCM bit_string_data_proc;
 static SCM bit_string_length_proc;
@@ -247,6 +246,8 @@ static SCM time_second_proc;
 
 static HTAB *funcCache;
 static HTAB *typeCache;
+
+static SCM unbox_datum(SCM x);
 
 void _PG_init(void) {
 
@@ -434,6 +435,7 @@ void _PG_init(void) {
     is_int8_proc            = scm_variable_ref(scm_c_lookup("int8-compatible?"));
     string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
 
+    scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
 }
 
 void _PG_fini(void) {
@@ -510,7 +512,6 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
         arg_list = scm_cons(scm_arg, arg_list);
     }
 
-    elog(NOTICE, "x");
     result = convert_result_to_datum(scm_apply(proc, arg_list, SCM_EOL), proc_tuple, fcinfo);
 
     ReleaseSysCache(proc_tuple);
@@ -530,7 +531,6 @@ convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinf
     Oid rettype_oid;
     TupleDesc tuple_desc;
 
-    elog(NOTICE, "x");
     typefunc_class = get_call_result_type(fcinfo, &rettype_oid, &tuple_desc);
 
     elog(NOTICE, "convert_result_to_datum: return type oid: %d", rettype_oid);
@@ -538,7 +538,6 @@ convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinf
     switch (typefunc_class) {
 
     case TYPEFUNC_SCALAR:
-        elog(NOTICE, "x");
         return scm_to_datum(result, rettype_oid);
 
     case TYPEFUNC_COMPOSITE:
@@ -733,30 +732,39 @@ SCM scruple_compile_func(Oid func_oid) {
     return scm_proc;
 }
 
-/* SCM */
-/* datum_to_scm(Datum datum, Oid type_oid) { */
+SCM
+unbox_datum(SCM x) {
 
-/*     bool found; */
-/*     TypeCacheEntry *entry = (TypeCacheEntry *) hash_search( */
-/*         typeCache, */
-/*         &type_oid, */
-/*         HASH_FIND, */
-/*         &found); */
+    Oid type_oid = get_boxed_datum_type(x);
+    Datum value = get_boxed_datum_value(x);
 
-/*     if (found && entry->to_scm) { */
-/*         return entry->to_scm(datum, type_oid); */
-/*     } */
-/*     else { */
-/*         if (is_enum_type(type_oid)) { */
-/*             insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum); */
-/*             return datum_enum_to_scm(datum, type_oid); */
-/*         } */
+    return datum_to_scm(value, type_oid);
+}
 
-/*         elog(ERROR, "Conversion function for type OID %u not found", type_oid); */
-/*         // Unreachable */
-/*         return SCM_EOL; */
-/*     } */
-/* } */
+SCM
+datum_to_scm(Datum datum, Oid type_oid) {
+
+    bool found;
+    TypeCacheEntry *entry = (TypeCacheEntry *) hash_search(
+        typeCache,
+        &type_oid,
+        HASH_FIND,
+        &found);
+
+    if (found && entry->to_scm) {
+        return entry->to_scm(datum, type_oid);
+    }
+    else {
+        if (is_enum_type(type_oid)) {
+            insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
+            return datum_enum_to_scm(datum, type_oid);
+        }
+
+        elog(ERROR, "Conversion function for type OID %u not found", type_oid);
+        // Unreachable
+        return SCM_EOL;
+    }
+}
 
 Datum
 scm_to_datum(SCM scm, Oid type_oid) {
@@ -764,7 +772,6 @@ scm_to_datum(SCM scm, Oid type_oid) {
     bool found;
     TypeCacheEntry *entry;
 
-    elog(NOTICE, "x");
     if (is_boxed_datum(scm))
         return convert_boxed_datum_to_datum(scm, type_oid);
 
@@ -781,98 +788,95 @@ scm_to_datum(SCM scm, Oid type_oid) {
 Datum
 convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid) {
 
-    elog(NOTICE, "y");
-    if (true) {
-        Oid source_type_oid = get_boxed_datum_type(scm);
-        Datum value = get_boxed_datum_value(scm);
+    Oid source_type_oid = get_boxed_datum_type(scm);
+    Datum value = get_boxed_datum_value(scm);
 
-        // Lookup casting function OID in pg_cast
-        Oid cast_func_oid = InvalidOid;
-        Relation rel = relation_open(CastRelationId, AccessShareLock);
-        SysScanDesc scan;
-        ScanKeyData key[2];
-        HeapTuple tuple;
-        Form_pg_cast cast_form;
+    // Lookup casting function OID in pg_cast
+    Oid cast_func_oid = InvalidOid;
+    Relation rel = relation_open(CastRelationId, AccessShareLock);
+    SysScanDesc scan;
+    ScanKeyData key[2];
+    HeapTuple tuple;
+    Form_pg_cast cast_form;
 
-        ScanKeyInit(&key[0],
-                    Anum_pg_cast_castsource,
-                    BTEqualStrategyNumber, F_OIDEQ,
-                    ObjectIdGetDatum(source_type_oid));
+    ScanKeyInit(&key[0],
+                Anum_pg_cast_castsource,
+                BTEqualStrategyNumber, F_OIDEQ,
+                ObjectIdGetDatum(source_type_oid));
 
-        ScanKeyInit(&key[1],
-                    Anum_pg_cast_casttarget,
-                    BTEqualStrategyNumber, F_OIDEQ,
-                    ObjectIdGetDatum(target_type_oid));
+    ScanKeyInit(&key[1],
+                Anum_pg_cast_casttarget,
+                BTEqualStrategyNumber, F_OIDEQ,
+                ObjectIdGetDatum(target_type_oid));
 
-        scan = systable_beginscan(rel, CastSourceTargetIndexId, true,
-                                  NULL, 2, key);
+    scan = systable_beginscan(rel, CastSourceTargetIndexId, true,
+                              NULL, 2, key);
 
-        tuple = systable_getnext(scan);
+    tuple = systable_getnext(scan);
 
-        if (!HeapTupleIsValid(tuple))
-            elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+    if (!HeapTupleIsValid(tuple))
+        elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
 
-        cast_form = (Form_pg_cast) GETSTRUCT(tuple);
-        cast_func_oid = cast_form->castfunc;
+    cast_form = (Form_pg_cast) GETSTRUCT(tuple);
+    cast_func_oid = cast_form->castfunc;
 
-        systable_endscan(scan);
-        relation_close(rel, AccessShareLock);
+    systable_endscan(scan);
+    relation_close(rel, AccessShareLock);
 
-        if (!OidIsValid(cast_func_oid))
-            elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+    if (!OidIsValid(cast_func_oid))
+        elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
 
-        return OidFunctionCall1(cast_func_oid, value);
-    }
+    return OidFunctionCall1(cast_func_oid, value);
 }
 
-/* SCM */
-/* datum_enum_to_scm(Datum x, Oid type_oid) { */
+SCM
+datum_enum_to_scm(Datum x, Oid type_oid) {
 
-/*     HeapTuple tup; */
-/*     SCM result; */
+    HeapTuple tup;
+    SCM result;
 
-/*     tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(x)); */
+    tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(x));
 
-/*     if (!HeapTupleIsValid(tup)) { */
-/*         elog(ERROR, "cache lookup failed for enum %lu", ObjectIdGetDatum(x)); */
-/*     } */
+    if (!HeapTupleIsValid(tup)) {
+        elog(ERROR, "cache lookup failed for enum %lu", ObjectIdGetDatum(x));
+    }
 
-/*     result = scm_from_locale_symbol(NameStr(((Form_pg_enum) GETSTRUCT(tup))->enumlabel)); */
+    result = scm_from_locale_symbol(NameStr(((Form_pg_enum) GETSTRUCT(tup))->enumlabel));
 
-/*     ReleaseSysCache(tup); */
+    ReleaseSysCache(tup);
 
-/*     return result; */
-/* } */
+    return result;
+}
 
-/* Datum */
-/* scm_to_datum_enum(SCM x, Oid type_oid) { */
+Datum
+scm_to_datum_enum(SCM x, Oid type_oid) {
 
-/*     HeapTuple tup; */
-/*     char *value_name; */
-/*     Datum result; */
+    HeapTuple tup;
+    char *value_name;
+    Datum result;
 
-/*     if (!scm_is_symbol(x)) { */
-/*         elog(ERROR, "The SCM value must be a symbol"); */
-/*     } */
+    if (!scm_is_symbol(x)) {
+        elog(ERROR, "The SCM value must be a symbol");
+    }
 
-/*     value_name = scm_to_locale_string(scm_symbol_to_string(x)); */
+    value_name = scm_to_locale_string(scm_symbol_to_string(x));
 
-/*     tup = SearchSysCache2(ENUMTYPOIDNAME, */
-/*                           ObjectIdGetDatum(type_oid), */
-/*                           CStringGetDatum(value_name)); */
+    tup = SearchSysCache2(ENUMTYPOIDNAME,
+                          ObjectIdGetDatum(type_oid),
+                          CStringGetDatum(value_name));
 
-/*     free(value_name); */
+    free(value_name);
 
-/*     if (!HeapTupleIsValid(tup)) { */
-/*         elog(ERROR, "Could not find enum value for string: %s", scm_to_string(x)); */
-/*     } */
+    if (!HeapTupleIsValid(tup)) {
+        elog(ERROR, "Could not find enum value for string: %s", scm_to_string(x));
+    }
 
-/*     result = ((Form_pg_enum) GETSTRUCT(tup))->oid; */
+    result = ((Form_pg_enum) GETSTRUCT(tup))->oid;
 
-/*     ReleaseSysCache(tup); */
+    ReleaseSysCache(tup);
 
-/*     return result; */
-/* } */
+    return result;
+}
 
 SCM
 datum_int2_to_scm(Datum x, Oid type_oid) {
@@ -1216,7 +1220,6 @@ datum_timetz_to_scm(Datum x, Oid type_oid) {
 Datum
 scm_to_datum_timetz(SCM x, Oid type_oid) {
 
-    elog(NOTICE, "x");
     if (!is_time(x)) {
         elog(ERROR, "time result expected, not: %s", scm_to_string(x));
         return 0; // Shouldn't reach here; just to satisfy the compiler
@@ -1232,8 +1235,6 @@ scm_to_datum_timetz(SCM x, Oid type_oid) {
         fsec_t fsec;
         int tz;
         GetCurrentTimeUsec(&tm, &fsec, &tz);
-
-        elog(NOTICE, "current tz: %d", tz);
 
         result->time = (seconds - tz) * USECS_PER_SEC + (nanoseconds/NS_PER_USEC) % USECS_PER_DAY;
 
@@ -2041,7 +2042,6 @@ scm_to_datum_jsonb(SCM x, Oid type_oid) {
 
     Datum result = jsonb_from_cstring(cstr, len);
 
-    elog(NOTICE, "cstr: %s", cstr);
     // Free C string
     free(cstr);
 
@@ -2209,27 +2209,26 @@ insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum) {
     }
 }
 
-/* bool */
-/* is_enum_type(Oid type_oid) { */
+bool
+is_enum_type(Oid type_oid) {
 
-/*     HeapTuple tup; */
-/*     Form_pg_type type_form; */
-/*     bool result; */
+    HeapTuple tup;
+    Form_pg_type type_form;
+    bool result;
 
-/*     tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid)); */
+    tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
 
-/*     if (!HeapTupleIsValid(tup)) { */
-/*         elog(ERROR, "cache lookup failed for type %u", type_oid); */
-/*     } */
+    if (!HeapTupleIsValid(tup)) {
+        elog(ERROR, "cache lookup failed for type %u", type_oid);
+    }
 
-/*     type_form = (Form_pg_type) GETSTRUCT(tup); */
-/*     result = type_form->typtype == TYPTYPE_ENUM; */
+    type_form = (Form_pg_type) GETSTRUCT(tup);
+    result = type_form->typtype == TYPTYPE_ENUM;
 
-/*     ReleaseSysCache(tup); */
+    ReleaseSysCache(tup);
 
-/*     return result; */
-/* } */
-
+    return result;
+}
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
 

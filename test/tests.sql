@@ -13,24 +13,24 @@ select lives_ok('select f_void()', 'protocol: void return does not raise');
 create function f_const() returns int as '1' language scruple;
 select is(f_const(), 1, 'protocol: no arguments scalar constant result');
 
-create function f_inc(a int) returns int as '(+ a 1)' language scruple;
+create function f_inc(a int) returns int as '(+ (unbox-datum a) 1)' language scruple;
 select is(f_inc(2), 3, 'protocol: increment int');
 
-create function f_inc_out(a int, b out int) returns int as '(+ a 1)' language scruple;
+create function f_inc_out(a int, b out int) returns int as '(+ (unbox-datum a) 1)' language scruple;
 select is(f_inc_out(4), 5, 'protocol: increment int out 1');
 
-create function f_sum(a int, b int) returns int as '(+ a b)' language scruple;
+create function f_sum(a int, b int) returns int as '(+ (unbox-datum a) (unbox-datum b))' language scruple;
 select is(f_sum(6, 7), 13, 'protocol: sum of arguments');
 
-create function f_sum_default(a int, b int = 8) returns int as '(+ a b)' language scruple;
+create function f_sum_default(a int, b int = 8) returns int as '(+ (unbox-datum a) (unbox-datum b))' language scruple;
 select is(f_sum_default(9), 17, 'protocol: sum of arguments using default');
 
 create function f_two_out(a int, b out int, c out int) returns record as
-'(values (+ a 1) (* a 2))' language scruple;
+'(values (+ (unbox-datum a) 1) (* (unbox-datum a) 2))' language scruple;
 select is(f_two_out(10), (11, 20), 'protocol: two outputs');
 
 create function f_double_in_out(a inout int, b inout int) returns record as
-'(values (- a b) (* a b))' language scruple;
+'(values (- (unbox-datum a) (unbox-datum b)) (* (unbox-datum a) (unbox-datum b)))' language scruple;
 select is(f_double_in_out(12, 13), (-1, 156), 'protocol: inout params');
 
 

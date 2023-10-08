@@ -49,7 +49,10 @@ normalize and simplify the C call architecture at the expense of
 complicating the use of values on the scheme side. A later
 implementation phase will analyze the function body to determine data
 flow and apply syntax transformations to insert type coercions. This
-should preserve both value fidelity and user ergonomics.
+should preserve both value fidelity and user ergonomics. Currently,
+the first step of this process has been completed, breaking most of
+the tests. The next step is to include a scheme primitive to unbox a
+boxed datum to a scheme value.
 
 The 0.7.x versions will add support for triggers.
 
