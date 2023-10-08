@@ -34,17 +34,22 @@ to the message, detail, hint format.  It should support all versions
 of Postgres that have not hit their end of life, which at this point
 in time will likely mean 12 to 16.
 
-For now, work will continue to add new type support in 0.3.x versions,
-culminating in the 0.4.0 version with fully-tested implementations of
-all scalar types described in Postgres' documentation [Chapter 8: Data
-Types](https://www.postgresql.org/docs/current/datatype.html). Remaining
-work is mostly testing, to ensure that values returned from scheme do
-not result in crashes, but result in errors instead.
-
 The 0.5.x versions will provide Guile primitives for accessing
 Postgres' Server Programming Interface so that queries may be made
 from scheme code. In addition, support for arrays, records, and set
-returning functions will be added.
+returning functions will be added. Some restructuring of type
+translations and tests will be required. That is, to preserve type
+information across the scheme environment from SPI call return values
+to function results, and from function arguments to SPI call
+arguments, the values will need to be represented more faithfully, and
+not coerced to a set of scheme values. For example, rather than
+translating a `money` value to an exact integer, it will be wrapped in
+a `value` record containing `type-oid` and `datum` fields. This will
+normalize and simplify the C call architecture at the expense of
+complicating the use of values on the scheme side. A later
+implementation phase will analyze the function body to determine data
+flow and apply syntax transformations to insert type coercions. This
+should preserve both value fidelity and user ergonomics.
 
 The 0.7.x versions will add support for triggers.
 
@@ -53,6 +58,8 @@ and configuration settings.
 
 The 0.11.x versions will normalize error messages and properly trap
 and report errors from Guile.
+
+The 0.13.x versions will refine and refactor scruple.scm.
 
 ## Requirements
 

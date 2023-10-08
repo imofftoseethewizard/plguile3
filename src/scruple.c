@@ -1,26 +1,31 @@
-#include "libguile.h"
+#include <libguile.h>
 
-#include "postgres.h"
-#include "fmgr.h"
-#include "funcapi.h"
-#include "access/htup_details.h"
-#include "catalog/namespace.h"
-#include "catalog/pg_enum.h"
-#include "catalog/pg_proc.h"
-#include "catalog/pg_type.h"
-#include "lib/stringinfo.h"
-#include "mb/pg_wchar.h"
-#include "utils/array.h"
-#include "utils/builtins.h"
-#include "utils/date.h"
-#include "utils/datetime.h"
-#include "utils/elog.h"
-#include "utils/geo_decls.h"
-#include "utils/hsearch.h"
-#include "utils/inet.h"
+#include <postgres.h>
+#include <fmgr.h>
+#include <funcapi.h>
+#include <access/genam.h>
+#include <access/htup_details.h>
+#include <access/relation.h>
+#include <catalog/namespace.h>
+#include <catalog/pg_cast.h>
+#include <catalog/pg_enum.h>
+#include <catalog/pg_operator.h>
+#include <catalog/pg_proc.h>
+#include <catalog/pg_type.h>
+#include <lib/stringinfo.h>
+#include <mb/pg_wchar.h>
+#include <utils/array.h>
+#include <utils/builtins.h>
+#include <utils/date.h>
+#include <utils/datetime.h>
+#include <utils/elog.h>
+#include <utils/fmgroids.h>
+#include <utils/geo_decls.h>
+#include <utils/hsearch.h>
+#include <utils/inet.h>
 #include <utils/jsonfuncs.h>
-#include "utils/syscache.h"
-#include "utils/timestamp.h"
+#include <utils/syscache.h>
+#include <utils/timestamp.h>
 #include <utils/uuid.h>
 #include <utils/varbit.h>
 #include <utils/xml.h>
@@ -62,13 +67,15 @@ typedef struct TypeCacheEntry {
     ToDatumFunc to_datum;  // Function pointer to convert SCM to Datum
 } TypeCacheEntry;
 
+static SCM make_boxed_datum(Oid type_oid, Datum x);
+
 static SCM datum_bit_string_to_scm(Datum x, Oid type_oid);
 static SCM datum_bool_to_scm(Datum x, Oid type_oid);
 static SCM datum_box_to_scm(Datum x, Oid type_oid);
 static SCM datum_bytea_to_scm(Datum x, Oid type_oid);
 static SCM datum_circle_to_scm(Datum x, Oid type_oid);
 static SCM datum_date_to_scm(Datum x, Oid type_oid);
-static SCM datum_enum_to_scm(Datum x, Oid type_oid);
+//static SCM datum_enum_to_scm(Datum x, Oid type_oid);
 static SCM datum_float4_to_scm(Datum x, Oid type_oid);
 static SCM datum_float8_to_scm(Datum x, Oid type_oid);
 static SCM datum_inet_to_scm(Datum x, Oid type_oid);
@@ -100,7 +107,7 @@ static Datum scm_to_datum_box(SCM x, Oid type_oid);
 static Datum scm_to_datum_bytea(SCM x, Oid type_oid);
 static Datum scm_to_datum_circle(SCM x, Oid type_oid);
 static Datum scm_to_datum_date(SCM x, Oid type_oid);
-static Datum scm_to_datum_enum(SCM x, Oid type_oid);
+//static Datum scm_to_datum_enum(SCM x, Oid type_oid);
 static Datum scm_to_datum_float4(SCM x, Oid type_oid);
 static Datum scm_to_datum_float8(SCM x, Oid type_oid);
 static Datum scm_to_datum_inet(SCM x, Oid type_oid);
@@ -129,8 +136,11 @@ static Datum scm_to_datum_xml(SCM x, Oid type_oid);
 static Datum datum_date_to_timestamptz(Datum x);
 static char* scm_to_string(SCM x);
 
+static Oid get_boxed_datum_type(SCM x);
+static Datum get_boxed_datum_value(SCM x);
 static bool is_bit_string(SCM x);
 static bool is_box(SCM x);
+static bool is_boxed_datum(SCM x);
 static bool is_circle(SCM x);
 static bool is_date(SCM x);
 static bool is_decimal(SCM x);
@@ -149,12 +159,13 @@ static bool is_polygon(SCM x);
 static bool is_time(SCM x);
 
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
-static SCM datum_to_scm(Datum datum, Oid type_oid);
+//static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
+static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
-static bool is_enum_type(Oid type_oid);
+//static bool is_enum_type(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
 
 
@@ -162,6 +173,8 @@ static SCM bit_string_data_proc;
 static SCM bit_string_length_proc;
 static SCM box_a_proc;
 static SCM box_b_proc;
+static SCM boxed_datum_type_proc;
+static SCM boxed_datum_value_proc;
 static SCM circle_center_proc;
 static SCM circle_radius_proc;
 static SCM date_day_proc;
@@ -181,6 +194,7 @@ static SCM inet_bits_proc;
 static SCM inet_family_proc;
 static SCM is_bit_string_proc;
 static SCM is_box_proc;
+static SCM is_boxed_datum_proc;
 static SCM is_circle_proc;
 static SCM is_date_proc;
 static SCM is_decimal_proc;
@@ -206,6 +220,7 @@ static SCM macaddr8_data_proc;
 static SCM macaddr_data_proc;
 static SCM make_bit_string_proc;
 static SCM make_box_proc;
+static SCM make_boxed_datum_proc;
 static SCM make_circle_proc;
 static SCM make_date_proc;
 static SCM make_decimal_proc;
@@ -295,6 +310,46 @@ void _PG_init(void) {
 
     scm_eval_string(scm_from_locale_string((const char *)src_scruple_scm));
 
+    /* Define names in our scheme module for the type oids we work with. */
+
+    scm_c_define("bit-type-oid",         scm_from_int(TypenameGetTypid("bit")));
+    scm_c_define("bool-type-oid",        scm_from_int(TypenameGetTypid("bool")));
+    scm_c_define("box-type-oid",         scm_from_int(TypenameGetTypid("box")));
+    scm_c_define("bpchar-type-oid",      scm_from_int(TypenameGetTypid("bpchar")));
+    scm_c_define("bytea-type-oid",       scm_from_int(TypenameGetTypid("bytea")));
+    scm_c_define("char-type-oid",        scm_from_int(TypenameGetTypid("char")));
+    scm_c_define("cidr-type-oid",        scm_from_int(TypenameGetTypid("cidr")));
+    scm_c_define("circle-type-oid",      scm_from_int(TypenameGetTypid("circle")));
+    scm_c_define("date-type-oid",        scm_from_int(TypenameGetTypid("date")));
+    scm_c_define("float4-type-oid",      scm_from_int(TypenameGetTypid("float4")));
+    scm_c_define("float8-type-oid",      scm_from_int(TypenameGetTypid("float8")));
+    scm_c_define("inet-type-oid",        scm_from_int(TypenameGetTypid("inet")));
+    scm_c_define("int2-type-oid",        scm_from_int(TypenameGetTypid("int2")));
+    scm_c_define("int4-type-oid",        scm_from_int(TypenameGetTypid("int4")));
+    scm_c_define("int8-type-oid",        scm_from_int(TypenameGetTypid("int8")));
+    scm_c_define("interval-type-oid",    scm_from_int(TypenameGetTypid("interval")));
+    scm_c_define("json-type-oid",        scm_from_int(TypenameGetTypid("json")));
+    scm_c_define("jsonb-type-oid",       scm_from_int(TypenameGetTypid("jsonb")));
+    scm_c_define("line-type-oid",        scm_from_int(TypenameGetTypid("line")));
+    scm_c_define("lseg-type-oid",        scm_from_int(TypenameGetTypid("lseg")));
+    scm_c_define("macaddr-type-oid",     scm_from_int(TypenameGetTypid("macaddr")));
+    scm_c_define("macaddr8-type-oid",    scm_from_int(TypenameGetTypid("macaddr8")));
+    scm_c_define("money-type-oid",       scm_from_int(TypenameGetTypid("money")));
+    scm_c_define("numeric-type-oid",     scm_from_int(TypenameGetTypid("numeric")));
+    scm_c_define("path-type-oid",        scm_from_int(TypenameGetTypid("path")));
+    scm_c_define("point-type-oid",       scm_from_int(TypenameGetTypid("point")));
+    scm_c_define("polygon-type-oid",     scm_from_int(TypenameGetTypid("polygon")));
+    scm_c_define("text-type-oid",        scm_from_int(TypenameGetTypid("text")));
+    scm_c_define("time-type-oid",        scm_from_int(TypenameGetTypid("time")));
+    scm_c_define("timetz-type-oid",      scm_from_int(TypenameGetTypid("timetz")));
+    scm_c_define("timestamp-type-oid",   scm_from_int(TypenameGetTypid("timestamp")));
+    scm_c_define("timestamptz-type-oid", scm_from_int(TypenameGetTypid("timestamptz")));
+    scm_c_define("uuid-type-oid",        scm_from_int(TypenameGetTypid("uuid")));
+    scm_c_define("varbit-type-oid",      scm_from_int(TypenameGetTypid("varbit")));
+    scm_c_define("varchar-type-oid",     scm_from_int(TypenameGetTypid("varchar")));
+    scm_c_define("void-type-oid",        scm_from_int(TypenameGetTypid("void")));
+    scm_c_define("xml-type-oid",         scm_from_int(TypenameGetTypid("xml")));
+
     /* Procedures defined by define-record-type are inlinable, meaning that instead of being
        procedures, they are actually syntax transformers.  In non-call contexts, they refer to
        the original procedure, but in call contexts, they interpolate the body of the
@@ -306,6 +361,8 @@ void _PG_init(void) {
     bit_string_length_proc = scm_eval_string(scm_from_locale_string("bit-string-length"));
     box_a_proc             = scm_eval_string(scm_from_locale_string("box-a"));
     box_b_proc             = scm_eval_string(scm_from_locale_string("box-b"));
+    boxed_datum_type_proc  = scm_eval_string(scm_from_locale_string("boxed-datum-type"));
+    boxed_datum_value_proc = scm_eval_string(scm_from_locale_string("boxed-datum-value"));
     circle_center_proc     = scm_eval_string(scm_from_locale_string("circle-center"));
     circle_radius_proc     = scm_eval_string(scm_from_locale_string("circle-radius"));
     date_day_proc          = scm_eval_string(scm_from_locale_string("date-day"));
@@ -323,6 +380,7 @@ void _PG_init(void) {
     inet_family_proc       = scm_eval_string(scm_from_locale_string("inet-family"));
     is_bit_string_proc     = scm_eval_string(scm_from_locale_string("bit-string?"));
     is_box_proc            = scm_eval_string(scm_from_locale_string("box?"));
+    is_boxed_datum_proc    = scm_eval_string(scm_from_locale_string("boxed-datum?"));
     is_circle_proc         = scm_eval_string(scm_from_locale_string("circle?"));
     is_date_proc           = scm_eval_string(scm_from_locale_string("date?"));
     is_decimal_proc        = scm_eval_string(scm_from_locale_string("decimal?"));
@@ -345,6 +403,7 @@ void _PG_init(void) {
     macaddr_data_proc      = scm_eval_string(scm_from_locale_string("macaddr-data"));
     make_bit_string_proc   = scm_eval_string(scm_from_locale_string("make-bit-string"));
     make_box_proc          = scm_eval_string(scm_from_locale_string("make-box"));
+    make_boxed_datum_proc  = scm_eval_string(scm_from_locale_string("make-boxed-datum"));
     make_circle_proc       = scm_eval_string(scm_from_locale_string("make-circle"));
     make_date_proc         = scm_eval_string(scm_from_locale_string("make-date"));
     make_decimal_proc      = scm_eval_string(scm_from_locale_string("make-decimal"));
@@ -442,19 +501,26 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
     // the list.
     for (int i = PG_NARGS()-1; i >= 0; i--) {
 
-        Oid arg_type = get_fn_expr_argtype(fcinfo->flinfo, i);
         Datum arg = PG_GETARG_DATUM(i);
+        Oid arg_type = get_fn_expr_argtype(fcinfo->flinfo, i);
 
-        SCM scm_arg = datum_to_scm(arg, arg_type);
+        // SCM scm_arg = datum_to_scm(arg, arg_type);
+        SCM scm_arg = make_boxed_datum(arg_type, arg);
 
         arg_list = scm_cons(scm_arg, arg_list);
     }
 
+    elog(NOTICE, "x");
     result = convert_result_to_datum(scm_apply(proc, arg_list, SCM_EOL), proc_tuple, fcinfo);
 
     ReleaseSysCache(proc_tuple);
 
     PG_RETURN_DATUM(result);
+}
+
+SCM
+make_boxed_datum(Oid type_oid, Datum x) {
+    return scm_call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
 }
 
 Datum
@@ -464,6 +530,7 @@ convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinf
     Oid rettype_oid;
     TupleDesc tuple_desc;
 
+    elog(NOTICE, "x");
     typefunc_class = get_call_result_type(fcinfo, &rettype_oid, &tuple_desc);
 
     elog(NOTICE, "convert_result_to_datum: return type oid: %d", rettype_oid);
@@ -471,6 +538,7 @@ convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinf
     switch (typefunc_class) {
 
     case TYPEFUNC_SCALAR:
+        elog(NOTICE, "x");
         return scm_to_datum(result, rettype_oid);
 
     case TYPEFUNC_COMPOSITE:
@@ -665,99 +733,146 @@ SCM scruple_compile_func(Oid func_oid) {
     return scm_proc;
 }
 
-SCM
-datum_to_scm(Datum datum, Oid type_oid) {
+/* SCM */
+/* datum_to_scm(Datum datum, Oid type_oid) { */
 
-    bool found;
-    TypeCacheEntry *entry = (TypeCacheEntry *) hash_search(
-        typeCache,
-        &type_oid,
-        HASH_FIND,
-        &found);
+/*     bool found; */
+/*     TypeCacheEntry *entry = (TypeCacheEntry *) hash_search( */
+/*         typeCache, */
+/*         &type_oid, */
+/*         HASH_FIND, */
+/*         &found); */
 
-    if (found && entry->to_scm) {
-        return entry->to_scm(datum, type_oid);
-    }
-    else {
-        if (is_enum_type(type_oid)) {
-            insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
-            return datum_enum_to_scm(datum, type_oid);
-        }
+/*     if (found && entry->to_scm) { */
+/*         return entry->to_scm(datum, type_oid); */
+/*     } */
+/*     else { */
+/*         if (is_enum_type(type_oid)) { */
+/*             insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum); */
+/*             return datum_enum_to_scm(datum, type_oid); */
+/*         } */
 
-        elog(ERROR, "Conversion function for type OID %u not found", type_oid);
-        // Unreachable
-        return SCM_EOL;
-    }
-}
+/*         elog(ERROR, "Conversion function for type OID %u not found", type_oid); */
+/*         // Unreachable */
+/*         return SCM_EOL; */
+/*     } */
+/* } */
 
 Datum
 scm_to_datum(SCM scm, Oid type_oid) {
+
     bool found;
+    TypeCacheEntry *entry;
 
-    TypeCacheEntry *entry = (TypeCacheEntry *) hash_search(
-        typeCache,
-        &type_oid,
-        HASH_FIND,
-        &found);
+    elog(NOTICE, "x");
+    if (is_boxed_datum(scm))
+        return convert_boxed_datum_to_datum(scm, type_oid);
 
-    if (found && entry->to_datum) {
+    entry = (TypeCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
+
+    if (found && entry->to_datum)
         return entry->to_datum(scm, type_oid);
-    }
-    else {
-        elog(ERROR, "Conversion function for type OID %u not found", type_oid);
-        // Unreachable
-        return (Datum) 0;
-    }
-}
 
-SCM
-datum_enum_to_scm(Datum x, Oid type_oid) {
-
-    HeapTuple tup;
-    SCM result;
-
-    tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(x));
-
-    if (!HeapTupleIsValid(tup)) {
-        elog(ERROR, "cache lookup failed for enum %lu", ObjectIdGetDatum(x));
-    }
-
-    result = scm_from_locale_symbol(NameStr(((Form_pg_enum) GETSTRUCT(tup))->enumlabel));
-
-    ReleaseSysCache(tup);
-
-    return result;
+    elog(ERROR, "Conversion function for type OID %u not found", type_oid);
+    // Unreachable
+    return (Datum)0;
 }
 
 Datum
-scm_to_datum_enum(SCM x, Oid type_oid) {
+convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid) {
 
-    HeapTuple tup;
-    char *value_name;
-    Datum result;
+    elog(NOTICE, "y");
+    if (true) {
+        Oid source_type_oid = get_boxed_datum_type(scm);
+        Datum value = get_boxed_datum_value(scm);
 
-    if (!scm_is_symbol(x)) {
-        elog(ERROR, "The SCM value must be a symbol");
+        // Lookup casting function OID in pg_cast
+        Oid cast_func_oid = InvalidOid;
+        Relation rel = relation_open(CastRelationId, AccessShareLock);
+        SysScanDesc scan;
+        ScanKeyData key[2];
+        HeapTuple tuple;
+        Form_pg_cast cast_form;
+
+        ScanKeyInit(&key[0],
+                    Anum_pg_cast_castsource,
+                    BTEqualStrategyNumber, F_OIDEQ,
+                    ObjectIdGetDatum(source_type_oid));
+
+        ScanKeyInit(&key[1],
+                    Anum_pg_cast_casttarget,
+                    BTEqualStrategyNumber, F_OIDEQ,
+                    ObjectIdGetDatum(target_type_oid));
+
+        scan = systable_beginscan(rel, CastSourceTargetIndexId, true,
+                                  NULL, 2, key);
+
+        tuple = systable_getnext(scan);
+
+        if (!HeapTupleIsValid(tuple))
+            elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+
+        cast_form = (Form_pg_cast) GETSTRUCT(tuple);
+        cast_func_oid = cast_form->castfunc;
+
+        systable_endscan(scan);
+        relation_close(rel, AccessShareLock);
+
+        if (!OidIsValid(cast_func_oid))
+            elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+
+        return OidFunctionCall1(cast_func_oid, value);
     }
-
-    value_name = scm_to_locale_string(scm_symbol_to_string(x));
-
-    tup = SearchSysCache2(ENUMTYPOIDNAME,
-                          ObjectIdGetDatum(type_oid),
-                          CStringGetDatum(value_name));
-
-    free(value_name);
-
-    if (!HeapTupleIsValid(tup)) {
-        elog(ERROR, "Could not find enum value for string: %s", scm_to_string(x));
-    }
-
-    result = ((Form_pg_enum) GETSTRUCT(tup))->oid;
-
-    ReleaseSysCache(tup);
-
-    return result;
 }
+
+/* SCM */
+/* datum_enum_to_scm(Datum x, Oid type_oid) { */
+
+/*     HeapTuple tup; */
+/*     SCM result; */
+
+/*     tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(x)); */
+
+/*     if (!HeapTupleIsValid(tup)) { */
+/*         elog(ERROR, "cache lookup failed for enum %lu", ObjectIdGetDatum(x)); */
+/*     } */
+
+/*     result = scm_from_locale_symbol(NameStr(((Form_pg_enum) GETSTRUCT(tup))->enumlabel)); */
+
+/*     ReleaseSysCache(tup); */
+
+/*     return result; */
+/* } */
+
+/* Datum */
+/* scm_to_datum_enum(SCM x, Oid type_oid) { */
+
+/*     HeapTuple tup; */
+/*     char *value_name; */
+/*     Datum result; */
+
+/*     if (!scm_is_symbol(x)) { */
+/*         elog(ERROR, "The SCM value must be a symbol"); */
+/*     } */
+
+/*     value_name = scm_to_locale_string(scm_symbol_to_string(x)); */
+
+/*     tup = SearchSysCache2(ENUMTYPOIDNAME, */
+/*                           ObjectIdGetDatum(type_oid), */
+/*                           CStringGetDatum(value_name)); */
+
+/*     free(value_name); */
+
+/*     if (!HeapTupleIsValid(tup)) { */
+/*         elog(ERROR, "Could not find enum value for string: %s", scm_to_string(x)); */
+/*     } */
+
+/*     result = ((Form_pg_enum) GETSTRUCT(tup))->oid; */
+
+/*     ReleaseSysCache(tup); */
+
+/*     return result; */
+/* } */
 
 SCM
 datum_int2_to_scm(Datum x, Oid type_oid) {
@@ -1943,6 +2058,16 @@ scm_to_datum_void(SCM x, Oid type_oid) {
     return (Datum) 0;
 }
 
+Oid
+get_boxed_datum_type(SCM x) {
+    return scm_to_uint32(scm_call_1(boxed_datum_type_proc, x));
+}
+
+Datum
+get_boxed_datum_value(SCM x) {
+    return scm_to_uint64(scm_call_1(boxed_datum_value_proc, x));
+}
+
 bool
 is_bit_string(SCM x) {
     return scm_is_true(scm_call_1(is_bit_string_proc, x));
@@ -1951,6 +2076,11 @@ is_bit_string(SCM x) {
 bool
 is_box(SCM x) {
     return scm_is_true(scm_call_1(is_box_proc, x));
+}
+
+bool
+is_boxed_datum(SCM x) {
+    return scm_is_true(scm_call_1(is_boxed_datum_proc, x));
 }
 
 bool
@@ -2079,26 +2209,26 @@ insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum) {
     }
 }
 
-bool
-is_enum_type(Oid type_oid) {
+/* bool */
+/* is_enum_type(Oid type_oid) { */
 
-    HeapTuple tup;
-    Form_pg_type type_form;
-    bool result;
+/*     HeapTuple tup; */
+/*     Form_pg_type type_form; */
+/*     bool result; */
 
-    tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+/*     tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid)); */
 
-    if (!HeapTupleIsValid(tup)) {
-        elog(ERROR, "cache lookup failed for type %u", type_oid);
-    }
+/*     if (!HeapTupleIsValid(tup)) { */
+/*         elog(ERROR, "cache lookup failed for type %u", type_oid); */
+/*     } */
 
-    type_form = (Form_pg_type) GETSTRUCT(tup);
-    result = type_form->typtype == TYPTYPE_ENUM;
+/*     type_form = (Form_pg_type) GETSTRUCT(tup); */
+/*     result = type_form->typtype == TYPTYPE_ENUM; */
 
-    ReleaseSysCache(tup);
+/*     ReleaseSysCache(tup); */
 
-    return result;
-}
+/*     return result; */
+/* } */
 
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */

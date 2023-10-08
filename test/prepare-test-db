@@ -12,7 +12,7 @@ make install
 
 psql -U postgres <<EOF
 
-create extension pgtap;
-create extension scruple;
+create extension if not exists pgtap;
+create extension if not exists scruple;
 
 EOF

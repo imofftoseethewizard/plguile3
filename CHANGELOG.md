@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2023-10-08
+
+This release lays some of the groundwork for integrating with the
+Server Programming Interface. In particular, instead of eagerly
+converting Datum values to SCM values, they are now wrapped by a
+record type, `boxed-datum`, to be converted as needed within Scheme
+code. This, of course, breaks many tests.
+
 ## [0.4.0] - 2023-09-20
 
 This release includes more tests of the conversion of values between

@@ -4,6 +4,13 @@
  (srfi srfi-19) ; date, time, etc (used in scruple.c)
  (rnrs bytevectors))
 
+(define-record-type boxed-datum
+  ; the type is an Oid, the value is a Datum.
+  (make-boxed-datum type value)
+  boxed-datum?
+  (type boxed-datum-type)
+  (value boxed-datum-value))
+
 (define-record-type decimal
   (make-decimal digits scale)
   decimal?
