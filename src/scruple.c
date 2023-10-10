@@ -248,6 +248,7 @@ static HTAB *funcCache;
 static HTAB *typeCache;
 
 static SCM unbox_datum(SCM x);
+/* static SCM spi_execute(SCM command, SCM read_only, SCM count); */
 
 void _PG_init(void) {
 
@@ -436,6 +437,7 @@ void _PG_init(void) {
     string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
 
     scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
+    /* scm_c_define_gsubr("spi-execute", 3, 0, 0, (SCM (*)()) spi_execute); */
 }
 
 void _PG_fini(void) {
@@ -2229,6 +2231,75 @@ is_enum_type(Oid type_oid) {
 
     return result;
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// SPI Integration
+//
+
+SCM
+spi_execute(SCM command, SCM read_only, SCM count) {
+
+	int ret;
+
+	if (!scm_is_string(command)) {
+	}
+
+	if (!scm_is_bool(read_only)) {
+	}
+
+	if (!scm_is_exact(count)) {
+	}
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT) {
+		/* handle error */
+	}
+
+	ret = SPI_execute(scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
+
+	if (ret < 0) {
+		/* handle error */
+		x;
+	}
+
+
+}
+
+#if 0
+
+int ret;
+HeapTuple tuple;
+TupleDesc tupdesc;
+uint64 proc;
+char *val;
+const char *command = "SELECT col FROM tbl";
+
+ret = SPI_connect();
+if (ret != SPI_OK_CONNECT) {
+    /* handle error */
+}
+
+ret = SPI_execute(command, true, 0);
+if (ret != SPI_OK_SELECT) {
+    /* handle error */
+}
+
+proc = SPI_processed;
+tupdesc = SPI_tuptable->tupdesc;
+
+SPI_cursor_fetch(SPI_tuptable->base.scursor, true, 1);
+if (SPI_tuptable != NULL) {
+    tuple = SPI_tuptable->vals[0];
+    val = SPI_getvalue(tuple, tupdesc, 1);
+    /* process value */
+}
+
+SPI_finish();
+
+#endif
+
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
 
