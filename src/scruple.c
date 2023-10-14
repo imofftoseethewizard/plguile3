@@ -2273,10 +2273,10 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 			HeapTuple tuple = SPI_tuptable->vals[i];
 			SCM row = scm_make_vector(scm_from_int(tupdesc->natts), SCM_EOL);
 
-			for (int j = 1; j <= tupdesc->natts; j++) {
+			for (int j = 0; j < tupdesc->natts; j++) {
 
 				bool is_null;
-				Datum datum = SPI_getbinval(tuple, tupdesc, j, &is_null);
+				Datum datum = SPI_getbinval(tuple, tupdesc, j+1, &is_null);
 				Oid type_oid = tupdesc->attrs[j].atttypid;
 
 				if (!is_null)

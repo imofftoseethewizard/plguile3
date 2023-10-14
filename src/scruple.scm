@@ -22,6 +22,9 @@
   (tuple-desc tuple-table-tuple-desc)
   (rows tuple-table-rows))
 
+(define (rows table)
+  (tuple-table-rows table))
+
 (define-record-type decimal
   (make-decimal digits scale)
   decimal?

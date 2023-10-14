@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(117);
+select plan(118);
 
 --------------------------------------------------------------------------------
 --
@@ -649,5 +649,16 @@ select ok(f_jsonb_id(t.jsonb)->'foo'->>0 = 'bar', 'jsonb: identity mapping test'
 from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);
 
 select * from finish();
+
+--------------------------------------------------------------------------------
+--
+-- SPI Integration
+--
+
+create function f_spi_simple() returns int4 as $$
+(vector-ref (vector-ref (rows (execute "select 1" #t 1)) 0) 0)
+$$ language scruple;
+
+select is(f_spi_simple(), 1, 'spi: simple');
 
 rollback;

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2023-10-14
+
+This adds one test for `SPI_execute` and an off-by-one fix to get it
+to work.  The ergonomics aren't great. Considering switching to
+returning a several values: the rows vector, the type ids vector, and
+the rows affected count.
+
 ## [0.5.4] - 2023-10-14
 
 Function definitions were reformatted to conform to "Stroustroup"
