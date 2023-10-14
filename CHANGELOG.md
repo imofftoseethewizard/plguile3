@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2023-10-14
+
+Function definitions were reformatted to conform to "Stroustroup"
+style.  The 0.4.0 value passing behavior was restored -- ie. Postgres
+values are now eagerly converted to Scheme values, rather than wrapped
+in `boxed-datum` record.  The more I thought about that, the worse the
+idea seemed.  The big change here is the completion of `spi_execute`,
+though it remains untested.
+
 ## [0.5.3] - 2023-10-10
 
 Use tabs for indentation, continue to use spaces for alignment.
