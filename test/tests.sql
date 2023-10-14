@@ -656,7 +656,7 @@ select * from finish();
 --
 
 create function f_spi_simple() returns int4 as $$
-(vector-ref (vector-ref (rows (execute "select 1" #t 1)) 0) 0)
+(vector-ref (vector-ref (execute "select 1" #t 1) 0) 0)
 $$ language scruple;
 
 select is(f_spi_simple(), 1, 'spi: simple');

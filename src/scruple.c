@@ -69,8 +69,6 @@ typedef struct TypeCacheEntry {
 } TypeCacheEntry;
 
 static SCM make_boxed_datum(Oid type_oid, Datum x);
-static SCM make_tuple_desc(SCM type_oids);
-static SCM make_tuple_table(SCM tuple_desc, SCM rows);
 
 static SCM datum_bit_string_to_scm(Datum x, Oid type_oid);
 static SCM datum_bool_to_scm(Datum x, Oid type_oid);
@@ -235,8 +233,6 @@ static SCM make_path_proc;
 static SCM make_point_proc;
 static SCM make_polygon_proc;
 static SCM make_time_proc;
-static SCM make_tuple_desc_proc;
-static SCM make_tuple_table_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
 static SCM point_x_proc;
@@ -423,8 +419,6 @@ void _PG_init(void)
 	make_point_proc		   = scm_eval_string(scm_from_locale_string("make-point"));
 	make_polygon_proc	   = scm_eval_string(scm_from_locale_string("make-polygon"));
 	make_time_proc		   = scm_eval_string(scm_from_locale_string("make-time"));
-	make_tuple_desc_proc   = scm_eval_string(scm_from_locale_string("make-tuple-desc"));
-	make_tuple_table_proc  = scm_eval_string(scm_from_locale_string("make-tuple-table"));
 	path_is_closed_proc	   = scm_eval_string(scm_from_locale_string("path-closed?"));
 	path_points_proc	   = scm_eval_string(scm_from_locale_string("path-points"));
 	point_x_proc		   = scm_eval_string(scm_from_locale_string("point-x"));
@@ -2222,7 +2216,8 @@ bool is_enum_type(Oid type_oid)
 SCM spi_execute(SCM command, SCM read_only, SCM count)
 {
 	int ret;
-	SCM tuple_table;
+    SCM type_oids;
+    SCM rows;
 	SCM rows_processed;
 
 	if (!scm_is_string(command)) {
@@ -2251,9 +2246,6 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 	case SPI_OK_UPDATE_RETURNING: {
 
 		TupleDesc tupdesc;
-		SCM tuple_desc;
-		SCM type_oids;
-		SCM rows;
 
 		tupdesc = SPI_tuptable->tupdesc;
 
@@ -2263,8 +2255,6 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 			FormData_pg_attribute *attr = &tupdesc->attrs[i];
 			scm_vector_set_x(type_oids, scm_from_int(i), scm_from_int32(attr->atttypid));
 		}
-
-		tuple_desc = make_tuple_desc(type_oids);
 
 		rows = scm_make_vector(scm_from_int64(SPI_tuptable->numvals), SCM_EOL);
 
@@ -2286,11 +2276,11 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 			scm_vector_set_x(rows, scm_from_long(i), row);
 		}
 
-		tuple_table = make_tuple_table(tuple_desc, rows);
 		break;
 	}
 	default:
-		tuple_table = SCM_EOL;
+		rows = scm_make_vector(scm_from_int(0), SCM_EOL);
+        type_oids = scm_make_vector(scm_from_int(0), SCM_EOL);
 		break;
 	}
 
@@ -2298,17 +2288,7 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 
 	SPI_finish();
 
-	return scm_values(scm_list_2(tuple_table, rows_processed));
-}
-
-SCM make_tuple_desc(SCM type_oids)
-{
-	return scm_call_1(make_tuple_desc_proc, type_oids);
-}
-
-SCM make_tuple_table(SCM tuple_desc, SCM rows)
-{
-	return scm_call_2(make_tuple_table_proc, tuple_desc, rows);
+	return scm_values(scm_list_3(rows, type_oids, rows_processed));
 }
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */

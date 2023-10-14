@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2023-10-14
+
+The interface for `execute` was overly complex with the `tuple-table`
+and `tuple-desc` record types. Mostly callers will want just the rows,
+so returning a values expression provides that by default with the
+option of more complete information by using `call-with-values` or
+some more convenient macro sugar.
+
 ## [0.5.5] - 2023-10-14
 
 This adds one test for `SPI_execute` and an off-by-one fix to get it

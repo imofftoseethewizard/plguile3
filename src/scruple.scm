@@ -11,20 +11,6 @@
   (type boxed-datum-type)
   (value boxed-datum-value))
 
-(define-record-type tuple-desc
-  (make-tuple-desc type-oids)
-  tuple-desc?
-  (type-oids tuple-desc-type-oids))
-
-(define-record-type tuple-table
-  (make-tuple-table tuple-desc rows)
-  tuple-table?
-  (tuple-desc tuple-table-tuple-desc)
-  (rows tuple-table-rows))
-
-(define (rows table)
-  (tuple-table-rows table))
-
 (define-record-type decimal
   (make-decimal digits scale)
   decimal?
