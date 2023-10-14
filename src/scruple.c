@@ -12,6 +12,7 @@
 #include <catalog/pg_operator.h>
 #include <catalog/pg_proc.h>
 #include <catalog/pg_type.h>
+#include <executor/spi.h>
 #include <lib/stringinfo.h>
 #include <mb/pg_wchar.h>
 #include <utils/array.h>
@@ -68,6 +69,8 @@ typedef struct TypeCacheEntry {
 } TypeCacheEntry;
 
 static SCM make_boxed_datum(Oid type_oid, Datum x);
+static SCM make_tuple_desc(SCM type_oids);
+static SCM make_tuple_table(SCM tuple_desc, SCM rows);
 
 static SCM datum_bit_string_to_scm(Datum x, Oid type_oid);
 static SCM datum_bool_to_scm(Datum x, Oid type_oid);
@@ -232,6 +235,8 @@ static SCM make_path_proc;
 static SCM make_point_proc;
 static SCM make_polygon_proc;
 static SCM make_time_proc;
+static SCM make_tuple_desc_proc;
+static SCM make_tuple_table_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
 static SCM point_x_proc;
@@ -248,10 +253,10 @@ static HTAB *funcCache;
 static HTAB *typeCache;
 
 static SCM unbox_datum(SCM x);
-/* static SCM spi_execute(SCM command, SCM read_only, SCM count); */
+static SCM spi_execute(SCM command, SCM read_only, SCM count);
 
-void _PG_init(void) {
-
+void _PG_init(void)
+{
 	HASHCTL funcInfo;
 	HASHCTL typeInfo;
 
@@ -418,6 +423,8 @@ void _PG_init(void) {
 	make_point_proc        = scm_eval_string(scm_from_locale_string("make-point"));
 	make_polygon_proc      = scm_eval_string(scm_from_locale_string("make-polygon"));
 	make_time_proc         = scm_eval_string(scm_from_locale_string("make-time"));
+	make_tuple_desc_proc   = scm_eval_string(scm_from_locale_string("make-tuple-desc"));
+	make_tuple_table_proc  = scm_eval_string(scm_from_locale_string("make-tuple-table"));
 	path_is_closed_proc    = scm_eval_string(scm_from_locale_string("path-closed?"));
 	path_points_proc       = scm_eval_string(scm_from_locale_string("path-points"));
 	point_x_proc           = scm_eval_string(scm_from_locale_string("point-x"));
@@ -437,11 +444,11 @@ void _PG_init(void) {
 	string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
-	/* scm_c_define_gsubr("spi-execute", 3, 0, 0, (SCM (*)()) spi_execute); */
+	scm_c_define_gsubr("execute", 3, 0, 0, (SCM (*)()) spi_execute);
 }
 
-void _PG_fini(void) {
-
+void _PG_fini(void)
+{
 	/* Clean up Guile interpreter */
 	HASH_SEQ_STATUS status;
 	FuncCacheEntry *entry;
@@ -459,8 +466,8 @@ void _PG_fini(void) {
 	hash_destroy(typeCache);
 }
 
-Datum scruple_call(PG_FUNCTION_ARGS) {
-
+Datum scruple_call(PG_FUNCTION_ARGS)
+{
 	Oid func_oid = fcinfo->flinfo->fn_oid;
 	HeapTuple proc_tuple;
 	SCM proc;
@@ -471,6 +478,8 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
 	FuncCacheEntry *hash_entry;
 
 	SCM arg_list = SCM_EOL;
+
+	bool nonatomic;
 
 	Datum result;
 
@@ -508,27 +517,30 @@ Datum scruple_call(PG_FUNCTION_ARGS) {
 		Datum arg = PG_GETARG_DATUM(i);
 		Oid arg_type = get_fn_expr_argtype(fcinfo->flinfo, i);
 
-		// SCM scm_arg = datum_to_scm(arg, arg_type);
-		SCM scm_arg = make_boxed_datum(arg_type, arg);
+		SCM scm_arg = datum_to_scm(arg, arg_type);
 
 		arg_list = scm_cons(scm_arg, arg_list);
 	}
 
+	nonatomic = fcinfo->context &&
+		IsA(fcinfo->context, CallContext) &&
+		!castNode(CallContext, fcinfo->context)->atomic;
+
+	if (SPI_connect_ext(nonatomic ? SPI_OPT_NONATOMIC : 0) != SPI_OK_CONNECT)
+		elog(ERROR, "could not connect to SPI manager");
+
 	result = convert_result_to_datum(scm_apply(proc, arg_list, SCM_EOL), proc_tuple, fcinfo);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish() failed");
 
 	ReleaseSysCache(proc_tuple);
 
 	PG_RETURN_DATUM(result);
 }
 
-SCM
-make_boxed_datum(Oid type_oid, Datum x) {
-	return scm_call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
-}
-
-Datum
-convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo) {
-
+Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo)
+{
 	TypeFuncClass typefunc_class;
 	Oid rettype_oid;
 	TupleDesc tuple_desc;
@@ -546,8 +558,8 @@ convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinf
 		return convert_result_to_composite_datum(result, tuple_desc);
 
 	case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
-	case TYPEFUNC_RECORD:	    /* indeterminate rowtype result            */
-	case TYPEFUNC_OTHER:	    /* bogus type, eg pseudotype               */
+	case TYPEFUNC_RECORD:           /* indeterminate rowtype result            */
+	case TYPEFUNC_OTHER:            /* bogus type, eg pseudotype               */
 		elog(ERROR, "convert_result_to_datum: not implemented");
 		return (Datum) 0;
 
@@ -557,9 +569,8 @@ convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinf
 	}
 }
 
-Datum
-convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc) {
-
+Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
+{
 	HeapTuple ret_heap_tuple;
 
 	Datum *ret_values;
@@ -595,14 +606,21 @@ convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc) {
 	return result_datum;
 }
 
-Datum scruple_call_inline(PG_FUNCTION_ARGS) {
+SCM make_boxed_datum(Oid type_oid, Datum x)
+{
+	return scm_call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
+}
+
+Datum scruple_call_inline(PG_FUNCTION_ARGS)
+{
 	/* Handle an inline Guile statement */
 	elog(NOTICE, "scruple_call_inline: not implemented");
 	PG_RETURN_NULL();
 }
 
 
-Datum scruple_compile(PG_FUNCTION_ARGS) {
+Datum scruple_compile(PG_FUNCTION_ARGS)
+{
 	Oid func_oid = PG_GETARG_OID(0);
 
 	FuncCacheEntry entry;
@@ -632,8 +650,8 @@ Datum scruple_compile(PG_FUNCTION_ARGS) {
 	return (Datum) 1;
 }
 
-SCM scruple_compile_func(Oid func_oid) {
-
+SCM scruple_compile_func(Oid func_oid)
+{
 	HeapTuple proc_tuple;
 	Datum prosrc_datum;
 	char *prosrc;
@@ -734,18 +752,16 @@ SCM scruple_compile_func(Oid func_oid) {
 	return scm_proc;
 }
 
-SCM
-unbox_datum(SCM x) {
-
+SCM unbox_datum(SCM x)
+{
 	Oid type_oid = get_boxed_datum_type(x);
 	Datum value = get_boxed_datum_value(x);
 
 	return datum_to_scm(value, type_oid);
 }
 
-SCM
-datum_to_scm(Datum datum, Oid type_oid) {
-
+SCM datum_to_scm(Datum datum, Oid type_oid)
+{
 	bool found;
 	TypeCacheEntry *entry = (TypeCacheEntry *) hash_search(
 		typeCache,
@@ -756,21 +772,18 @@ datum_to_scm(Datum datum, Oid type_oid) {
 	if (found && entry->to_scm) {
 		return entry->to_scm(datum, type_oid);
 	}
-	else {
-		if (is_enum_type(type_oid)) {
-			insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
-			return datum_enum_to_scm(datum, type_oid);
-		}
 
-		elog(ERROR, "Conversion function for type OID %u not found", type_oid);
-		// Unreachable
-		return SCM_EOL;
+	if (is_enum_type(type_oid)) {
+		insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
+		return datum_enum_to_scm(datum, type_oid);
 	}
+
+	elog(NOTICE, "Conversion function for type OID %u not found", type_oid);
+	return make_boxed_datum(type_oid, datum);
 }
 
-Datum
-scm_to_datum(SCM scm, Oid type_oid) {
-
+Datum scm_to_datum(SCM scm, Oid type_oid)
+{
 	bool found;
 	TypeCacheEntry *entry;
 
@@ -787,9 +800,8 @@ scm_to_datum(SCM scm, Oid type_oid) {
 	return (Datum)0;
 }
 
-Datum
-convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid) {
-
+Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid)
+{
 	Oid source_type_oid = get_boxed_datum_type(scm);
 	Datum value = get_boxed_datum_value(scm);
 
@@ -831,9 +843,8 @@ convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid) {
 	return OidFunctionCall1(cast_func_oid, value);
 }
 
-SCM
-datum_enum_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_enum_to_scm(Datum x, Oid type_oid)
+{
 	HeapTuple tup;
 	SCM result;
 
@@ -850,9 +861,8 @@ datum_enum_to_scm(Datum x, Oid type_oid) {
 	return result;
 }
 
-Datum
-scm_to_datum_enum(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_enum(SCM x, Oid type_oid)
+{
 	HeapTuple tup;
 	char *value_name;
 	Datum result;
@@ -880,14 +890,13 @@ scm_to_datum_enum(SCM x, Oid type_oid) {
 	return result;
 }
 
-SCM
-datum_int2_to_scm(Datum x, Oid type_oid) {
+SCM datum_int2_to_scm(Datum x, Oid type_oid)
+{
 	return scm_from_short(DatumGetInt16(x));
 }
 
-Datum
-scm_to_datum_int2(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_int2(SCM x, Oid type_oid)
+{
 	if (!is_int2(x)) {
 		elog(ERROR, "int2 result expected, not: %s", scm_to_string(x));
 	}
@@ -895,14 +904,13 @@ scm_to_datum_int2(SCM x, Oid type_oid) {
 	return Int16GetDatum(scm_to_short(x));
 }
 
-SCM
-datum_int4_to_scm(Datum x, Oid type_oid) {
+SCM datum_int4_to_scm(Datum x, Oid type_oid)
+{
 	return scm_from_int32(DatumGetInt32(x));
 }
 
-Datum
-scm_to_datum_int4(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_int4(SCM x, Oid type_oid)
+{
 	if (!is_int4(x)) {
 		elog(ERROR, "int4 result expected, not: %s", scm_to_string(x));
 	}
@@ -910,14 +918,13 @@ scm_to_datum_int4(SCM x, Oid type_oid) {
 	return Int32GetDatum(scm_to_int32(x));
 }
 
-SCM
-datum_int8_to_scm(Datum x, Oid type_oid) {
+SCM datum_int8_to_scm(Datum x, Oid type_oid)
+{
 	return scm_from_int64(DatumGetInt64(x));
 }
 
-Datum
-scm_to_datum_int8(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_int8(SCM x, Oid type_oid)
+{
 	if (!is_int8(x)) {
 		elog(ERROR, "int8 result expected, not: %s", scm_to_string(x));
 	}
@@ -925,14 +932,13 @@ scm_to_datum_int8(SCM x, Oid type_oid) {
 	return Int64GetDatum(scm_to_int64(x));
 }
 
-SCM
-datum_float4_to_scm(Datum x, Oid type_oid) {
+SCM datum_float4_to_scm(Datum x, Oid type_oid)
+{
 	return scm_from_double((double)DatumGetFloat4(x));
 }
 
-Datum
-scm_to_datum_float4(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_float4(SCM x, Oid type_oid)
+{
 	if (scm_is_number(x))
 		return Float4GetDatum(scm_to_double(x));
 
@@ -944,14 +950,13 @@ scm_to_datum_float4(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_float8_to_scm(Datum x, Oid type_oid) {
+SCM datum_float8_to_scm(Datum x, Oid type_oid)
+{
 	return scm_from_double(DatumGetFloat8(x));
 }
 
-Datum
-scm_to_datum_float8(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_float8(SCM x, Oid type_oid)
+{
 	if (scm_is_number(x))
 		return Float8GetDatum(scm_to_double(x));
 
@@ -963,9 +968,8 @@ scm_to_datum_float8(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_text_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_text_to_scm(Datum x, Oid type_oid)
+{
 	char *cstr = text_to_cstring(DatumGetTextP(x));
 	SCM scm_str = scm_from_locale_string(cstr);
 
@@ -974,9 +978,8 @@ datum_text_to_scm(Datum x, Oid type_oid) {
 	return scm_str;
 }
 
-Datum
-scm_to_datum_text(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_text(SCM x, Oid type_oid)
+{
 	char *cstr;
 	text *pg_text;
 	Datum text_datum;
@@ -994,9 +997,8 @@ scm_to_datum_text(SCM x, Oid type_oid) {
 	return text_datum;
 }
 
-SCM
-datum_bytea_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_bytea_to_scm(Datum x, Oid type_oid)
+{
 	bytea *bytea_data = DatumGetByteaP(x);
 	char *binary_data = VARDATA(bytea_data);
 	int len = VARSIZE(bytea_data) - VARHDRSZ;
@@ -1010,9 +1012,8 @@ datum_bytea_to_scm(Datum x, Oid type_oid) {
 	return scm_bytevector;
 }
 
-Datum
-scm_to_datum_bytea(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_bytea(SCM x, Oid type_oid)
+{
 	size_t len;
 	bytea *result;
 	char *data_ptr;
@@ -1035,9 +1036,8 @@ scm_to_datum_bytea(SCM x, Oid type_oid) {
 	return PointerGetDatum(result);
 }
 
-SCM
-datum_timestamptz_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_timestamptz_to_scm(Datum x, Oid type_oid)
+{
 	TimestampTz timestamp = DatumGetTimestampTz(x);
 	struct pg_tm tm;
 	fsec_t msec;
@@ -1062,9 +1062,8 @@ datum_timestamptz_to_scm(Datum x, Oid type_oid) {
 	}
 }
 
-Datum
-scm_to_datum_timestamptz(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_timestamptz(SCM x, Oid type_oid)
+{
 	if (!is_date(x)) {
 		elog(ERROR, "date result expected, not: %s", scm_to_string(x));
 	}
@@ -1112,13 +1111,13 @@ scm_to_datum_timestamptz(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_date_to_scm(Datum x, Oid type_oid) {
+SCM datum_date_to_scm(Datum x, Oid type_oid)
+{
 	return datum_timestamptz_to_scm(datum_date_to_timestamptz(x), type_oid);
 }
 
-Datum
-scm_to_datum_date(SCM x, Oid type_oid) {
+Datum scm_to_datum_date(SCM x, Oid type_oid)
+{
 	if (!is_date(x)) {
 		elog(ERROR, "date result expected, not: %s", scm_to_string(x));
 	}
@@ -1137,9 +1136,8 @@ scm_to_datum_date(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_time_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_time_to_scm(Datum x, Oid type_oid)
+{
 	struct pg_tm tm;
 	fsec_t msec;
 
@@ -1156,8 +1154,8 @@ datum_time_to_scm(Datum x, Oid type_oid) {
 	}
 }
 
-Datum
-scm_to_datum_time(SCM x, Oid type_oid) {
+Datum scm_to_datum_time(SCM x, Oid type_oid)
+{
 	if (!is_time(x)) {
 		elog(ERROR, "time result expected, not: %s", scm_to_string(x));
 		return 0; // Shouldn't reach here; just to satisfy the compiler
@@ -1189,9 +1187,8 @@ scm_to_datum_time(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_timetz_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_timetz_to_scm(Datum x, Oid type_oid)
+{
 	TimeTzADT *ttz;
 	fsec_t msec;
 	int tz;
@@ -1219,9 +1216,8 @@ datum_timetz_to_scm(Datum x, Oid type_oid) {
 	}
 }
 
-Datum
-scm_to_datum_timetz(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_timetz(SCM x, Oid type_oid)
+{
 	if (!is_time(x)) {
 		elog(ERROR, "time result expected, not: %s", scm_to_string(x));
 		return 0; // Shouldn't reach here; just to satisfy the compiler
@@ -1249,8 +1245,7 @@ scm_to_datum_timetz(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_interval_to_scm(Datum x, Oid type_oid)
+SCM datum_interval_to_scm(Datum x, Oid type_oid)
 {
 	Interval *interval = DatumGetIntervalP(x);
 
@@ -1264,9 +1259,8 @@ datum_interval_to_scm(Datum x, Oid type_oid)
 			+ interval->time / USECS_PER_SEC));
 }
 
-Datum
-scm_to_datum_interval(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_interval(SCM x, Oid type_oid)
+{
 	SCM seconds = scm_call_1(time_second_proc, x);
 
 	Interval *interval = (Interval *)palloc(sizeof(Interval));
@@ -1285,16 +1279,15 @@ scm_to_datum_interval(SCM x, Oid type_oid) {
 	return IntervalPGetDatum(interval);
 }
 
-SCM
-datum_numeric_to_scm(Datum x, Oid type_oid) {
+SCM datum_numeric_to_scm(Datum x, Oid type_oid)
+{
 	SCM s = scm_from_locale_string(DatumGetCString(DirectFunctionCall1(numeric_out, x)));
 
 	return scm_call_1(string_to_decimal_proc, s);
 }
 
-Datum
-scm_to_datum_numeric(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_numeric(SCM x, Oid type_oid)
+{
 	char *numeric_str = NULL;
 
 	if (is_decimal(x)) {
@@ -1333,18 +1326,18 @@ scm_to_datum_numeric(SCM x, Oid type_oid) {
 	                           Int32GetDatum(-1));
 }
 
-SCM
-datum_bool_to_scm(Datum x, Oid type_oid) {
+SCM datum_bool_to_scm(Datum x, Oid type_oid)
+{
 	return scm_from_bool(DatumGetBool(x));
 }
 
-Datum
-scm_to_datum_bool(SCM x, Oid type_oid) {
+Datum scm_to_datum_bool(SCM x, Oid type_oid)
+{
 	return BoolGetDatum(scm_to_bool(x));
 }
 
-SCM datum_point_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_point_to_scm(Datum x, Oid type_oid)
+{
 	// Extract the point value from the Datum
 	Point *point = DatumGetPointP(x);
 
@@ -1358,9 +1351,8 @@ SCM datum_point_to_scm(Datum x, Oid type_oid) {
 	return scm_point;
 }
 
-Datum
-scm_to_datum_point(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_point(SCM x, Oid type_oid)
+{
 	if (!is_point(x)) {
 		elog(ERROR, "point result expected, not: %s", scm_to_string(x));
 	}
@@ -1385,8 +1377,8 @@ scm_to_datum_point(SCM x, Oid type_oid) {
 	}
 }
 
-SCM datum_line_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_line_to_scm(Datum x, Oid type_oid)
+{
 	// Extract the line value from the Datum
 	LINE *line = DatumGetLineP(x);
 
@@ -1401,9 +1393,8 @@ SCM datum_line_to_scm(Datum x, Oid type_oid) {
 	return scm_line;
 }
 
-Datum
-scm_to_datum_line(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_line(SCM x, Oid type_oid)
+{
 	if (!is_line(x)) {
 		elog(ERROR, "line result expected, not: %s", scm_to_string(x));
 	}
@@ -1431,8 +1422,8 @@ scm_to_datum_line(SCM x, Oid type_oid) {
 	}
 }
 
-SCM datum_lseg_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_lseg_to_scm(Datum x, Oid type_oid)
+{
 	// Extract the lseg value from the Datum
 	LSEG *lseg = DatumGetLsegP(x);
 
@@ -1446,9 +1437,8 @@ SCM datum_lseg_to_scm(Datum x, Oid type_oid) {
 	return scm_lseg;
 }
 
-Datum
-scm_to_datum_lseg(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_lseg(SCM x, Oid type_oid)
+{
 	if (!is_lseg(x)) {
 		elog(ERROR, "lseg result expected, not: %s", scm_to_string(x));
 	}
@@ -1473,8 +1463,8 @@ scm_to_datum_lseg(SCM x, Oid type_oid) {
 	}
 }
 
-SCM datum_box_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_box_to_scm(Datum x, Oid type_oid)
+{
 	// Extract the box value from the Datum
 	BOX *box = DatumGetBoxP(x);
 
@@ -1488,9 +1478,8 @@ SCM datum_box_to_scm(Datum x, Oid type_oid) {
 	return scm_box;
 }
 
-Datum
-scm_to_datum_box(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_box(SCM x, Oid type_oid)
+{
 	if (!is_box(x)) {
 		elog(ERROR, "box result expected, not: %s", scm_to_string(x));
 	}
@@ -1515,8 +1504,8 @@ scm_to_datum_box(SCM x, Oid type_oid) {
 	}
 }
 
-SCM datum_path_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_path_to_scm(Datum x, Oid type_oid)
+{
 	// Extract the path struct from the Datum
 	PATH *path = DatumGetPathP(x);
 
@@ -1534,8 +1523,8 @@ SCM datum_path_to_scm(Datum x, Oid type_oid) {
 	return scm_call_2(make_path_proc, scm_is_closed, scm_points_vector);
 }
 
-Datum scm_to_datum_path(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_path(SCM x, Oid type_oid)
+{
 	if (!is_path(x)) {
 		elog(ERROR, "path result expected, not: %s", scm_to_string(x));
 	}
@@ -1579,8 +1568,8 @@ Datum scm_to_datum_path(SCM x, Oid type_oid) {
 	}
 }
 
-SCM datum_polygon_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_polygon_to_scm(Datum x, Oid type_oid)
+{
 	// Extract the polygon struct from the Datum
 	POLYGON *polygon = DatumGetPolygonP(x);
 
@@ -1598,8 +1587,8 @@ SCM datum_polygon_to_scm(Datum x, Oid type_oid) {
 	return scm_call_2(make_polygon_proc, scm_boundbox, scm_points_vector);
 }
 
-Datum scm_to_datum_polygon(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_polygon(SCM x, Oid type_oid)
+{
 	if (!is_polygon(x)) {
 		elog(ERROR, "polygon result expected, not: %s", scm_to_string(x));
 	}
@@ -1642,9 +1631,8 @@ Datum scm_to_datum_polygon(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_circle_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_circle_to_scm(Datum x, Oid type_oid)
+{
 	CIRCLE *circle = DatumGetCircleP(x);  // Convert Datum to CIRCLE type
 	Point center = circle->center;
 	float8 radius = circle->radius;
@@ -1657,9 +1645,8 @@ datum_circle_to_scm(Datum x, Oid type_oid) {
 	return scm_call_2(make_circle_proc, scm_center, scm_radius);
 }
 
-Datum
-scm_to_datum_circle(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_circle(SCM x, Oid type_oid)
+{
 	if (!is_circle(x)) {
 		elog(ERROR, "circle result expected, not: %s", scm_to_string(x));
 	}
@@ -1684,8 +1671,8 @@ scm_to_datum_circle(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_inet_to_scm(Datum x, Oid type_oid) {
+SCM datum_inet_to_scm(Datum x, Oid type_oid)
+{
 	inet *inet_val = DatumGetInetPP(x); // Assuming inet type is pass-by-reference
 
 	// Extract family
@@ -1707,7 +1694,8 @@ datum_inet_to_scm(Datum x, Oid type_oid) {
 	return scm_call_3(make_inet_proc, scm_family, scm_bits, scm_address);
 }
 
-Datum scm_to_datum_inet(SCM x, Oid type_oid) {
+Datum scm_to_datum_inet(SCM x, Oid type_oid)
+{
 	if (!is_inet(x)) {
 		elog(ERROR, "inet result expected, not: %s", scm_to_string(x));
 	}
@@ -1763,9 +1751,8 @@ Datum scm_to_datum_inet(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_macaddr_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_macaddr_to_scm(Datum x, Oid type_oid)
+{
 	macaddr *mac = (macaddr *) DatumGetPointer(x);
 
 	// Create a new SCM bytevector to hold the 6 bytes
@@ -1783,9 +1770,8 @@ datum_macaddr_to_scm(Datum x, Oid type_oid) {
 	return scm_call_1(make_macaddr_proc, scm_data);
 }
 
-Datum
-scm_to_datum_macaddr(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_macaddr(SCM x, Oid type_oid)
+{
 	if (!is_macaddr(x)) {
 		elog(ERROR, "macaddr result expected, not: %s", scm_to_string(x));
 	}
@@ -1815,9 +1801,8 @@ scm_to_datum_macaddr(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_macaddr8_to_scm(Datum x, Oid type_oid) {
-
+SCM datum_macaddr8_to_scm(Datum x, Oid type_oid)
+{
 	macaddr8 *mac = (macaddr8 *) DatumGetPointer(x);
 
 	// Create a new SCM bytevector to hold the 8 bytes
@@ -1837,9 +1822,8 @@ datum_macaddr8_to_scm(Datum x, Oid type_oid) {
 	return scm_call_1(make_macaddr8_proc, scm_data);
 }
 
-Datum
-scm_to_datum_macaddr8(SCM x, Oid type_oid) {
-
+Datum scm_to_datum_macaddr8(SCM x, Oid type_oid)
+{
 	if (!is_macaddr8(x)) {
 		elog(ERROR, "macaddr8 result expected, not: %s", scm_to_string(x));
 	}
@@ -1871,9 +1855,9 @@ scm_to_datum_macaddr8(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_bit_string_to_scm(Datum x, Oid type_oid) {
-	// Get the pointer to the varbit struct
+SCM datum_bit_string_to_scm(Datum x, Oid type_oid)
+{
+
 	VarBit *bit_str = DatumGetVarBitP(x);
 
 	// Get the length in bits
@@ -1888,8 +1872,8 @@ datum_bit_string_to_scm(Datum x, Oid type_oid) {
 	return scm_call_2(make_bit_string_proc, scm_data, scm_from_int(bitlen));
 }
 
-Datum
-scm_to_datum_bit_string(SCM x, Oid type_oid) {
+Datum scm_to_datum_bit_string(SCM x, Oid type_oid)
+{
 	if (!is_bit_string(x)) {
 		elog(ERROR, "bit string result expected, not: %s", scm_to_string(x));
 	}
@@ -1915,8 +1899,8 @@ scm_to_datum_bit_string(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_uuid_to_scm(Datum x, Oid type_oid) {
+SCM datum_uuid_to_scm(Datum x, Oid type_oid)
+{
 	// Assume x is a UUID Datum, cast it to pg_uuid_t *
 	pg_uuid_t *uuid_ptr = DatumGetUUIDP(x);
 
@@ -1930,8 +1914,8 @@ datum_uuid_to_scm(Datum x, Oid type_oid) {
 	return scm_bytevector;
 }
 
-Datum
-scm_to_datum_uuid(SCM x, Oid type_oid) {
+Datum scm_to_datum_uuid(SCM x, Oid type_oid)
+{
 	if (!SCM_BYTEVECTOR_P(x)) {
 		// Handle error: x is not a bytevector
 		ereport(ERROR, (errmsg("Expected a bytevector for UUID conversion")));
@@ -1954,8 +1938,8 @@ scm_to_datum_uuid(SCM x, Oid type_oid) {
 	}
 }
 
-SCM
-datum_xml_to_scm(Datum x, Oid type_oid) {
+SCM datum_xml_to_scm(Datum x, Oid type_oid)
+{
 	// Convert Datum to text
 	text *xml_text = DatumGetTextP(x);
 
@@ -1971,8 +1955,8 @@ datum_xml_to_scm(Datum x, Oid type_oid) {
 	return scm_string;
 }
 
-Datum
-scm_to_datum_xml(SCM x, Oid type_oid) {
+Datum scm_to_datum_xml(SCM x, Oid type_oid)
+{
 	// Convert SCM string to C string
 	char *cstr = scm_to_locale_string(x);
 
@@ -1988,8 +1972,8 @@ scm_to_datum_xml(SCM x, Oid type_oid) {
 	return result;
 }
 
-SCM
-datum_json_to_scm(Datum x, Oid type_oid) {
+SCM datum_json_to_scm(Datum x, Oid type_oid)
+{
 	// Convert Datum to text
 	text *json_text = DatumGetTextP(x);
 
@@ -2005,8 +1989,8 @@ datum_json_to_scm(Datum x, Oid type_oid) {
 	return scm_string;
 }
 
-Datum
-scm_to_datum_json(SCM x, Oid type_oid) {
+Datum scm_to_datum_json(SCM x, Oid type_oid)
+{
 	// Convert SCM string to C string
 	char *cstr = scm_to_locale_string(x);
 
@@ -2022,8 +2006,8 @@ scm_to_datum_json(SCM x, Oid type_oid) {
 	return result;
 }
 
-SCM
-datum_jsonb_to_scm(Datum x, Oid type_oid) {
+SCM datum_jsonb_to_scm(Datum x, Oid type_oid)
+{
 	// Convert Datum to JsonbValue
 	Jsonb *jsonbValue = DatumGetJsonbP(x);
 
@@ -2036,8 +2020,8 @@ datum_jsonb_to_scm(Datum x, Oid type_oid) {
 	return scmString;
 }
 
-Datum
-scm_to_datum_jsonb(SCM x, Oid type_oid) {
+Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
+{
 	// Convert SCM string to C string
 	char *cstr = scm_to_locale_string(x);
 	int len = scm_to_int(scm_string_length(x));
@@ -2050,131 +2034,130 @@ scm_to_datum_jsonb(SCM x, Oid type_oid) {
 	return result;
 }
 
-SCM
-datum_void_to_scm(Datum x, Oid type_oid) {
+SCM datum_void_to_scm(Datum x, Oid type_oid)
+{
 	return SCM_UNDEFINED;
 }
 
-Datum
-scm_to_datum_void(SCM x, Oid type_oid) {
+Datum scm_to_datum_void(SCM x, Oid type_oid)
+{
 	return (Datum) 0;
 }
 
-Oid
-get_boxed_datum_type(SCM x) {
+Oid get_boxed_datum_type(SCM x)
+{
 	return scm_to_uint32(scm_call_1(boxed_datum_type_proc, x));
 }
 
-Datum
-get_boxed_datum_value(SCM x) {
+Datum get_boxed_datum_value(SCM x)
+{
 	return scm_to_uint64(scm_call_1(boxed_datum_value_proc, x));
 }
 
-bool
-is_bit_string(SCM x) {
+bool is_bit_string(SCM x)
+{
 	return scm_is_true(scm_call_1(is_bit_string_proc, x));
 }
 
-bool
-is_box(SCM x) {
+bool is_box(SCM x)
+{
 	return scm_is_true(scm_call_1(is_box_proc, x));
 }
 
-bool
-is_boxed_datum(SCM x) {
+bool is_boxed_datum(SCM x)
+{
 	return scm_is_true(scm_call_1(is_boxed_datum_proc, x));
 }
 
-bool
-is_circle(SCM x) {
+bool is_circle(SCM x)
+{
 	return scm_is_true(scm_call_1(is_circle_proc, x));
 }
 
-bool
-is_date(SCM x) {
+bool is_date(SCM x)
+{
 	return scm_is_true(scm_call_1(is_date_proc, x));
 }
 
-bool
-is_decimal(SCM x) {
+bool is_decimal(SCM x)
+{
 	return scm_is_true(scm_call_1(is_decimal_proc, x));
 }
 
-bool
-is_inet(SCM x) {
+bool is_inet(SCM x)
+{
 	return scm_is_true(scm_call_1(is_inet_proc, x));
 }
 
-bool
-is_int2(SCM x) {
+bool is_int2(SCM x)
+{
 	return scm_is_true(scm_call_1(is_int2_proc, x));
 }
 
-bool
-is_int4(SCM x) {
+bool is_int4(SCM x)
+{
 	return scm_is_true(scm_call_1(is_int4_proc, x));
 }
 
-bool
-is_int8(SCM x) {
+bool is_int8(SCM x)
+{
 	return scm_is_true(scm_call_1(is_int8_proc, x));
 }
 
-bool
-is_line(SCM x) {
+bool is_line(SCM x)
+{
 	return scm_is_true(scm_call_1(is_line_proc, x));
 }
 
-bool
-is_lseg(SCM x) {
+bool is_lseg(SCM x)
+{
 	return scm_is_true(scm_call_1(is_lseg_proc, x));
 }
 
-bool
-is_macaddr(SCM x) {
+bool is_macaddr(SCM x)
+{
 	return scm_is_true(scm_call_1(is_macaddr_proc, x));
 }
 
-bool
-is_macaddr8(SCM x) {
+bool is_macaddr8(SCM x)
+{
 	return scm_is_true(scm_call_1(is_macaddr8_proc, x));
 }
 
-bool
-is_path(SCM x) {
+bool is_path(SCM x)
+{
 	return scm_is_true(scm_call_1(is_path_proc, x));
 }
 
-bool
-is_point(SCM x) {
+bool is_point(SCM x)
+{
 	return scm_is_true(scm_call_1(is_point_proc, x));
 }
 
-bool
-is_polygon(SCM x) {
+bool is_polygon(SCM x)
+{
 	return scm_is_true(scm_call_1(is_polygon_proc, x));
 }
 
-bool
-is_time(SCM x) {
+bool is_time(SCM x)
+{
 	return scm_is_true(scm_call_1(is_time_proc, x));
 }
 
-bool
-is_valid_decimal(SCM x) {
+bool is_valid_decimal(SCM x)
+{
 	return scm_is_true(scm_call_1(is_valid_decimal_proc, x));
 }
 
-Datum
-datum_date_to_timestamptz(Datum x)
+Datum datum_date_to_timestamptz(Datum x)
 {
 	DateADT date = DatumGetDateADT(x);
 	TimestampTz timestamp = date2timestamptz_opt_overflow(date, NULL);
 	return TimestampTzGetDatum(timestamp);
 }
 
-char *
-scm_to_string(SCM obj) {
+char * scm_to_string(SCM obj)
+{
 	MemoryContext context = CurrentMemoryContext;
 
 	SCM proc = scm_eval_string(scm_from_locale_string("(lambda (x) (format #f \"~s\" x))"));
@@ -2190,9 +2173,8 @@ scm_to_string(SCM obj) {
 	return result;
 }
 
-void
-insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum) {
-
+void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum)
+{
 	bool found;
 	TypeCacheEntry *entry = (TypeCacheEntry *)hash_search(
 		typeCache,
@@ -2211,9 +2193,8 @@ insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum) {
 	}
 }
 
-bool
-is_enum_type(Oid type_oid) {
-
+bool is_enum_type(Oid type_oid)
+{
 	HeapTuple tup;
 	Form_pg_type type_form;
 	bool result;
@@ -2237,69 +2218,91 @@ is_enum_type(Oid type_oid) {
 // SPI Integration
 //
 
-SCM
-spi_execute(SCM command, SCM read_only, SCM count) {
-
+SCM spi_execute(SCM command, SCM read_only, SCM count)
+{
 	int ret;
+	SCM tuple_table;
 
 	if (!scm_is_string(command)) {
+		// TODO
 	}
 
 	if (!scm_is_bool(read_only)) {
+		// TODO
 	}
 
-	if (!scm_is_exact(count)) {
-	}
-
-	ret = SPI_connect();
-
-	if (ret != SPI_OK_CONNECT) {
-		/* handle error */
+	if (!scm_is_exact(count) || scm_to_bool(scm_negative_p(count))) {
+		// TODO
 	}
 
 	ret = SPI_execute(scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
 
 	if (ret < 0) {
-		/* handle error */
-		x;
+		// TODO
 	}
 
+	switch (ret) {
+	case SPI_OK_SELECT:
+	case SPI_OK_INSERT_RETURNING:
+	case SPI_OK_DELETE_RETURNING:
+	case SPI_OK_UPDATE_RETURNING: {
 
+		TupleDesc tupdesc;
+		SCM tuple_desc;
+		SCM type_oids;
+		SCM rows;
+
+		tupdesc = SPI_tuptable->tupdesc;
+
+		type_oids = scm_make_vector(scm_from_int(tupdesc->natts), SCM_EOL);
+
+		for (int i = 0; i < tupdesc->natts; i++) {
+			FormData_pg_attribute *attr = &tupdesc->attrs[i];
+			scm_vector_set_x(type_oids, scm_from_int(i), scm_from_int32(attr->atttypid));
+		}
+
+		tuple_desc = make_tuple_desc(type_oids); // TODO
+
+		rows = scm_make_vector(scm_from_int64(SPI_tuptable->numvals), SCM_EOL);
+
+		for (long i = 0; i < SPI_tuptable->numvals; i++) {
+
+			HeapTuple tuple = SPI_tuptable->vals[i];
+			SCM row = scm_make_vector(scm_from_int(tupdesc->natts), SCM_EOL);
+
+			for (int j = 1; j <= tupdesc->natts; j++) {
+
+				bool is_null;
+				Datum datum = SPI_getbinval(tuple, tupdesc, j, &is_null);
+				Oid type_oid = tupdesc->attrs[j].atttypid;
+
+				if (!is_null)
+					scm_vector_set_x(row, scm_from_int(j), datum_to_scm(datum, type_oid));
+			}
+
+			scm_vector_set_x(rows, scm_from_long(i), row);
+		}
+
+		tuple_table = make_tuple_table(tuple_desc, rows);
+		break;
+	}
+	default:
+		tuple_table = SCM_EOL;
+		break;
+	}
+
+	return scm_values(scm_list_2(tuple_table, scm_from_int64(SPI_processed)));
 }
 
-#if 0
-
-int ret;
-HeapTuple tuple;
-TupleDesc tupdesc;
-uint64 proc;
-char *val;
-const char *command = "SELECT col FROM tbl";
-
-ret = SPI_connect();
-if (ret != SPI_OK_CONNECT) {
-	/* handle error */
+SCM make_tuple_desc(SCM type_oids)
+{
+	return scm_call_1(make_tuple_desc_proc, type_oids);
 }
 
-ret = SPI_execute(command, true, 0);
-if (ret != SPI_OK_SELECT) {
-	/* handle error */
+SCM make_tuple_table(SCM tuple_desc, SCM rows)
+{
+	return scm_call_2(make_tuple_table_proc, tuple_desc, rows);
 }
-
-proc = SPI_processed;
-tupdesc = SPI_tuptable->tupdesc;
-
-SPI_cursor_fetch(SPI_tuptable->base.scursor, true, 1);
-if (SPI_tuptable != NULL) {
-	tuple = SPI_tuptable->vals[0];
-	val = SPI_getvalue(tuple, tupdesc, 1);
-	/* process value */
-}
-
-SPI_finish();
-
-#endif
-
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
 
@@ -2317,8 +2320,7 @@ typedef struct JsonbInState
 	JsonbValue *res;
 } JsonbInState;
 
-Datum
-jsonb_from_cstring(char *json, int len)
+Datum jsonb_from_cstring(char *json, int len)
 {
 	JsonLexContext *lex;
 	JsonbInState state;
@@ -2343,8 +2345,7 @@ jsonb_from_cstring(char *json, int len)
 	PG_RETURN_POINTER(JsonbValueToJsonb(state.res));
 }
 
-static size_t
-checkStringLen(size_t len)
+static size_t checkStringLen(size_t len)
 {
 	if (len > JENTRY_OFFLENMASK)
 		ereport(ERROR,
@@ -2356,40 +2357,35 @@ checkStringLen(size_t len)
 	return len;
 }
 
-static void
-jsonb_in_object_start(void *pstate)
+static void jsonb_in_object_start(void *pstate)
 {
 	JsonbInState *_state = (JsonbInState *) pstate;
 
 	_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_OBJECT, NULL);
 }
 
-static void
-jsonb_in_object_end(void *pstate)
+static void jsonb_in_object_end(void *pstate)
 {
 	JsonbInState *_state = (JsonbInState *) pstate;
 
 	_state->res = pushJsonbValue(&_state->parseState, WJB_END_OBJECT, NULL);
 }
 
-static void
-jsonb_in_array_start(void *pstate)
+static void jsonb_in_array_start(void *pstate)
 {
 	JsonbInState *_state = (JsonbInState *) pstate;
 
 	_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, NULL);
 }
 
-static void
-jsonb_in_array_end(void *pstate)
+static void jsonb_in_array_end(void *pstate)
 {
 	JsonbInState *_state = (JsonbInState *) pstate;
 
 	_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
 }
 
-static void
-jsonb_in_object_field_start(void *pstate, char *fname, bool isnull)
+static void jsonb_in_object_field_start(void *pstate, char *fname, bool isnull)
 {
 	JsonbInState *_state = (JsonbInState *) pstate;
 	JsonbValue	v;
@@ -2405,8 +2401,7 @@ jsonb_in_object_field_start(void *pstate, char *fname, bool isnull)
 /*
  * For jsonb we always want the de-escaped value - that's what's in token
  */
-static void
-jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype)
+static void jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype)
 {
 	JsonbInState *_state = (JsonbInState *) pstate;
 	JsonbValue	v;
