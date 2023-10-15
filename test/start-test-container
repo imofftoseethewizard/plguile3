@@ -4,8 +4,8 @@ cd $(dirname $0)/..
 
 CONTAINER_NAME=scruple-test-$1
 
-docker stop $CONTAINER_NAME >/dev/null 2&>1 || true
-docker rm $CONTAINER_NAME >/dev/null 2&>1 || true
+docker stop $CONTAINER_NAME >/dev/null 2>&1 || true
+docker rm $CONTAINER_NAME >/dev/null 2>&1 || true
 
 # Path to scruple repo inside of the container
 

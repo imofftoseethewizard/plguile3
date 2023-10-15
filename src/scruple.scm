@@ -4,6 +4,9 @@
  (srfi srfi-19) ; date, time, etc (used in scruple.c)
  (rnrs bytevectors))
 
+(define* (execute command #:optional (read-only #t) (count 0))
+  (%execute command read-only count))
+
 (define-record-type boxed-datum
   ; the type is an Oid, the value is a Datum.
   (make-boxed-datum type value)

@@ -25,6 +25,7 @@
 #include <utils/hsearch.h>
 #include <utils/inet.h>
 #include <utils/jsonfuncs.h>
+#include "utils/lsyscache.h"
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
 #include <utils/uuid.h>
@@ -102,6 +103,7 @@ static SCM datum_uuid_to_scm(Datum x, Oid type_oid);
 static SCM datum_void_to_scm(Datum x, Oid type_oid);
 static SCM datum_xml_to_scm(Datum x, Oid type_oid);
 
+static Datum scm_to_datum_array(SCM x, Oid type_oid);
 static Datum scm_to_datum_bit_string(SCM x, Oid type_oid);
 static Datum scm_to_datum_bool(SCM x, Oid type_oid);
 static Datum scm_to_datum_box(SCM x, Oid type_oid);
@@ -315,43 +317,43 @@ void _PG_init(void)
 
 	/* Define names in our scheme module for the type oids we work with. */
 
-	scm_c_define("bit-type-oid",		 scm_from_int(TypenameGetTypid("bit")));
-	scm_c_define("bool-type-oid",		 scm_from_int(TypenameGetTypid("bool")));
-	scm_c_define("box-type-oid",		 scm_from_int(TypenameGetTypid("box")));
-	scm_c_define("bpchar-type-oid",		 scm_from_int(TypenameGetTypid("bpchar")));
-	scm_c_define("bytea-type-oid",		 scm_from_int(TypenameGetTypid("bytea")));
-	scm_c_define("char-type-oid",		 scm_from_int(TypenameGetTypid("char")));
-	scm_c_define("cidr-type-oid",		 scm_from_int(TypenameGetTypid("cidr")));
-	scm_c_define("circle-type-oid",		 scm_from_int(TypenameGetTypid("circle")));
-	scm_c_define("date-type-oid",		 scm_from_int(TypenameGetTypid("date")));
-	scm_c_define("float4-type-oid",		 scm_from_int(TypenameGetTypid("float4")));
-	scm_c_define("float8-type-oid",		 scm_from_int(TypenameGetTypid("float8")));
-	scm_c_define("inet-type-oid",		 scm_from_int(TypenameGetTypid("inet")));
-	scm_c_define("int2-type-oid",		 scm_from_int(TypenameGetTypid("int2")));
-	scm_c_define("int4-type-oid",		 scm_from_int(TypenameGetTypid("int4")));
-	scm_c_define("int8-type-oid",		 scm_from_int(TypenameGetTypid("int8")));
-	scm_c_define("interval-type-oid",	 scm_from_int(TypenameGetTypid("interval")));
-	scm_c_define("json-type-oid",		 scm_from_int(TypenameGetTypid("json")));
-	scm_c_define("jsonb-type-oid",		 scm_from_int(TypenameGetTypid("jsonb")));
-	scm_c_define("line-type-oid",		 scm_from_int(TypenameGetTypid("line")));
-	scm_c_define("lseg-type-oid",		 scm_from_int(TypenameGetTypid("lseg")));
-	scm_c_define("macaddr-type-oid",	 scm_from_int(TypenameGetTypid("macaddr")));
-	scm_c_define("macaddr8-type-oid",	 scm_from_int(TypenameGetTypid("macaddr8")));
-	scm_c_define("money-type-oid",		 scm_from_int(TypenameGetTypid("money")));
-	scm_c_define("numeric-type-oid",	 scm_from_int(TypenameGetTypid("numeric")));
-	scm_c_define("path-type-oid",		 scm_from_int(TypenameGetTypid("path")));
-	scm_c_define("point-type-oid",		 scm_from_int(TypenameGetTypid("point")));
-	scm_c_define("polygon-type-oid",	 scm_from_int(TypenameGetTypid("polygon")));
-	scm_c_define("text-type-oid",		 scm_from_int(TypenameGetTypid("text")));
-	scm_c_define("time-type-oid",		 scm_from_int(TypenameGetTypid("time")));
-	scm_c_define("timetz-type-oid",		 scm_from_int(TypenameGetTypid("timetz")));
-	scm_c_define("timestamp-type-oid",	 scm_from_int(TypenameGetTypid("timestamp")));
-	scm_c_define("timestamptz-type-oid", scm_from_int(TypenameGetTypid("timestamptz")));
-	scm_c_define("uuid-type-oid",		 scm_from_int(TypenameGetTypid("uuid")));
-	scm_c_define("varbit-type-oid",		 scm_from_int(TypenameGetTypid("varbit")));
-	scm_c_define("varchar-type-oid",	 scm_from_int(TypenameGetTypid("varchar")));
-	scm_c_define("void-type-oid",		 scm_from_int(TypenameGetTypid("void")));
-	scm_c_define("xml-type-oid",		 scm_from_int(TypenameGetTypid("xml")));
+	// scm_c_define("bit-type-oid",		 scm_from_int(TypenameGetTypid("bit")));
+	// scm_c_define("bool-type-oid",		 scm_from_int(TypenameGetTypid("bool")));
+	// scm_c_define("box-type-oid",		 scm_from_int(TypenameGetTypid("box")));
+	// scm_c_define("bpchar-type-oid",		 scm_from_int(TypenameGetTypid("bpchar")));
+	// scm_c_define("bytea-type-oid",		 scm_from_int(TypenameGetTypid("bytea")));
+	// scm_c_define("char-type-oid",		 scm_from_int(TypenameGetTypid("char")));
+	// scm_c_define("cidr-type-oid",		 scm_from_int(TypenameGetTypid("cidr")));
+	// scm_c_define("circle-type-oid",		 scm_from_int(TypenameGetTypid("circle")));
+	// scm_c_define("date-type-oid",		 scm_from_int(TypenameGetTypid("date")));
+	// scm_c_define("float4-type-oid",		 scm_from_int(TypenameGetTypid("float4")));
+	// scm_c_define("float8-type-oid",		 scm_from_int(TypenameGetTypid("float8")));
+	// scm_c_define("inet-type-oid",		 scm_from_int(TypenameGetTypid("inet")));
+	// scm_c_define("int2-type-oid",		 scm_from_int(TypenameGetTypid("int2")));
+	// scm_c_define("int4-type-oid",		 scm_from_int(TypenameGetTypid("int4")));
+	// scm_c_define("int8-type-oid",		 scm_from_int(TypenameGetTypid("int8")));
+	// scm_c_define("interval-type-oid",	 scm_from_int(TypenameGetTypid("interval")));
+	// scm_c_define("json-type-oid",		 scm_from_int(TypenameGetTypid("json")));
+	// scm_c_define("jsonb-type-oid",		 scm_from_int(TypenameGetTypid("jsonb")));
+	// scm_c_define("line-type-oid",		 scm_from_int(TypenameGetTypid("line")));
+	// scm_c_define("lseg-type-oid",		 scm_from_int(TypenameGetTypid("lseg")));
+	// scm_c_define("macaddr-type-oid",	 scm_from_int(TypenameGetTypid("macaddr")));
+	// scm_c_define("macaddr8-type-oid",	 scm_from_int(TypenameGetTypid("macaddr8")));
+	// scm_c_define("money-type-oid",		 scm_from_int(TypenameGetTypid("money")));
+	// scm_c_define("numeric-type-oid",	 scm_from_int(TypenameGetTypid("numeric")));
+	// scm_c_define("path-type-oid",		 scm_from_int(TypenameGetTypid("path")));
+	// scm_c_define("point-type-oid",		 scm_from_int(TypenameGetTypid("point")));
+	// scm_c_define("polygon-type-oid",	 scm_from_int(TypenameGetTypid("polygon")));
+	// scm_c_define("text-type-oid",		 scm_from_int(TypenameGetTypid("text")));
+	// scm_c_define("time-type-oid",		 scm_from_int(TypenameGetTypid("time")));
+	// scm_c_define("timetz-type-oid",		 scm_from_int(TypenameGetTypid("timetz")));
+	// scm_c_define("timestamp-type-oid",	 scm_from_int(TypenameGetTypid("timestamp")));
+	// scm_c_define("timestamptz-type-oid", scm_from_int(TypenameGetTypid("timestamptz")));
+	// scm_c_define("uuid-type-oid",		 scm_from_int(TypenameGetTypid("uuid")));
+	// scm_c_define("varbit-type-oid",		 scm_from_int(TypenameGetTypid("varbit")));
+	// scm_c_define("varchar-type-oid",	 scm_from_int(TypenameGetTypid("varchar")));
+	// scm_c_define("void-type-oid",		 scm_from_int(TypenameGetTypid("void")));
+	// scm_c_define("xml-type-oid",		 scm_from_int(TypenameGetTypid("xml")));
 
 	/* Procedures defined by define-record-type are inlinable, meaning that instead of being
 	   procedures, they are actually syntax transformers.  In non-call contexts, they refer to
@@ -438,7 +440,7 @@ void _PG_init(void)
 	string_to_decimal_proc	= scm_variable_ref(scm_c_lookup("string->decimal"));
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
-	scm_c_define_gsubr("execute", 3, 0, 0, (SCM (*)()) spi_execute);
+	scm_c_define_gsubr("%execute", 3, 0, 0, (SCM (*)()) spi_execute);
 }
 
 void _PG_fini(void)
@@ -773,7 +775,7 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 		return datum_enum_to_scm(datum, type_oid);
 	}
 
-	elog(NOTICE, "Conversion function for type OID %u not found", type_oid);
+	elog(NOTICE, "datum_to_scm: conversion function for type OID %u not found", type_oid);
 	return make_boxed_datum(type_oid, datum);
 }
 
@@ -781,6 +783,8 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 {
 	bool found;
 	TypeCacheEntry *entry;
+
+	Oid element_type_oid;
 
 	if (is_boxed_datum(scm))
 		return convert_boxed_datum_to_datum(scm, type_oid);
@@ -790,7 +794,12 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 	if (found && entry->to_datum)
 		return entry->to_datum(scm, type_oid);
 
-	elog(ERROR, "Conversion function for type OID %u not found", type_oid);
+	element_type_oid = get_element_type(type_oid);
+
+	if (OidIsValid(element_type_oid))
+		return scm_to_datum_array(scm, element_type_oid);
+
+	elog(ERROR, "scm_to_datum: conversion function for type OID %u not found", type_oid);
 	// Unreachable
 	return (Datum)0;
 }
@@ -883,6 +892,43 @@ Datum scm_to_datum_enum(SCM x, Oid type_oid)
 	ReleaseSysCache(tup);
 
 	return result;
+}
+
+Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
+{
+    size_t nelems = scm_c_vector_length(elements);
+    Datum *elems = palloc(nelems * sizeof(Datum));
+    bool *nulls = palloc0(nelems * sizeof(bool));
+
+    int dims[1] = {nelems};
+    int lbs[1] = {1}; // Lower bounds of array
+
+    int16 elmlen;
+    bool elmbyval;
+    char elmalign;
+
+    ArrayType *array;
+
+    // Get type info for the element type.
+    get_typlenbyvalalign(element_type_oid, &elmlen, &elmbyval, &elmalign);
+
+    // Convert SCM values to Datums.
+    for (size_t i = 0; i < nelems; i++) {
+        SCM scm_value = scm_c_vector_ref(elements, i);
+        if (scm_value == SCM_EOL)
+            nulls[i] = true;
+        else
+            elems[i] = scm_to_datum(scm_value, element_type_oid);
+    }
+
+    // Construct a one-dimensional Postgres array.
+    array = construct_md_array(elems, nulls, 1, dims, lbs,
+                               element_type_oid, elmlen, elmbyval, elmalign);
+
+    pfree(elems);
+    pfree(nulls);
+
+    return PointerGetDatum(array);
 }
 
 SCM datum_int2_to_scm(Datum x, Oid type_oid)
@@ -1554,7 +1600,7 @@ Datum scm_to_datum_path(SCM x, Oid type_oid)
 
 		// Convert each point from Scheme object to Datum and populate the PATH
 		for (int i = 0; i < npts; i++) {
-			SCM scm_point = scm_vector_ref(scm_points_vector, scm_from_int(i));
+			SCM scm_point = scm_c_vector_ref(scm_points_vector, i);
 			Datum point_datum = scm_to_datum_point(scm_point, OID_NOT_USED);
 			path->p[i] = *DatumGetPointP(point_datum); // Assuming DatumGetPointP returns a Point *
 		}
@@ -1617,7 +1663,7 @@ Datum scm_to_datum_polygon(SCM x, Oid type_oid)
 
 		// Convert each point from Scheme object to Datum and populate the POLYGON
 		for (int i = 0; i < npts; i++) {
-			SCM scm_point = scm_vector_ref(scm_points_vector, scm_from_int(i));
+			SCM scm_point = scm_c_vector_ref(scm_points_vector, i);
 			Datum point_datum = scm_to_datum_point(scm_point, OID_NOT_USED);
 			polygon->p[i] = *DatumGetPointP(point_datum); // Assuming DatumGetPointP returns a Point *
 		}

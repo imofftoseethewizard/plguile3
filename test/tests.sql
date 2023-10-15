@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(118);
+select plan(119);
 
 --------------------------------------------------------------------------------
 --
@@ -652,13 +652,22 @@ select * from finish();
 
 --------------------------------------------------------------------------------
 --
+-- Arrays
+--
+
+create function f_ret_array() returns text[] as '#("a" "b")' language scruple;
+
+select is(f_ret_array(), '{"a", "b"}'::text[], 'array: 2 item text');
+
+--------------------------------------------------------------------------------
+--
 -- SPI Integration
 --
 
-create function f_spi_simple() returns int4 as $$
-(vector-ref (vector-ref (execute "select 1" #t 1) 0) 0)
+create function f_execute_simple() returns int4 as $$
+(vector-ref (vector-ref (execute "select 1") 0) 0)
 $$ language scruple;
 
-select is(f_spi_simple(), 1, 'spi: simple');
+select is(f_execute_simple(), 1, 'execute: simple');
 
 rollback;

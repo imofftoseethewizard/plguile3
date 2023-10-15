@@ -37,32 +37,30 @@ in time will likely mean 12 to 16.
 The 0.5.x versions will provide Guile primitives for accessing
 Postgres' Server Programming Interface so that queries may be made
 from scheme code. In addition, support for arrays, records, and set
-returning functions will be added. Some restructuring of type
-translations and tests will be required. That is, to preserve type
-information across the scheme environment from SPI call return values
-to function results, and from function arguments to SPI call
-arguments, the values will need to be represented more faithfully, and
-not coerced to a set of scheme values. For example, rather than
-translating a `money` value to an exact integer, it will be wrapped in
-a `value` record containing `type-oid` and `datum` fields. This will
-normalize and simplify the C call architecture at the expense of
-complicating the use of values on the scheme side. A later
-implementation phase will analyze the function body to determine data
-flow and apply syntax transformations to insert type coercions. This
-should preserve both value fidelity and user ergonomics. Currently,
-the first step of this process has been completed, breaking most of
-the tests. The next step is to include a scheme primitive to unbox a
-boxed datum to a scheme value.
+returning functions will be added. To return more complex values from
+a scheme function, and to do so with precision requires providing some
+tools to the scheme environment. At the very least, some equivalent of
+`::`, such that we could specify `(:: 'int4 expr)`. The question is,
+should this be extended to include converting complex values to
+tuples, tables, arrays, and etc, possibly recursively applied? For
+example, we could have
 
-The 0.7.x versions will add support for triggers.
+    (:: '(table int8 text (array (record timestamptz float8)) expr)
 
-The 0.9.x versions will provide function isolation, and initialization
+for some labeled timeseries data.
+
+The 0.7.x versions will add support for inline calls, i.e. "do"
+statements.
+
+The 0.9.x versions will add support for triggers.
+
+The 0.11.x versions will provide function isolation, and initialization
 and configuration settings.
 
-The 0.11.x versions will normalize error messages and properly trap
+The 0.13.x versions will normalize error messages and properly trap
 and report errors from Guile.
 
-The 0.13.x versions will refine and refactor scruple.scm.
+The 0.15.x versions will refine and refactor scruple.scm.
 
 ## Requirements
 
