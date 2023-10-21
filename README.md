@@ -49,18 +49,23 @@ example, we could have
 
 for some labeled timeseries data.
 
-The 0.7.x versions will add support for inline calls, i.e. "do"
-statements.
+The 0.7.x versions will add support for cursors and iterative query
+result handling.
 
 The 0.9.x versions will add support for triggers.
 
-The 0.11.x versions will provide function isolation, and initialization
+The 0.11.x versions will add support for inline calls, i.e. "do"
+statements.
+
+The 0.13.x versions will provide function isolation, and initialization
 and configuration settings.
 
-The 0.13.x versions will normalize error messages and properly trap
+The 0.15.x versions will normalize error messages and properly trap
 and report errors from Guile.
 
-The 0.15.x versions will refine and refactor scruple.scm.
+The 0.17.x versions will refine and refactor scruple.scm.
+
+The 0.19.x versions will include documentation and examples.
 
 ## Requirements
 
