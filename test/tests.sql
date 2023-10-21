@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(119);
+select plan(120);
 
 --------------------------------------------------------------------------------
 --
@@ -655,9 +655,11 @@ select * from finish();
 -- Arrays
 --
 
+create function f_array_arg(a text[]) returns text as '(vector-ref a 0)' language scruple;
 create function f_ret_array() returns text[] as '#("a" "b")' language scruple;
 
-select is(f_ret_array(), '{"a", "b"}'::text[], 'array: 2 item text');
+select is(f_array_arg('{foo,bar}'::text[]), 'foo', 'array: 2 item parameter');
+select is(f_ret_array(), '{"a", "b"}'::text[], 'array: return 2 item text');
 
 --------------------------------------------------------------------------------
 --

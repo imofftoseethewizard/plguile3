@@ -71,6 +71,7 @@ typedef struct TypeCacheEntry {
 
 static SCM make_boxed_datum(Oid type_oid, Datum x);
 
+static SCM datum_array_to_scm(Datum x, Oid type_oid);
 static SCM datum_bit_string_to_scm(Datum x, Oid type_oid);
 static SCM datum_bool_to_scm(Datum x, Oid type_oid);
 static SCM datum_box_to_scm(Datum x, Oid type_oid);
@@ -759,6 +760,8 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 	TypeCacheEntry *entry =
 		(TypeCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
 
+	Oid element_type_oid;
+
 	if (found && entry->to_scm) {
 		return entry->to_scm(datum, type_oid);
 	}
@@ -767,6 +770,11 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 		insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
 		return datum_enum_to_scm(datum, type_oid);
 	}
+
+	element_type_oid = get_element_type(type_oid);
+
+	if (OidIsValid(element_type_oid))
+		return datum_array_to_scm(datum, element_type_oid);
 
 	elog(NOTICE, "datum_to_scm: conversion function for type OID %u not found", type_oid);
 	return make_boxed_datum(type_oid, datum);
@@ -883,6 +891,38 @@ Datum scm_to_datum_enum(SCM x, Oid type_oid)
 	result = ((Form_pg_enum) GETSTRUCT(tup))->oid;
 
 	ReleaseSysCache(tup);
+
+	return result;
+}
+
+SCM datum_array_to_scm(Datum x, Oid element_type_oid)
+{
+    ArrayType *array;
+    Datum *elems;
+    bool *nulls;
+    int nelems;
+    int16 elmlen;
+    bool elmbyval;
+    char elmalign;
+    SCM result;
+
+    // Convert Datum to ArrayType pointer after detoasting if required
+    array = DatumGetArrayTypeP(PG_DETOAST_DATUM(x));
+
+    // Extract the type information
+    get_typlenbyvalalign(element_type_oid, &elmlen, &elmbyval, &elmalign);
+
+    // Deconstruct the array into Datums and nulls flags
+    deconstruct_array(array, element_type_oid, elmlen, elmbyval, elmalign, &elems, &nulls, &nelems);
+
+    result = scm_c_make_vector(nelems, SCM_EOL);
+
+    for (int i = 0; i < nelems; i++)
+        if (!nulls[i])
+	        scm_c_vector_set_x(result, i, datum_to_scm(elems[i], element_type_oid));
+
+    pfree(elems);
+    pfree(nulls);
 
 	return result;
 }
@@ -1544,14 +1584,14 @@ SCM datum_path_to_scm(Datum x, Oid type_oid)
 	PATH *path = DatumGetPathP(x);
 
 	// Create a Scheme vector to hold the points
-	SCM scm_points_vector = scm_make_vector(scm_from_int(path->npts), SCM_BOOL_F);
+	SCM scm_points_vector = scm_c_make_vector(path->npts, SCM_BOOL_F);
 	SCM scm_is_closed = scm_from_bool(path->closed);
 
 	// Convert each point to Scheme object and populate the vector
 	for (int i = 0; i < path->npts; i++) {
 		Datum point_datum = PointPGetDatum(&path->p[i]);
 		SCM scm_point = datum_point_to_scm(point_datum, OID_NOT_USED);
-		scm_vector_set_x(scm_points_vector, scm_from_int(i), scm_point);
+		scm_c_vector_set_x(scm_points_vector, i, scm_point);
 	}
 
 	return scm_call_2(make_path_proc, scm_is_closed, scm_points_vector);
@@ -1608,14 +1648,14 @@ SCM datum_polygon_to_scm(Datum x, Oid type_oid)
 	POLYGON *polygon = DatumGetPolygonP(x);
 
 	// Create a Scheme vector to hold the points
-	SCM scm_points_vector = scm_make_vector(scm_from_int(polygon->npts), SCM_BOOL_F);
+	SCM scm_points_vector = scm_c_make_vector(polygon->npts, SCM_BOOL_F);
 	SCM scm_boundbox = datum_box_to_scm(BoxPGetDatum(&polygon->boundbox), OID_NOT_USED);
 
 	// Convert each point to Scheme object and populate the vector
 	for (int i = 0; i < polygon->npts; i++) {
 		Datum point_datum = PointPGetDatum(&polygon->p[i]);
 		SCM scm_point = datum_point_to_scm(point_datum, OID_NOT_USED);
-		scm_vector_set_x(scm_points_vector, scm_from_int(i), scm_point);
+		scm_c_vector_set_x(scm_points_vector, i, scm_point);
 	}
 
 	return scm_call_2(make_polygon_proc, scm_boundbox, scm_points_vector);
@@ -2285,19 +2325,19 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 
 		tupdesc = SPI_tuptable->tupdesc;
 
-		type_oids = scm_make_vector(scm_from_int(tupdesc->natts), SCM_EOL);
+		type_oids = scm_c_make_vector(tupdesc->natts, SCM_EOL);
 
 		for (int i = 0; i < tupdesc->natts; i++) {
 			FormData_pg_attribute *attr = &tupdesc->attrs[i];
-			scm_vector_set_x(type_oids, scm_from_int(i), scm_from_int32(attr->atttypid));
+			scm_c_vector_set_x(type_oids, i, scm_from_int32(attr->atttypid));
 		}
 
-		rows = scm_make_vector(scm_from_int64(SPI_tuptable->numvals), SCM_EOL);
+		rows = scm_c_make_vector(SPI_tuptable->numvals, SCM_EOL);
 
 		for (long i = 0; i < SPI_tuptable->numvals; i++) {
 
 			HeapTuple tuple = SPI_tuptable->vals[i];
-			SCM row = scm_make_vector(scm_from_int(tupdesc->natts), SCM_EOL);
+			SCM row = scm_c_make_vector(tupdesc->natts, SCM_EOL);
 
 			for (int j = 0; j < tupdesc->natts; j++) {
 
@@ -2306,17 +2346,17 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 				Oid type_oid = tupdesc->attrs[j].atttypid;
 
 				if (!is_null)
-					scm_vector_set_x(row, scm_from_int(j), datum_to_scm(datum, type_oid));
+					scm_c_vector_set_x(row, j, datum_to_scm(datum, type_oid));
 			}
 
-			scm_vector_set_x(rows, scm_from_long(i), row);
+			scm_c_vector_set_x(rows, i, row);
 		}
 
 		break;
 	}
 	default:
-		rows = scm_make_vector(scm_from_int(0), SCM_EOL);
-		type_oids = scm_make_vector(scm_from_int(0), SCM_EOL);
+		rows = scm_c_make_vector(0, SCM_EOL);
+		type_oids = scm_c_make_vector(0, SCM_EOL);
 		break;
 	}
 
