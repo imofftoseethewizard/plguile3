@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(120);
+select plan(122);
 
 --------------------------------------------------------------------------------
 --
@@ -660,6 +660,23 @@ create function f_ret_array() returns text[] as '#("a" "b")' language scruple;
 
 select is(f_array_arg('{foo,bar}'::text[]), 'foo', 'array: 2 item parameter');
 select is(f_ret_array(), '{"a", "b"}'::text[], 'array: return 2 item text');
+
+--------------------------------------------------------------------------------
+--
+-- Records
+--
+
+create type simple_record as (name text, count int, weight float8);
+
+create function f_record_arg_by_name(a simple_record) returns text as '(record-ref a ''name)' language scruple;
+create function f_record_arg_by_number(a simple_record) returns numeric as '(record-ref a 2)' language scruple;
+create function f_ret_record() returns record as '1' language scruple;
+
+select is(f_record_arg_by_name(row('foo', 5, 1.41)::simple_record), 'foo', 'record: argument by name');
+select is(f_record_arg_by_number(row('foo', 5, 1.41)::simple_record), 1.41, 'record: argument by number');
+
+select ok(f_ret_record() = t, 'record: simple return test')
+from (select 'a') t(text);
 
 --------------------------------------------------------------------------------
 --

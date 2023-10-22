@@ -28,6 +28,7 @@
 #include "utils/lsyscache.h"
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
+#include <utils/typcache.h>
 #include <utils/uuid.h>
 #include <utils/varbit.h>
 #include <utils/xml.h>
@@ -63,11 +64,11 @@ typedef struct {
 typedef SCM (*ToScmFunc)(Datum, Oid);
 typedef Datum (*ToDatumFunc)(SCM, Oid);
 
-typedef struct TypeCacheEntry {
+typedef struct TypeConvCacheEntry {
 	Oid type_oid;    // OID of a PostgreSQL type
 	ToScmFunc to_scm;   // Function pointer to convert Datum to SCM
 	ToDatumFunc to_datum; // Function pointer to convert SCM to Datum
-} TypeCacheEntry;
+} TypeConvCacheEntry;
 
 static SCM make_boxed_datum(Oid type_oid, Datum x);
 
@@ -77,6 +78,7 @@ static SCM datum_bool_to_scm(Datum x, Oid type_oid);
 static SCM datum_box_to_scm(Datum x, Oid type_oid);
 static SCM datum_bytea_to_scm(Datum x, Oid type_oid);
 static SCM datum_circle_to_scm(Datum x, Oid type_oid);
+static SCM datum_composite_to_scm(Datum x, Oid type_oid);
 static SCM datum_date_to_scm(Datum x, Oid type_oid);
 static SCM datum_enum_to_scm(Datum x, Oid type_oid);
 static SCM datum_float4_to_scm(Datum x, Oid type_oid);
@@ -164,6 +166,8 @@ static bool is_time(SCM x);
 
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
+static Oid get_default_type_oid(SCM scm);
+static bool is_composite_type(Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
@@ -235,6 +239,7 @@ static SCM make_macaddr_proc;
 static SCM make_path_proc;
 static SCM make_point_proc;
 static SCM make_polygon_proc;
+static SCM make_record_proc;
 static SCM make_time_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
@@ -254,6 +259,12 @@ static HTAB *typeCache;
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM read_only, SCM count);
 
+static Oid float8_oid;
+static Oid int2_oid;
+static Oid int4_oid;
+static Oid int8_oid;
+static Oid numeric_oid;
+
 void _PG_init(void)
 {
 	HASHCTL funcInfo;
@@ -269,7 +280,7 @@ void _PG_init(void)
 
 	memset(&typeInfo, 0, sizeof(typeInfo));
 	typeInfo.keysize = sizeof(Oid);
-	typeInfo.entrysize = sizeof(TypeCacheEntry);
+	typeInfo.entrysize = sizeof(TypeConvCacheEntry);
 	typeCache = hash_create("Scruple Type Cache", 128, &typeInfo, HASH_ELEM | HASH_BLOBS);
 
 	/* Fill type cache with to_scm and to_datum functions for known types */
@@ -310,6 +321,13 @@ void _PG_init(void)
 	insert_type_cache_entry(TypenameGetTypid("varchar"),     datum_text_to_scm,        scm_to_datum_text);
 	insert_type_cache_entry(TypenameGetTypid("void"),        datum_void_to_scm,        scm_to_datum_void);
 	insert_type_cache_entry(TypenameGetTypid("xml"),         datum_xml_to_scm,         scm_to_datum_xml);
+
+	/* Used by get_default_type_oid */
+	float8_oid  = TypenameGetTypid("float8");
+	int2_oid    = TypenameGetTypid("int2");
+	int4_oid    = TypenameGetTypid("int4");
+	int8_oid    = TypenameGetTypid("int8");
+	numeric_oid = TypenameGetTypid("numeric");
 
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
@@ -421,6 +439,7 @@ void _PG_init(void)
 	make_path_proc         = scm_eval_string(scm_from_locale_string("make-path"));
 	make_point_proc        = scm_eval_string(scm_from_locale_string("make-point"));
 	make_polygon_proc      = scm_eval_string(scm_from_locale_string("make-polygon"));
+	make_record_proc       = scm_eval_string(scm_from_locale_string("make-record"));
 	make_time_proc         = scm_eval_string(scm_from_locale_string("make-time"));
 	path_is_closed_proc    = scm_eval_string(scm_from_locale_string("path-closed?"));
 	path_points_proc       = scm_eval_string(scm_from_locale_string("path-points"));
@@ -476,7 +495,7 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 
 	SCM arg_list = SCM_EOL;
 
-	bool nonatomic;
+	/* bool nonatomic; */
 
 	Datum result;
 
@@ -517,13 +536,14 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 		arg_list = scm_cons(scm_arg, arg_list);
 	}
 
-	nonatomic = fcinfo->context &&
-		IsA(fcinfo->context, CallContext) &&
-		!castNode(CallContext, fcinfo->context)->atomic;
+	/* nonatomic = fcinfo->context && */
+	/* 	IsA(fcinfo->context, CallContext) && */
+	/* 	!castNode(CallContext, fcinfo->context)->atomic; */
 
-	printf("%d", nonatomic);
 	/* if (SPI_connect_ext(nonatomic ? SPI_OPT_NONATOMIC : 0) != SPI_OK_CONNECT) */
 	/* elog(ERROR, "could not connect to SPI manager"); */
+
+	elog(NOTICE, "scruple_call: calling scheme");
 
 	result = convert_result_to_datum(scm_apply(proc, arg_list, SCM_EOL), proc_tuple, fcinfo);
 
@@ -553,8 +573,11 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 	case TYPEFUNC_COMPOSITE:
 		return convert_result_to_composite_datum(result, tuple_desc);
 
-	case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 	case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
+		elog(ERROR, "convert_result_to_datum: record not implemented");
+		return (Datum) 0;
+
+	case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 	case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
 		elog(ERROR, "convert_result_to_datum: not implemented");
 		return (Datum) 0;
@@ -757,8 +780,8 @@ SCM unbox_datum(SCM x)
 SCM datum_to_scm(Datum datum, Oid type_oid)
 {
 	bool found;
-	TypeCacheEntry *entry =
-		(TypeCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
+	TypeConvCacheEntry *entry =
+		(TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
 
 	Oid element_type_oid;
 
@@ -776,21 +799,42 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 	if (OidIsValid(element_type_oid))
 		return datum_array_to_scm(datum, element_type_oid);
 
+	if (is_composite_type(type_oid))
+		return datum_composite_to_scm(datum, type_oid);
+
 	elog(NOTICE, "datum_to_scm: conversion function for type OID %u not found", type_oid);
 	return make_boxed_datum(type_oid, datum);
+}
+
+bool is_composite_type(Oid type_oid)
+{
+    HeapTuple type_tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+    Form_pg_type type_struct;
+    bool result;
+
+    if (!HeapTupleIsValid(type_tup))
+        elog(ERROR, "cache lookup failed for type %u", type_oid);
+
+    type_struct = (Form_pg_type) GETSTRUCT(type_tup);
+    result = type_struct->typtype == 'c';
+    ReleaseSysCache(type_tup);
+    return result;
 }
 
 Datum scm_to_datum(SCM scm, Oid type_oid)
 {
 	bool found;
-	TypeCacheEntry *entry;
+	TypeConvCacheEntry *entry;
 
 	Oid element_type_oid;
 
 	if (is_boxed_datum(scm))
 		return convert_boxed_datum_to_datum(scm, type_oid);
 
-	entry = (TypeCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
+	if (!OidIsValid(type_oid))
+		type_oid = get_default_type_oid(scm);
+
+	entry = (TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
 
 	if (found && entry->to_datum)
 		return entry->to_datum(scm, type_oid);
@@ -810,42 +854,67 @@ Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid)
 	Oid source_type_oid = get_boxed_datum_type(scm);
 	Datum value = get_boxed_datum_value(scm);
 
-	// Lookup casting function OID in pg_cast
-	Oid cast_func_oid = InvalidOid;
-	Relation rel = relation_open(CastRelationId, AccessShareLock);
-	SysScanDesc scan;
-	ScanKeyData key[2];
-	HeapTuple tuple;
-	Form_pg_cast cast_form;
+	if (!OidIsValid(target_type_oid) || target_type_oid == source_type_oid)
+		return value;
 
-	ScanKeyInit(&key[0],
-	            Anum_pg_cast_castsource,
-	            BTEqualStrategyNumber, F_OIDEQ,
-	            ObjectIdGetDatum(source_type_oid));
+	else {
+		// Lookup casting function OID in pg_cast
+		Oid cast_func_oid = InvalidOid;
+		Relation rel = relation_open(CastRelationId, AccessShareLock);
+		SysScanDesc scan;
+		ScanKeyData key[2];
+		HeapTuple tuple;
+		Form_pg_cast cast_form;
 
-	ScanKeyInit(&key[1],
-	            Anum_pg_cast_casttarget,
-	            BTEqualStrategyNumber, F_OIDEQ,
-	            ObjectIdGetDatum(target_type_oid));
+		ScanKeyInit(&key[0],
+		            Anum_pg_cast_castsource,
+		            BTEqualStrategyNumber, F_OIDEQ,
+		            ObjectIdGetDatum(source_type_oid));
 
-	scan = systable_beginscan(rel, CastSourceTargetIndexId, true,
-	                          NULL, 2, key);
+		ScanKeyInit(&key[1],
+		            Anum_pg_cast_casttarget,
+		            BTEqualStrategyNumber, F_OIDEQ,
+		            ObjectIdGetDatum(target_type_oid));
 
-	tuple = systable_getnext(scan);
+		scan = systable_beginscan(rel, CastSourceTargetIndexId, true,
+		                          NULL, 2, key);
 
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+		tuple = systable_getnext(scan);
 
-	cast_form = (Form_pg_cast) GETSTRUCT(tuple);
-	cast_func_oid = cast_form->castfunc;
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
 
-	systable_endscan(scan);
-	relation_close(rel, AccessShareLock);
+		cast_form = (Form_pg_cast) GETSTRUCT(tuple);
+		cast_func_oid = cast_form->castfunc;
 
-	if (!OidIsValid(cast_func_oid))
-		elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+		systable_endscan(scan);
+		relation_close(rel, AccessShareLock);
 
-	return OidFunctionCall1(cast_func_oid, value);
+		if (!OidIsValid(cast_func_oid))
+			elog(ERROR, "No cast from type OID %u to %u.", source_type_oid, target_type_oid);
+
+		return OidFunctionCall1(cast_func_oid, value);
+	}
+}
+
+Oid get_default_type_oid(SCM scm)
+{
+	if (scm_is_number(scm)) {
+		if (scm_is_inexact(scm))
+			return float8_oid;
+
+		if (is_int2(scm))
+			return int2_oid;
+
+		if (is_int4(scm))
+			return int4_oid;
+
+		if (is_int8(scm))
+			return int8_oid;
+
+		return numeric_oid;
+	}
+	return InvalidOid;
 }
 
 SCM datum_enum_to_scm(Datum x, Oid type_oid)
@@ -962,6 +1031,45 @@ Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
 	pfree(nulls);
 
 	return PointerGetDatum(array);
+}
+
+SCM datum_composite_to_scm(Datum x, Oid type_oid)
+{
+	SCM field_names_hash, values;
+
+    TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, -1);
+    int natts = tuple_desc->natts;
+    Datum *attrs = palloc(natts * sizeof(Datum));
+    bool *is_null = palloc(natts * sizeof(bool));
+
+    HeapTupleData tuple_data;
+
+    ItemPointerSetInvalid(&(tuple_data.t_self));
+    tuple_data.t_len = HeapTupleHeaderGetDatumLength((HeapTupleHeader) x);
+    tuple_data.t_tableOid = InvalidOid;
+    tuple_data.t_data = (HeapTupleHeader) x;
+
+    heap_deform_tuple(&tuple_data, tuple_desc, attrs, is_null);
+
+    field_names_hash = scm_c_make_hash_table(natts);
+    values = scm_c_make_vector(natts, SCM_EOL);
+
+    for (int i = 0; i < natts; i++) {
+        if (!is_null[i]) {
+            Oid att_type_oid = tuple_desc->attrs[i].atttypid;
+            Datum att = attrs[i];
+            SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[i].attname));
+
+            scm_hash_set_x(field_names_hash, symbol, scm_from_int(i));
+            scm_c_vector_set_x(values, i, datum_to_scm(att, att_type_oid));
+        }
+    }
+
+    pfree(attrs);
+    pfree(is_null);
+    ReleaseTupleDesc(tuple_desc);
+
+    return scm_call_2(make_record_proc, field_names_hash, values);
 }
 
 SCM datum_int2_to_scm(Datum x, Oid type_oid)
@@ -2230,7 +2338,7 @@ Datum datum_date_to_timestamptz(Datum x)
 	return TimestampTzGetDatum(timestamp);
 }
 
-char * scm_to_string(SCM obj)
+char *scm_to_string(SCM obj)
 {
 	MemoryContext context = CurrentMemoryContext;
 
@@ -2250,8 +2358,8 @@ char * scm_to_string(SCM obj)
 void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum)
 {
 	bool found;
-	TypeCacheEntry *entry =
-		(TypeCacheEntry *)hash_search(typeCache, &type_oid, HASH_ENTER, &found);
+	TypeConvCacheEntry *entry =
+		(TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_ENTER, &found);
 
 	if (found) {
 		elog(ERROR, "Unexpected duplicate in type cache: %d", type_oid);

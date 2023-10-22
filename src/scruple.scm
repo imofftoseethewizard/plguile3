@@ -20,6 +20,22 @@
   (digits decimal-digits)
   (scale decimal-scale))
 
+(define-record-type record
+  (make-record field-names-hash values)
+  record?
+  (field-names-hash record-field-names-hash)
+  (values record-values))
+
+(define (field-name->number r k)
+  (or (hash-ref (record-field-names-hash r) k)
+      (raise-exception `(unknown-field-name ,k))))
+
+(define (record-ref r k)
+  (let ((i (if (number? k)
+               k
+               (field-name->number r k))))
+    (vector-ref (record-values r) i)))
+
 (define (string->decimal s)
   (cond
    ((string=? s "NaN")       (make-decimal s 0))
