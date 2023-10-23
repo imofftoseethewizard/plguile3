@@ -57,20 +57,20 @@ The 0.9.x versions will add support for triggers.
 The 0.11.x versions will add support for inline calls, i.e. "do"
 statements.
 
-The 0.15.x versions will provide function isolation, and initialization
+The 0.13.x versions will provide function isolation, and initialization
 and configuration settings.
 
-The 0.17.x versions will normalize error messages and properly trap
+The 0.15.x versions will normalize error messages and properly trap
 and report errors from Guile.
 
-The 0.19.x versions will refine and refactor scruple.scm.
+The 0.17.x versions will refine and refactor scruple.scm.
 
-The 0.21.x versions will include documentation and examples.
+The 0.19.x versions will include documentation and examples.
 
-The 0.23.x versions will provide support for Postgres 12, 13, 15, and
+The 0.21.x versions will provide support for Postgres 12, 13, 15, and
 16.
 
-The 0.25.x versions will provide packaging for pgxn, deb, and rpm.
+The 0.23.x versions will provide packaging for pgxn, deb, and rpm.
 
 Post 1.0 improvements:
 

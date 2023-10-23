@@ -166,14 +166,17 @@ static bool is_time(SCM x);
 
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
-static Oid get_default_type_oid(SCM scm);
 static bool is_composite_type(Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
+static Datum convert_result_to_record_datum(SCM result);
+static TupleDesc record_type_tuple_desc(SCM x, int len);
+static bool is_record(SCM x);
 static bool is_enum_type(Oid type_oid);
+static SCM type_desc_expr(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
 
 static SCM bit_string_data_proc;
@@ -217,6 +220,7 @@ static SCM is_macaddr_proc;
 static SCM is_path_proc;
 static SCM is_point_proc;
 static SCM is_polygon_proc;
+static SCM is_record_proc;
 static SCM is_time_proc;
 static SCM line_a_proc;
 static SCM line_b_proc;
@@ -247,6 +251,8 @@ static SCM point_x_proc;
 static SCM point_y_proc;
 static SCM polygon_boundbox_proc;
 static SCM polygon_points_proc;
+static SCM record_data_proc;
+static SCM record_types_proc;
 static SCM string_to_decimal_proc;
 static SCM time_duration_symbol;
 static SCM time_monotonic_symbol;
@@ -258,12 +264,6 @@ static HTAB *typeCache;
 
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM read_only, SCM count);
-
-static Oid float8_oid;
-static Oid int2_oid;
-static Oid int4_oid;
-static Oid int8_oid;
-static Oid numeric_oid;
 
 void _PG_init(void)
 {
@@ -321,13 +321,6 @@ void _PG_init(void)
 	insert_type_cache_entry(TypenameGetTypid("varchar"),     datum_text_to_scm,        scm_to_datum_text);
 	insert_type_cache_entry(TypenameGetTypid("void"),        datum_void_to_scm,        scm_to_datum_void);
 	insert_type_cache_entry(TypenameGetTypid("xml"),         datum_xml_to_scm,         scm_to_datum_xml);
-
-	/* Used by get_default_type_oid */
-	float8_oid  = TypenameGetTypid("float8");
-	int2_oid    = TypenameGetTypid("int2");
-	int4_oid    = TypenameGetTypid("int4");
-	int8_oid    = TypenameGetTypid("int8");
-	numeric_oid = TypenameGetTypid("numeric");
 
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
@@ -417,6 +410,7 @@ void _PG_init(void)
 	is_path_proc           = scm_eval_string(scm_from_locale_string("path?"));
 	is_point_proc          = scm_eval_string(scm_from_locale_string("point?"));
 	is_polygon_proc        = scm_eval_string(scm_from_locale_string("polygon?"));
+	is_record_proc         = scm_eval_string(scm_from_locale_string("record?"));
 	is_time_proc           = scm_eval_string(scm_from_locale_string("time?"));
 	line_a_proc            = scm_eval_string(scm_from_locale_string("line-a"));
 	line_b_proc            = scm_eval_string(scm_from_locale_string("line-b"));
@@ -446,6 +440,8 @@ void _PG_init(void)
 	point_x_proc           = scm_eval_string(scm_from_locale_string("point-x"));
 	point_y_proc           = scm_eval_string(scm_from_locale_string("point-y"));
 	polygon_boundbox_proc  = scm_eval_string(scm_from_locale_string("polygon-boundbox"));
+	record_data_proc       = scm_eval_string(scm_from_locale_string("record-data"));
+	record_types_proc      = scm_eval_string(scm_from_locale_string("record-types"));
 	polygon_points_proc    = scm_eval_string(scm_from_locale_string("polygon-points"));
 	time_duration_symbol   = scm_eval_string(scm_from_locale_string("time-duration"));
 	time_monotonic_symbol  = scm_eval_string(scm_from_locale_string("time-monotonic"));
@@ -574,8 +570,7 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 		return convert_result_to_composite_datum(result, tuple_desc);
 
 	case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
-		elog(ERROR, "convert_result_to_datum: record not implemented");
-		return (Datum) 0;
+		return convert_result_to_record_datum(result);
 
 	case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 	case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
@@ -623,6 +618,74 @@ Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
 	pfree(ret_is_null);
 
 	return result_datum;
+}
+
+Datum convert_result_to_record_datum(SCM result)
+{
+	HeapTuple ret_heap_tuple;
+
+	Datum *ret_values;
+	bool *ret_is_null;
+
+	Datum result_datum;
+
+	SCM data;
+	int len;
+	TupleDesc tuple_desc;
+
+	if (!is_record(result))
+		elog(ERROR, "record result expected, not: %s", scm_to_string(result));
+
+	data = scm_call_1(record_data_proc, result);
+	len = scm_c_vector_length(data);
+	tuple_desc = record_type_tuple_desc(scm_call_1(record_types_proc, result), len);
+
+	ret_values = (Datum *) palloc0(sizeof(Datum) * len);
+	ret_is_null = (bool *) palloc0(sizeof(bool) * len);
+
+	for (int i = 0; i < len; ++i) {
+
+		Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
+		SCM v = scm_c_vector_ref(data, i);
+
+		if (v == SCM_EOL)
+			ret_is_null[i] = true;
+		else
+			ret_values[i] = scm_to_datum(v, attr->atttypid);
+	}
+
+	ret_heap_tuple = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
+	result_datum = HeapTupleGetDatum(ret_heap_tuple);
+
+	pfree(ret_values);
+	pfree(ret_is_null);
+
+	return result_datum;
+}
+
+TupleDesc record_type_tuple_desc(SCM type_desc_list, int len)
+{
+	int i;
+	TupleDesc tupdesc;
+
+	// Create an empty TupleDesc
+	tupdesc = CreateTemplateTupleDesc(len);
+
+	for (i = 0; i < len; i++) {
+		SCM scm_type_name = scm_car(type_desc_list);
+		char *type_name_cstr = scm_to_locale_string(scm_symbol_to_string(scm_type_name));
+		Oid typeOid = TypenameGetTypid(type_name_cstr);
+
+		TupleDescInitEntry(tupdesc, (AttrNumber)i+1, type_name_cstr, typeOid, -1, 0);
+
+		type_desc_list = scm_cdr(type_desc_list);
+		free(type_name_cstr);
+	}
+
+	// Bless the TupleDesc so that it's valid for the rest of the transaction
+	BlessTupleDesc(tupdesc);
+
+	return tupdesc;
 }
 
 SCM make_boxed_datum(Oid type_oid, Datum x)
@@ -831,9 +894,6 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 	if (is_boxed_datum(scm))
 		return convert_boxed_datum_to_datum(scm, type_oid);
 
-	if (!OidIsValid(type_oid))
-		type_oid = get_default_type_oid(scm);
-
 	entry = (TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
 
 	if (found && entry->to_datum)
@@ -895,26 +955,6 @@ Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid)
 
 		return OidFunctionCall1(cast_func_oid, value);
 	}
-}
-
-Oid get_default_type_oid(SCM scm)
-{
-	if (scm_is_number(scm)) {
-		if (scm_is_inexact(scm))
-			return float8_oid;
-
-		if (is_int2(scm))
-			return int2_oid;
-
-		if (is_int4(scm))
-			return int4_oid;
-
-		if (is_int8(scm))
-			return int8_oid;
-
-		return numeric_oid;
-	}
-	return InvalidOid;
 }
 
 SCM datum_enum_to_scm(Datum x, Oid type_oid)
@@ -1035,7 +1075,7 @@ Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
 
 SCM datum_composite_to_scm(Datum x, Oid type_oid)
 {
-	SCM field_names_hash, values;
+	SCM field_names_hash, type_names, values;
 
     TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, -1);
     int natts = tuple_desc->natts;
@@ -1052,15 +1092,17 @@ SCM datum_composite_to_scm(Datum x, Oid type_oid)
     heap_deform_tuple(&tuple_data, tuple_desc, attrs, is_null);
 
     field_names_hash = scm_c_make_hash_table(natts);
+    type_names = SCM_EOL;
     values = scm_c_make_vector(natts, SCM_EOL);
 
-    for (int i = 0; i < natts; i++) {
+    for (int i = natts-1; i >= 0; i--) {
         if (!is_null[i]) {
             Oid att_type_oid = tuple_desc->attrs[i].atttypid;
             Datum att = attrs[i];
             SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[i].attname));
 
             scm_hash_set_x(field_names_hash, symbol, scm_from_int(i));
+            type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
             scm_c_vector_set_x(values, i, datum_to_scm(att, att_type_oid));
         }
     }
@@ -1069,8 +1111,34 @@ SCM datum_composite_to_scm(Datum x, Oid type_oid)
     pfree(is_null);
     ReleaseTupleDesc(tuple_desc);
 
-    return scm_call_2(make_record_proc, field_names_hash, values);
+    return scm_call_3(make_record_proc, field_names_hash, type_names, values);
 }
+
+SCM type_desc_expr(Oid type_oid)
+{
+    HeapTuple type_tuple;
+    Form_pg_type type_form;
+    char *type_name;
+
+    // Look up the type by its OID in the system cache
+    type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+    if (!HeapTupleIsValid(type_tuple))
+    {
+        elog(ERROR, "Cache lookup failed for type %u", type_oid);
+    }
+
+    // Extract the type information from the tuple
+    type_form = (Form_pg_type) GETSTRUCT(type_tuple);
+
+    // Get the name of the type
+    type_name = NameStr(type_form->typname);
+
+    // Don't forget to release the tuple when done
+    ReleaseSysCache(type_tuple);
+
+    return scm_from_locale_symbol(type_name);
+}
+
 
 SCM datum_int2_to_scm(Datum x, Oid type_oid)
 {
@@ -2319,6 +2387,11 @@ bool is_point(SCM x)
 bool is_polygon(SCM x)
 {
 	return scm_is_true(scm_call_1(is_polygon_proc, x));
+}
+
+bool is_record(SCM x)
+{
+	return scm_is_true(scm_call_1(is_record_proc, x));
 }
 
 bool is_time(SCM x)

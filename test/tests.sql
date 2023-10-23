@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(122);
+select plan(124);
 
 --------------------------------------------------------------------------------
 --
@@ -668,15 +668,17 @@ select is(f_ret_array(), '{"a", "b"}'::text[], 'array: return 2 item text');
 
 create type simple_record as (name text, count int, weight float8);
 
-create function f_record_arg_by_name(a simple_record) returns text as '(record-ref a ''name)' language scruple;
-create function f_record_arg_by_number(a simple_record) returns numeric as '(record-ref a 2)' language scruple;
-create function f_ret_record() returns record as '1' language scruple;
+create function f_record_arg_by_name(r simple_record) returns text as '(record-ref r ''name)' language scruple;
+create function f_record_arg_by_number(r simple_record) returns numeric as '(record-ref r 2)' language scruple;
+create function f_record_arg_type_name(r simple_record) returns text as '(symbol->string (car (record-types r)))' language scruple;
+create function f_ret_record() returns record as '(make-record #f ''(text int4 float8) #("a" 98 2.99792458e8))' language scruple;
 
 select is(f_record_arg_by_name(row('foo', 5, 1.41)::simple_record), 'foo', 'record: argument by name');
 select is(f_record_arg_by_number(row('foo', 5, 1.41)::simple_record), 1.41, 'record: argument by number');
+select is(f_record_arg_type_name(row('foo', 5, 1.41)::simple_record), 'text', 'record: argument type name');
 
 select ok(f_ret_record() = t, 'record: simple return test')
-from (select 'a') t(text);
+from (select 'a', 98, 2.99792458e8::float8) t(text, int, float8);
 
 --------------------------------------------------------------------------------
 --

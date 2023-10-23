@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.10] - 2023-10-23
+
+This adds support for functions returning `record`. It handles the
+case where each of the values in the returned tuple is a scalar
+type.
+
 ## [0.5.9] - 2023-10-22
 
 This adds support for composite types as function parameters. It also

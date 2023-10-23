@@ -21,10 +21,11 @@
   (scale decimal-scale))
 
 (define-record-type record
-  (make-record field-names-hash values)
+  (make-record field-names-hash types data)
   record?
   (field-names-hash record-field-names-hash)
-  (values record-values))
+  (types record-types)
+  (data record-data))
 
 (define (field-name->number r k)
   (or (hash-ref (record-field-names-hash r) k)
@@ -34,7 +35,7 @@
   (let ((i (if (number? k)
                k
                (field-name->number r k))))
-    (vector-ref (record-values r) i)))
+    (vector-ref (record-data r) i)))
 
 (define (string->decimal s)
   (cond
