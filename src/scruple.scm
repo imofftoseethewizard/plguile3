@@ -21,21 +21,42 @@
   (scale decimal-scale))
 
 (define-record-type record
-  (make-record field-names-hash types data)
+  (make-record attr-names-hash types attrs)
   record?
-  (field-names-hash record-field-names-hash)
+  (attr-names-hash record-attr-names-hash)
   (types record-types)
-  (data record-data))
+  (attrs record-attrs))
 
-(define (field-name->number r k)
-  (or (hash-ref (record-field-names-hash r) k)
-      (raise-exception `(unknown-field-name ,k))))
+(define-record-type table
+  (make-table attr-names-hash types records)
+  table?
+  (attr-names-hash table-attr-names-hash)
+  (types table-types)
+  (records table-records))
+
+(define (attr-name->number r k)
+  (or (hash-ref (record-attr-names-hash r) k)
+      (raise-exception `(unknown-attr-name ,k))))
 
 (define (record-ref r k)
   (let ((i (if (number? k)
                k
-               (field-name->number r k))))
-    (vector-ref (record-data r) i)))
+               (attr-name->number r k))))
+    (vector-ref (record-attrs r) i)))
+
+(define (table-row t row)
+  (vector-ref (table-records t) row))
+
+(define (table-length t)
+  (vector-length (table-records t)))
+
+(define (table-width t)
+  (length (table-types t)))
+
+(define (scalar t)
+  (if (or (< 1 (table-length t)) (< 1 (table-width t)))
+      (raise-exception `(non-scalar-result #:length ,(table-length t) #:width ,(table-width t))))
+  (record-ref (table-row t 0) 0))
 
 (define (string->decimal s)
   (cond

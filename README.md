@@ -74,13 +74,16 @@ The 0.23.x versions will provide packaging for pgxn, deb, and rpm.
 
 Post 1.0 improvements:
 
-The 1.1.x versions will improve support for json/jsonb, providing
+The 1.1.x versions will adapt Racket's SQL interface.
+
+The 1.3.x versions will improve support for json/jsonb, providing
 procedures that map to/from JSON according to the following: objects
 map to hash tables with string keys, arrays map to vectors, `true`
 maps to `#t`, `false` maps to `#f`, `null` maps to `()`, strings map
 to strings, and numbers map to numbers.
 
-The 1.3.x versions will adapt Racket's SQL interface.
+The 1.5.x versions will improve support for xml similarly to improved
+support for json.
 
 ## Requirements
 

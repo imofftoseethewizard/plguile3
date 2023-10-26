@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2023-10-25
+
+This adds a `table` record type in Scheme to represent the return
+value of `SPI_execute` and updates the C code to use it. This also
+includes a few utility procedures for working with tables and records
+in Scheme.
+
 ## [0.5.10] - 2023-10-23
 
 This adds support for functions returning `record`. It handles the

@@ -244,6 +244,7 @@ static SCM make_path_proc;
 static SCM make_point_proc;
 static SCM make_polygon_proc;
 static SCM make_record_proc;
+static SCM make_table_proc;
 static SCM make_time_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
@@ -251,7 +252,7 @@ static SCM point_x_proc;
 static SCM point_y_proc;
 static SCM polygon_boundbox_proc;
 static SCM polygon_points_proc;
-static SCM record_data_proc;
+static SCM record_attrs_proc;
 static SCM record_types_proc;
 static SCM string_to_decimal_proc;
 static SCM time_duration_symbol;
@@ -434,13 +435,14 @@ void _PG_init(void)
 	make_point_proc        = scm_eval_string(scm_from_locale_string("make-point"));
 	make_polygon_proc      = scm_eval_string(scm_from_locale_string("make-polygon"));
 	make_record_proc       = scm_eval_string(scm_from_locale_string("make-record"));
+	make_table_proc        = scm_eval_string(scm_from_locale_string("make-table"));
 	make_time_proc         = scm_eval_string(scm_from_locale_string("make-time"));
 	path_is_closed_proc    = scm_eval_string(scm_from_locale_string("path-closed?"));
 	path_points_proc       = scm_eval_string(scm_from_locale_string("path-points"));
 	point_x_proc           = scm_eval_string(scm_from_locale_string("point-x"));
 	point_y_proc           = scm_eval_string(scm_from_locale_string("point-y"));
 	polygon_boundbox_proc  = scm_eval_string(scm_from_locale_string("polygon-boundbox"));
-	record_data_proc       = scm_eval_string(scm_from_locale_string("record-data"));
+	record_attrs_proc      = scm_eval_string(scm_from_locale_string("record-attrs"));
 	record_types_proc      = scm_eval_string(scm_from_locale_string("record-types"));
 	polygon_points_proc    = scm_eval_string(scm_from_locale_string("polygon-points"));
 	time_duration_symbol   = scm_eval_string(scm_from_locale_string("time-duration"));
@@ -636,7 +638,7 @@ Datum convert_result_to_record_datum(SCM result)
 	if (!is_record(result))
 		elog(ERROR, "record result expected, not: %s", scm_to_string(result));
 
-	data = scm_call_1(record_data_proc, result);
+	data = scm_call_1(record_attrs_proc, result);
 	len = scm_c_vector_length(data);
 	tuple_desc = record_type_tuple_desc(scm_call_1(record_types_proc, result), len);
 
@@ -871,17 +873,17 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 
 bool is_composite_type(Oid type_oid)
 {
-    HeapTuple type_tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
-    Form_pg_type type_struct;
-    bool result;
+	HeapTuple type_tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+	Form_pg_type type_struct;
+	bool result;
 
-    if (!HeapTupleIsValid(type_tup))
-        elog(ERROR, "cache lookup failed for type %u", type_oid);
+	if (!HeapTupleIsValid(type_tup))
+		elog(ERROR, "cache lookup failed for type %u", type_oid);
 
-    type_struct = (Form_pg_type) GETSTRUCT(type_tup);
-    result = type_struct->typtype == 'c';
-    ReleaseSysCache(type_tup);
-    return result;
+	type_struct = (Form_pg_type) GETSTRUCT(type_tup);
+	result = type_struct->typtype == 'c';
+	ReleaseSysCache(type_tup);
+	return result;
 }
 
 Datum scm_to_datum(SCM scm, Oid type_oid)
@@ -1006,32 +1008,32 @@ Datum scm_to_datum_enum(SCM x, Oid type_oid)
 
 SCM datum_array_to_scm(Datum x, Oid element_type_oid)
 {
-    ArrayType *array;
-    Datum *elems;
-    bool *nulls;
-    int nelems;
-    int16 elmlen;
-    bool elmbyval;
-    char elmalign;
-    SCM result;
+	ArrayType *array;
+	Datum *elems;
+	bool *nulls;
+	int nelems;
+	int16 elmlen;
+	bool elmbyval;
+	char elmalign;
+	SCM result;
 
-    // Convert Datum to ArrayType pointer after detoasting if required
-    array = DatumGetArrayTypeP(PG_DETOAST_DATUM(x));
+	// Convert Datum to ArrayType pointer after detoasting if required
+	array = DatumGetArrayTypeP(PG_DETOAST_DATUM(x));
 
-    // Extract the type information
-    get_typlenbyvalalign(element_type_oid, &elmlen, &elmbyval, &elmalign);
+	// Extract the type information
+	get_typlenbyvalalign(element_type_oid, &elmlen, &elmbyval, &elmalign);
 
-    // Deconstruct the array into Datums and nulls flags
-    deconstruct_array(array, element_type_oid, elmlen, elmbyval, elmalign, &elems, &nulls, &nelems);
+	// Deconstruct the array into Datums and nulls flags
+	deconstruct_array(array, element_type_oid, elmlen, elmbyval, elmalign, &elems, &nulls, &nelems);
 
-    result = scm_c_make_vector(nelems, SCM_EOL);
+	result = scm_c_make_vector(nelems, SCM_EOL);
 
-    for (int i = 0; i < nelems; i++)
-        if (!nulls[i])
-	        scm_c_vector_set_x(result, i, datum_to_scm(elems[i], element_type_oid));
+	for (int i = 0; i < nelems; i++)
+		if (!nulls[i])
+			scm_c_vector_set_x(result, i, datum_to_scm(elems[i], element_type_oid));
 
-    pfree(elems);
-    pfree(nulls);
+	pfree(elems);
+	pfree(nulls);
 
 	return result;
 }
@@ -1075,68 +1077,67 @@ Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
 
 SCM datum_composite_to_scm(Datum x, Oid type_oid)
 {
-	SCM field_names_hash, type_names, values;
+	SCM attr_names_hash, type_names, values;
 
-    TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, -1);
-    int natts = tuple_desc->natts;
-    Datum *attrs = palloc(natts * sizeof(Datum));
-    bool *is_null = palloc(natts * sizeof(bool));
+	TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, -1);
+	int natts = tuple_desc->natts;
+	Datum *attrs = palloc(natts * sizeof(Datum));
+	bool *is_null = palloc(natts * sizeof(bool));
 
-    HeapTupleData tuple_data;
+	HeapTupleData tuple_data;
 
-    ItemPointerSetInvalid(&(tuple_data.t_self));
-    tuple_data.t_len = HeapTupleHeaderGetDatumLength((HeapTupleHeader) x);
-    tuple_data.t_tableOid = InvalidOid;
-    tuple_data.t_data = (HeapTupleHeader) x;
+	ItemPointerSetInvalid(&(tuple_data.t_self));
+	tuple_data.t_len = HeapTupleHeaderGetDatumLength((HeapTupleHeader) x);
+	tuple_data.t_tableOid = InvalidOid;
+	tuple_data.t_data = (HeapTupleHeader) x;
 
-    heap_deform_tuple(&tuple_data, tuple_desc, attrs, is_null);
+	heap_deform_tuple(&tuple_data, tuple_desc, attrs, is_null);
 
-    field_names_hash = scm_c_make_hash_table(natts);
-    type_names = SCM_EOL;
-    values = scm_c_make_vector(natts, SCM_EOL);
+	attr_names_hash = scm_c_make_hash_table(natts);
+	type_names = SCM_EOL;
+	values = scm_c_make_vector(natts, SCM_EOL);
 
-    for (int i = natts-1; i >= 0; i--) {
-        if (!is_null[i]) {
-            Oid att_type_oid = tuple_desc->attrs[i].atttypid;
-            Datum att = attrs[i];
-            SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[i].attname));
+	for (int i = natts-1; i >= 0; i--) {
+		Oid att_type_oid = tuple_desc->attrs[i].atttypid;
+		SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[i].attname));
 
-            scm_hash_set_x(field_names_hash, symbol, scm_from_int(i));
-            type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
-            scm_c_vector_set_x(values, i, datum_to_scm(att, att_type_oid));
-        }
-    }
+		scm_hash_set_x(attr_names_hash, symbol, scm_from_int(i));
+		type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
 
-    pfree(attrs);
-    pfree(is_null);
-    ReleaseTupleDesc(tuple_desc);
+		if (!is_null[i])
+			scm_c_vector_set_x(values, i, datum_to_scm(attrs[i], att_type_oid));
+	}
 
-    return scm_call_3(make_record_proc, field_names_hash, type_names, values);
+	pfree(attrs);
+	pfree(is_null);
+	ReleaseTupleDesc(tuple_desc);
+
+	return scm_call_3(make_record_proc, attr_names_hash, type_names, values);
 }
 
 SCM type_desc_expr(Oid type_oid)
 {
-    HeapTuple type_tuple;
-    Form_pg_type type_form;
-    char *type_name;
+	HeapTuple type_tuple;
+	Form_pg_type type_form;
+	char *type_name;
 
-    // Look up the type by its OID in the system cache
-    type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
-    if (!HeapTupleIsValid(type_tuple))
-    {
-        elog(ERROR, "Cache lookup failed for type %u", type_oid);
-    }
+	// Look up the type by its OID in the system cache
+	type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+	if (!HeapTupleIsValid(type_tuple))
+	{
+		elog(ERROR, "Cache lookup failed for type %u", type_oid);
+	}
 
-    // Extract the type information from the tuple
-    type_form = (Form_pg_type) GETSTRUCT(type_tuple);
+	// Extract the type information from the tuple
+	type_form = (Form_pg_type) GETSTRUCT(type_tuple);
 
-    // Get the name of the type
-    type_name = NameStr(type_form->typname);
+	// Get the name of the type
+	type_name = NameStr(type_form->typname);
 
-    // Don't forget to release the tuple when done
-    ReleaseSysCache(type_tuple);
+	// Don't forget to release the tuple when done
+	ReleaseSysCache(type_tuple);
 
-    return scm_from_locale_symbol(type_name);
+	return scm_from_locale_symbol(type_name);
 }
 
 
@@ -1300,15 +1301,15 @@ SCM datum_timestamptz_to_scm(Datum x, Oid type_oid)
 	}
 	else {
 		return scm_call_8(
-		                  make_date_proc,
-		                  scm_from_long(msec * 1000),
-		                  scm_from_int(tm.tm_sec),
-		                  scm_from_int(tm.tm_min),
-		                  scm_from_int(tm.tm_hour),
-		                  scm_from_int(tm.tm_mday),
-		                  scm_from_int(tm.tm_mon),
-		                  scm_from_int(tm.tm_year),
-		                  scm_from_int(tz_offset));
+			make_date_proc,
+			scm_from_long(msec * 1000),
+			scm_from_int(tm.tm_sec),
+			scm_from_int(tm.tm_min),
+			scm_from_int(tm.tm_hour),
+			scm_from_int(tm.tm_mday),
+			scm_from_int(tm.tm_mon),
+			scm_from_int(tm.tm_year),
+			scm_from_int(tz_offset));
 	}
 }
 
@@ -1393,10 +1394,10 @@ SCM datum_time_to_scm(Datum x, Oid type_oid)
 
 	if (time2tm(DatumGetTimeADT(x), &tm, &msec) == 0) {
 		return scm_call_3(
-		                  make_time_proc,
-		                  time_monotonic_symbol,
-		                  scm_from_long(msec * 1000),
-		                  scm_from_int(tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600));
+			make_time_proc,
+			time_monotonic_symbol,
+			scm_from_long(msec * 1000),
+			scm_from_int(tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600));
 	}
 	else {
 		elog(ERROR, "Invalid time");
@@ -1455,10 +1456,10 @@ SCM datum_timetz_to_scm(Datum x, Oid type_oid)
 			secs += SECS_PER_DAY;
 
 		return scm_call_3(
-		                  make_time_proc,
-		                  time_monotonic_symbol,
-		                  scm_from_long(msec * 1000),
-		                  scm_from_int(secs));
+			make_time_proc,
+			time_monotonic_symbol,
+			scm_from_long(msec * 1000),
+			scm_from_int(secs));
 	}
 	else {
 		elog(ERROR, "Invalid time");
@@ -1500,13 +1501,13 @@ SCM datum_interval_to_scm(Datum x, Oid type_oid)
 	Interval *interval = DatumGetIntervalP(x);
 
 	return scm_call_3(
-	                  make_time_proc,
-	                  time_duration_symbol,
-	                  scm_from_long((interval->time % USECS_PER_SEC) * NS_PER_USEC),
-	                  scm_from_long(
-	                                (int64)interval->month * SECS_PER_MONTH
-	                                + (int64)interval->day * SECS_PER_DAY
-	                                + interval->time / USECS_PER_SEC));
+		make_time_proc,
+		time_duration_symbol,
+		scm_from_long((interval->time % USECS_PER_SEC) * NS_PER_USEC),
+		scm_from_long(
+			(int64)interval->month * SECS_PER_MONTH
+			+ (int64)interval->day * SECS_PER_DAY
+			+ interval->time / USECS_PER_SEC));
 }
 
 Datum scm_to_datum_interval(SCM x, Oid type_oid)
@@ -1518,9 +1519,9 @@ Datum scm_to_datum_interval(SCM x, Oid type_oid)
 	interval->month = scm_to_int(scm_floor_quotient(seconds, scm_from_int(SECS_PER_MONTH)));
 
 	interval->day = scm_to_int(
-	                           scm_floor_quotient(
-	                                              scm_floor_remainder(seconds, scm_from_int(SECS_PER_MONTH)),
-	                                              scm_from_int(SECS_PER_DAY)));
+		scm_floor_quotient(
+			scm_floor_remainder(seconds, scm_from_int(SECS_PER_MONTH)),
+			scm_from_int(SECS_PER_DAY)));
 
 	interval->time =
 		scm_to_long(scm_floor_remainder(seconds, scm_from_int(SECS_PER_DAY))) * USECS_PER_SEC
@@ -2473,9 +2474,8 @@ bool is_enum_type(Oid type_oid)
 SCM spi_execute(SCM command, SCM read_only, SCM count)
 {
 	int ret;
-	SCM type_oids;
-	SCM rows;
 	SCM rows_processed;
+	SCM table;
 
 	if (!scm_is_string(command)) {
 		// TODO
@@ -2502,42 +2502,49 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 	case SPI_OK_DELETE_RETURNING:
 	case SPI_OK_UPDATE_RETURNING: {
 
-		TupleDesc tupdesc;
+		TupleDesc tuple_desc;
+		SCM attr_names_hash, records, type_names;
 
-		tupdesc = SPI_tuptable->tupdesc;
+		tuple_desc = SPI_tuptable->tupdesc;
 
-		type_oids = scm_c_make_vector(tupdesc->natts, SCM_EOL);
+		attr_names_hash = scm_c_make_hash_table(tuple_desc->natts);
+		type_names = SCM_EOL;
 
-		for (int i = 0; i < tupdesc->natts; i++) {
-			FormData_pg_attribute *attr = &tupdesc->attrs[i];
-			scm_c_vector_set_x(type_oids, i, scm_from_int32(attr->atttypid));
+		for (int col = tuple_desc->natts-1; col >= 0; col--) {
+			Oid att_type_oid = tuple_desc->attrs[col].atttypid;
+			SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[col].attname));
+			scm_hash_set_x(attr_names_hash, symbol, scm_from_int(col));
+			type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
 		}
 
-		rows = scm_c_make_vector(SPI_tuptable->numvals, SCM_EOL);
+		records = scm_c_make_vector(SPI_tuptable->numvals, SCM_EOL);
 
-		for (long i = 0; i < SPI_tuptable->numvals; i++) {
+		for (long row = 0; row < SPI_tuptable->numvals; row++) {
 
-			HeapTuple tuple = SPI_tuptable->vals[i];
-			SCM row = scm_c_make_vector(tupdesc->natts, SCM_EOL);
+			HeapTuple tuple = SPI_tuptable->vals[row];
+			SCM attrs = scm_c_make_vector(tuple_desc->natts, SCM_EOL);
+			SCM record;
 
-			for (int j = 0; j < tupdesc->natts; j++) {
+			for (int col = 0; col < tuple_desc->natts; col++) {
 
 				bool is_null;
-				Datum datum = SPI_getbinval(tuple, tupdesc, j+1, &is_null);
-				Oid type_oid = tupdesc->attrs[j].atttypid;
+				Datum datum = SPI_getbinval(tuple, tuple_desc, col+1, &is_null);
+				Oid type_oid = tuple_desc->attrs[col].atttypid;
 
 				if (!is_null)
-					scm_c_vector_set_x(row, j, datum_to_scm(datum, type_oid));
+					scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
 			}
 
-			scm_c_vector_set_x(rows, i, row);
+			record = scm_call_3(make_record_proc, attr_names_hash, type_names, attrs);
+			scm_c_vector_set_x(records, row, record);
 		}
+
+		table = scm_call_3(make_table_proc, attr_names_hash, type_names, records);
 
 		break;
 	}
 	default:
-		rows = scm_c_make_vector(0, SCM_EOL);
-		type_oids = scm_c_make_vector(0, SCM_EOL);
+		table = SCM_BOOL_F;
 		break;
 	}
 
@@ -2545,7 +2552,7 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 
 	SPI_finish();
 
-	return scm_values(scm_list_3(rows, type_oids, rows_processed));
+	return scm_values(scm_list_2(table, rows_processed));
 }
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
@@ -2593,11 +2600,11 @@ static size_t checkStringLen(size_t len)
 {
 	if (len > JENTRY_OFFLENMASK)
 		ereport(
-		        ERROR,
-		        (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-		         errmsg("string too long to represent as jsonb string"),
-		         errdetail("Due to an implementation restriction, jsonb strings cannot exceed %d bytes.",
-		                   JENTRY_OFFLENMASK)));
+			ERROR,
+			(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			 errmsg("string too long to represent as jsonb string"),
+			 errdetail("Due to an implementation restriction, jsonb strings cannot exceed %d bytes.",
+			           JENTRY_OFFLENMASK)));
 
 	return len;
 }
@@ -2653,77 +2660,77 @@ static void jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype)
 	Datum  numd;
 
 	switch (tokentype)
-		{
+	{
 
-		case JSON_TOKEN_STRING:
-			Assert(token != NULL);
-			v.type = jbvString;
-			v.val.string.len = checkStringLen(strlen(token));
-			v.val.string.val = token;
-			break;
-		case JSON_TOKEN_NUMBER:
+	case JSON_TOKEN_STRING:
+		Assert(token != NULL);
+		v.type = jbvString;
+		v.val.string.len = checkStringLen(strlen(token));
+		v.val.string.val = token;
+		break;
+	case JSON_TOKEN_NUMBER:
 
-			/*
-			 * No need to check size of numeric values, because maximum
-			 * numeric size is well below the JsonbValue restriction
-			 */
-			Assert(token != NULL);
-			v.type = jbvNumeric;
+		/*
+		 * No need to check size of numeric values, because maximum
+		 * numeric size is well below the JsonbValue restriction
+		 */
+		Assert(token != NULL);
+		v.type = jbvNumeric;
 
-			numd = DirectFunctionCall3(
-			                           numeric_in,
-			                           CStringGetDatum(token),
-			                           ObjectIdGetDatum(InvalidOid),
-			                           Int32GetDatum(-1));
+		numd = DirectFunctionCall3(
+			numeric_in,
+			CStringGetDatum(token),
+			ObjectIdGetDatum(InvalidOid),
+			Int32GetDatum(-1));
 
-			v.val.numeric = DatumGetNumeric(numd);
-			break;
-		case JSON_TOKEN_TRUE:
-			v.type = jbvBool;
-			v.val.boolean = true;
-			break;
-		case JSON_TOKEN_FALSE:
-			v.type = jbvBool;
-			v.val.boolean = false;
-			break;
-		case JSON_TOKEN_NULL:
-			v.type = jbvNull;
-			break;
-		default:
-			/* should not be possible */
-			elog(ERROR, "invalid json token type");
-			break;
-		}
+		v.val.numeric = DatumGetNumeric(numd);
+		break;
+	case JSON_TOKEN_TRUE:
+		v.type = jbvBool;
+		v.val.boolean = true;
+		break;
+	case JSON_TOKEN_FALSE:
+		v.type = jbvBool;
+		v.val.boolean = false;
+		break;
+	case JSON_TOKEN_NULL:
+		v.type = jbvNull;
+		break;
+	default:
+		/* should not be possible */
+		elog(ERROR, "invalid json token type");
+		break;
+	}
 
 	if (_state->parseState == NULL)
-		{
-			/* single scalar */
-			JsonbValue va;
+	{
+		/* single scalar */
+		JsonbValue va;
 
-			va.type = jbvArray;
-			va.val.array.rawScalar = true;
-			va.val.array.nElems = 1;
+		va.type = jbvArray;
+		va.val.array.rawScalar = true;
+		va.val.array.nElems = 1;
 
-			_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, &va);
-			_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
-			_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
-		}
+		_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, &va);
+		_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
+		_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
+	}
 	else
-		{
-			JsonbValue *o = &_state->parseState->contVal;
+	{
+		JsonbValue *o = &_state->parseState->contVal;
 
-			switch (o->type)
-				{
-				case jbvArray:
-					_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
-					break;
-				case jbvObject:
-					_state->res = pushJsonbValue(&_state->parseState, WJB_VALUE, &v);
-					break;
-				default:
-					elog(ERROR, "unexpected parent of nested structure");
-				}
+		switch (o->type)
+		{
+		case jbvArray:
+			_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
+			break;
+		case jbvObject:
+			_state->res = pushJsonbValue(&_state->parseState, WJB_VALUE, &v);
+			break;
+		default:
+			elog(ERROR, "unexpected parent of nested structure");
 		}
+	}
 }
 
 /* End quoted code */

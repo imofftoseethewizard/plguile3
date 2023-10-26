@@ -685,9 +685,8 @@ from (select 'a', 98, 2.99792458e8::float8) t(text, int, float8);
 -- SPI Integration
 --
 
-create function f_execute_simple() returns int4 as $$
-(vector-ref (vector-ref (execute "select 1") 0) 0)
-$$ language scruple;
+create function f_execute_simple() returns int4 as '(scalar (execute "select 1"))'
+language scruple;
 
 select is(f_execute_simple(), 1, 'execute: simple');
 
