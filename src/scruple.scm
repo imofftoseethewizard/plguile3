@@ -32,7 +32,7 @@
   table?
   (attr-names-hash table-attr-names-hash)
   (types table-types)
-  (records table-records))
+  (records table-rows))
 
 (define (attr-name->number r k)
   (or (hash-ref (record-attr-names-hash r) k)
@@ -45,10 +45,10 @@
     (vector-ref (record-attrs r) i)))
 
 (define (table-row t row)
-  (vector-ref (table-records t) row))
+  (vector-ref (table-rows t) row))
 
 (define (table-length t)
-  (vector-length (table-records t)))
+  (vector-length (table-rows t)))
 
 (define (table-width t)
   (length (table-types t)))

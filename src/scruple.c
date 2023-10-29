@@ -3,6 +3,7 @@
 #include <postgres.h>
 #include <fmgr.h>
 #include <funcapi.h>
+#include <miscadmin.h>
 #include <access/genam.h>
 #include <access/htup_details.h>
 #include <access/relation.h>
@@ -13,6 +14,7 @@
 #include <catalog/pg_proc.h>
 #include <catalog/pg_type.h>
 #include <executor/spi.h>
+#include "executor/tuptable.h"
 #include <lib/stringinfo.h>
 #include <mb/pg_wchar.h>
 #include <utils/array.h>
@@ -28,6 +30,7 @@
 #include "utils/lsyscache.h"
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
+#include "utils/tuplestore.h"
 #include <utils/typcache.h>
 #include <utils/uuid.h>
 #include <utils/varbit.h>
@@ -168,6 +171,7 @@ static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc 
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static bool is_composite_type(Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
+static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
@@ -175,6 +179,8 @@ static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
 static Datum convert_result_to_record_datum(SCM result);
 static TupleDesc record_type_tuple_desc(SCM x, int len);
 static bool is_record(SCM x);
+static bool is_table(SCM x);
+static bool is_set_returning(HeapTuple proc_tuple);
 static bool is_enum_type(Oid type_oid);
 static SCM type_desc_expr(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
@@ -221,6 +227,7 @@ static SCM is_path_proc;
 static SCM is_point_proc;
 static SCM is_polygon_proc;
 static SCM is_record_proc;
+static SCM is_table_proc;
 static SCM is_time_proc;
 static SCM line_a_proc;
 static SCM line_b_proc;
@@ -255,6 +262,7 @@ static SCM polygon_points_proc;
 static SCM record_attrs_proc;
 static SCM record_types_proc;
 static SCM string_to_decimal_proc;
+static SCM table_rows_proc;
 static SCM time_duration_symbol;
 static SCM time_monotonic_symbol;
 static SCM time_nanosecond_proc;
@@ -412,6 +420,7 @@ void _PG_init(void)
 	is_point_proc          = scm_eval_string(scm_from_locale_string("point?"));
 	is_polygon_proc        = scm_eval_string(scm_from_locale_string("polygon?"));
 	is_record_proc         = scm_eval_string(scm_from_locale_string("record?"));
+	is_table_proc          = scm_eval_string(scm_from_locale_string("table?"));
 	is_time_proc           = scm_eval_string(scm_from_locale_string("time?"));
 	line_a_proc            = scm_eval_string(scm_from_locale_string("line-a"));
 	line_b_proc            = scm_eval_string(scm_from_locale_string("line-b"));
@@ -445,6 +454,7 @@ void _PG_init(void)
 	record_attrs_proc      = scm_eval_string(scm_from_locale_string("record-attrs"));
 	record_types_proc      = scm_eval_string(scm_from_locale_string("record-types"));
 	polygon_points_proc    = scm_eval_string(scm_from_locale_string("polygon-points"));
+	table_rows_proc        = scm_eval_string(scm_from_locale_string("table-rows"));
 	time_duration_symbol   = scm_eval_string(scm_from_locale_string("time-duration"));
 	time_monotonic_symbol  = scm_eval_string(scm_from_locale_string("time-monotonic"));
 	time_nanosecond_proc   = scm_eval_string(scm_from_locale_string("time-nanosecond"));
@@ -550,6 +560,8 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 
 	ReleaseSysCache(proc_tuple);
 
+	elog(NOTICE, "scruple_call: done");
+
 	PG_RETURN_DATUM(result);
 }
 
@@ -562,6 +574,36 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 	typefunc_class = get_call_result_type(fcinfo, &rettype_oid, &tuple_desc);
 
 	elog(NOTICE, "convert_result_to_datum: return type oid: %d", rettype_oid);
+
+	if (is_set_returning(proc_tuple)) {
+
+		ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+
+		switch (typefunc_class) {
+
+		case TYPEFUNC_SCALAR:
+			return scm_to_setof_datum(result, rettype_oid, per_query_ctx, rsinfo);
+
+		case TYPEFUNC_COMPOSITE:
+			elog(ERROR, "convert_result_to_datum: setof not implemented");
+			return convert_result_to_composite_datum(result, tuple_desc);
+
+		case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
+			elog(ERROR, "convert_result_to_datum: setof not implemented");
+			return convert_result_to_record_datum(result);
+
+		case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
+		case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
+			elog(ERROR, "convert_result_to_datum: setof not implemented");
+			elog(ERROR, "convert_result_to_datum: not implemented");
+			return (Datum) 0;
+
+		default:
+			elog(ERROR, "convert_result_to_datum: unknown TypeFuncClass value: %d", typefunc_class);
+			return (Datum) 0;
+		}
+	}
 
 	switch (typefunc_class) {
 
@@ -583,6 +625,14 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 		elog(ERROR, "convert_result_to_datum: unknown TypeFuncClass value: %d", typefunc_class);
 		return (Datum) 0;
 	}
+}
+
+bool is_set_returning(HeapTuple proc_tuple)
+{
+	Form_pg_proc proc;
+
+	proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
+	return proc->proretset;
 }
 
 Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
@@ -909,6 +959,58 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 	elog(ERROR, "scm_to_datum: conversion function for type OID %u not found", type_oid);
 	// Unreachable
 	return (Datum)0;
+}
+
+Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo)
+{
+    SCM rows;
+    Datum result;
+    Tuplestorestate *tupstore;
+    TupleDesc tupdesc;
+    MemoryContext prior_ctx;
+
+    // Put tuplestore in context of the result, not the context of the function call. It will
+    // otherwise be reclaimed and cause a crash when Postgres attempts to use the result.
+    prior_ctx = MemoryContextSwitchTo(ctx);
+
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+
+    tupdesc = CreateTemplateTupleDesc(1);
+    TupleDescInitEntry(tupdesc, 1, "", type_oid, -1, 0);
+
+    if (is_table(x))
+        rows = scm_call_1(table_rows_proc, x);
+    else
+        rows = x;
+
+    while (rows != SCM_EOL) {
+        SCM item = scm_car(rows);
+        bool is_null = item == SCM_EOL;
+        Datum value;
+
+        if (is_null)
+	        value = PointerGetDatum(NULL);
+        else
+            value = scm_to_datum(item, type_oid);
+
+        // Put the row into the tuplestore
+        tuplestore_putvalues(tupstore, tupdesc, &value, &is_null);
+
+        rows = scm_cdr(rows);
+    }
+
+    // Prepare for tuplestore consumption (optional)
+    tuplestore_donestoring(tupstore);
+
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+
+    // Create a result tuplestore to be returned
+    result = PointerGetDatum(tupstore);
+
+    MemoryContextSwitchTo(prior_ctx);
+
+    return result;
 }
 
 Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid)
@@ -2393,6 +2495,11 @@ bool is_polygon(SCM x)
 bool is_record(SCM x)
 {
 	return scm_is_true(scm_call_1(is_record_proc, x));
+}
+
+bool is_table(SCM x)
+{
+	return scm_is_true(scm_call_1(is_table_proc, x));
 }
 
 bool is_time(SCM x)

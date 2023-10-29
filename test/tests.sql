@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(124);
+select plan(126);
 
 --------------------------------------------------------------------------------
 --
@@ -679,6 +679,28 @@ select is(f_record_arg_type_name(row('foo', 5, 1.41)::simple_record), 'text', 'r
 
 select ok(f_ret_record() = t, 'record: simple return test')
 from (select 'a', 98, 2.99792458e8::float8) t(text, int, float8);
+
+--------------------------------------------------------------------------------
+--
+-- Set Returning Functions
+--
+
+create function f_setof_text() returns setof text as $$(list "one" "two")$$ language scruple;
+
+create function f_setof_record() returns setof record as $$
+(let ((types '(text int4 float8))) ;; '
+  (make-table #f types
+              (list->vector (list (make-record #f types #(1 "one" 1.0))
+                                  (make-record #f types #(2 "two" 2.0))))))
+$$
+language scruple;
+
+select ok(array_agg(t) = '{one,two}'::text[], 'setof: text')
+from f_setof_text() t(text);
+
+select ok(t.name = 'two', 'setof: record')
+from f_setof_record() t(id int, name text, weight float8)
+where t.id = 2;
 
 --------------------------------------------------------------------------------
 --
