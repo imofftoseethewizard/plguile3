@@ -175,8 +175,9 @@ static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSe
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
-static Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc);
-static Datum convert_result_to_record_datum(SCM result);
+static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
+static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static Datum scm_to_record_datum(SCM result);
 static TupleDesc record_type_tuple_desc(SCM x, int len);
 static bool is_record(SCM x);
 static bool is_table(SCM x);
@@ -586,12 +587,11 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 			return scm_to_setof_datum(result, rettype_oid, per_query_ctx, rsinfo);
 
 		case TYPEFUNC_COMPOSITE:
-			elog(ERROR, "convert_result_to_datum: setof not implemented");
-			return convert_result_to_composite_datum(result, tuple_desc);
+			return scm_to_setof_composite_datum(result, tuple_desc, per_query_ctx, rsinfo);
 
 		case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
 			elog(ERROR, "convert_result_to_datum: setof not implemented");
-			return convert_result_to_record_datum(result);
+			return scm_to_record_datum(result);
 
 		case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 		case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
@@ -611,10 +611,10 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 		return scm_to_datum(result, rettype_oid);
 
 	case TYPEFUNC_COMPOSITE:
-		return convert_result_to_composite_datum(result, tuple_desc);
+		return scm_to_composite_datum(result, tuple_desc);
 
 	case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
-		return convert_result_to_record_datum(result);
+		return scm_to_record_datum(result);
 
 	case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 	case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
@@ -635,7 +635,7 @@ bool is_set_returning(HeapTuple proc_tuple)
 	return proc->proretset;
 }
 
-Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
+Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc)
 {
 	HeapTuple ret_heap_tuple;
 
@@ -645,7 +645,7 @@ Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
 	Datum result_datum;
 
 	if (scm_c_nvalues(result) != tuple_desc->natts)
-		elog(ERROR, "convert_result_to_datum: num values %zu does not equal num out params %d", scm_c_nvalues(result), tuple_desc->natts);
+		elog(ERROR, "scm_to_datum: num values %zu does not equal num out params %d", scm_c_nvalues(result), tuple_desc->natts);
 
 	ret_values = (Datum *) palloc0(sizeof(Datum) * tuple_desc->natts);
 	ret_is_null = (bool *) palloc0(sizeof(bool) * tuple_desc->natts);
@@ -656,7 +656,7 @@ Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
 		SCM v = scm_c_value_ref(result, i);
 
 		// TODO: handle attr->atttypmod
-		elog(NOTICE, "convert_result_to_datum: slot %d, attr->atttypid: %d", i, attr->atttypid);
+		elog(NOTICE, "scm_to_datum: slot %d, attr->atttypid: %d", i, attr->atttypid);
 		if (v == SCM_EOL)
 			ret_is_null[i] = true;
 		else
@@ -672,7 +672,81 @@ Datum convert_result_to_composite_datum(SCM result, TupleDesc tuple_desc)
 	return result_datum;
 }
 
-Datum convert_result_to_record_datum(SCM result)
+Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo)
+{
+    SCM rows;
+    Datum result;
+    Tuplestorestate *tupstore;
+    MemoryContext prior_ctx;
+    Datum *attrs;
+    bool *is_null;
+
+    // Put tuplestore in context of the result, not the context of the function call. It will
+    // otherwise be reclaimed and cause a crash when Postgres attempts to use the result.
+    prior_ctx = MemoryContextSwitchTo(ctx);
+
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+
+    if (is_table(x))
+        rows = scm_call_1(table_rows_proc, x);
+    else
+        rows = x;
+
+    attrs = (Datum *) palloc(sizeof(Datum) * tuple_desc->natts);
+    is_null = (bool *) palloc(sizeof(bool) * tuple_desc->natts);
+
+    while (rows != SCM_EOL) {
+        SCM item = scm_car(rows);
+
+        if (is_record(item))
+	        item = scm_call_1(record_attrs_proc, item);
+
+        if (!scm_is_vector(item))
+	        elog(ERROR, "scm_to_setof_composite_datum: vector expected, not %s", scm_to_string(item));
+
+        if (scm_c_vector_length(item) != tuple_desc->natts)
+	        elog(ERROR, "scm_to_setof_composite_datum: num values %zu does not equal record size %d", scm_c_vector_length(item), tuple_desc->natts);
+
+        for (int i = 0; i < tuple_desc->natts; ++i) {
+
+	        Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
+	        SCM v = scm_c_vector_ref(item, i);
+
+	        // TODO: handle attr->atttypmod
+	        if (v == SCM_EOL) {
+		        is_null[i] = true;
+		        attrs[i] = PointerGetDatum(NULL);
+	        }
+	        else {
+		        is_null[i] = false;
+		        attrs[i] = scm_to_datum(v, attr->atttypid);
+	        }
+        }
+
+        // Put the row into the tuplestore
+        tuplestore_putvalues(tupstore, tuple_desc, attrs, is_null);
+
+        rows = scm_cdr(rows);
+    }
+
+    pfree(attrs);
+    pfree(is_null);
+
+    // Prepare for tuplestore consumption (optional)
+    tuplestore_donestoring(tupstore);
+
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+
+    // Create a result tuplestore to be returned
+    result = PointerGetDatum(tupstore);
+
+    MemoryContextSwitchTo(prior_ctx);
+
+    return result;
+}
+
+Datum scm_to_record_datum(SCM result)
 {
 	HeapTuple ret_heap_tuple;
 

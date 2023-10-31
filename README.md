@@ -17,60 +17,39 @@ of database functions using Guile Scheme.
 
 ## Roadmap
 
-The scope of what might constitute a 1.0.0 release isn't clear yet.
-At a mimimum, it will include support for all built-in types, for
-executing both scheme functions and inline scheme code, for the
-ability to build, prepare, and execute queries, and for global
-settings managing the Guile environment.  Postgres has a complex
-security and authorization model, and a bit of dynamic scoping in that
-the value of the `search_path` setting can alter the behavior of
-`plpgsql` functions.  A v1 release should isolate function bodies from
-each other in a way that does not sabotage security -- at the very
-least -- and possibly allows the same sort of scoping changes as in
-`plpgsql` using `search_path`, even though that is of questionable
-utility. A v1 release should also include sufficient documentation to
-make the project useful. Error messages should be helpful and conform
-to the message, detail, hint format.  It should support all versions
-of Postgres that have not hit their end of life, which at this point
-in time will likely mean 12 to 16.
+The scope of the 1.0 release is detailed below.
 
 The 0.5.x versions will provide Guile primitives for accessing
 Postgres' Server Programming Interface so that queries may be made
 from scheme code. In addition, support for arrays, records, and set
-returning functions will be added. To return more complex values from
-a scheme function, and to do so with precision requires providing some
-tools to the scheme environment. At the very least, some equivalent of
-`::`, such that we could specify `(:: 'int4 expr)`. The question is,
-should this be extended to include converting complex values to
-tuples, tables, arrays, and etc, possibly recursively applied? For
-example, we could have
+returning functions will be added.
 
-    (:: '(table int8 text (array (record timestamptz float8)) expr)
+The 0.7.x versions will add support for domain types.
 
-for some labeled timeseries data.
-
-The 0.7.x versions will add support for cursors and iterative query
+The 0.9.x versions will add support for cursors and iterative query
 result handling.
 
-The 0.9.x versions will add support for triggers.
+The 0.11.x versions will add support for triggers.
 
-The 0.11.x versions will add support for inline calls, i.e. "do"
+The 0.13.x versions will add support for inline calls, i.e. "do"
 statements.
 
-The 0.13.x versions will provide function isolation, and initialization
+The 0.15.x versions will provide function isolation, and initialization
 and configuration settings.
 
-The 0.15.x versions will normalize error messages and properly trap
+The 0.17.x versions will normalize error messages and properly trap
 and report errors from Guile.
 
-The 0.17.x versions will refine and refactor scruple.scm.
+The 0.19.x versions will refine and refactor scruple.scm.
 
-The 0.19.x versions will include documentation and examples.
+The 0.21.x versions will include documentation and examples.
 
-The 0.21.x versions will provide support for Postgres 12, 13, 15, and
+The 0.23.x versions will provide support for Postgres 12, 13, 15, and
 16.
 
-The 0.23.x versions will provide packaging for pgxn, deb, and rpm.
+The 0.25.x versions will provide packaging for pgxn, deb, and rpm.
+
+The 0.26.x versions will be the pre-1.0 beta.
 
 Post 1.0 improvements:
 
