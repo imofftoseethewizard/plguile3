@@ -21,18 +21,23 @@
   (scale decimal-scale))
 
 (define-record-type record
-  (make-record attr-names-hash types attrs)
+  (make-record types attrs attr-names attr-names-hash)
   record?
+  (attrs record-attrs)
+  (attr-names record-attr-names)
   (attr-names-hash record-attr-names-hash)
-  (types record-types)
-  (attrs record-attrs))
+  (types record-types))
 
 (define-record-type table
-  (make-table attr-names-hash types records)
+  (make-table types records attr-names attr-names-hash)
   table?
+  (attr-names table-attr-names)
   (attr-names-hash table-attr-names-hash)
-  (types table-types)
-  (records table-rows))
+  (records table-rows)
+  (types table-types))
+
+(define (alt-names x)
+  (record-attr-names x))
 
 (define (attr-name->number r k)
   (or (hash-ref (record-attr-names-hash r) k)
@@ -45,10 +50,10 @@
     (vector-ref (record-attrs r) i)))
 
 (define (table-row t row)
-  (vector-ref (table-rows t) row))
+  (list-ref (table-rows t) row))
 
 (define (table-length t)
-  (vector-length (table-rows t)))
+  (length (table-rows t)))
 
 (define (table-width t)
   (length (table-types t)))

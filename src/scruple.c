@@ -178,7 +178,10 @@ static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
 static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Datum scm_to_record_datum(SCM result);
-static TupleDesc record_type_tuple_desc(SCM x, int len);
+static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static TupleDesc record_tuple_desc(SCM x);
+static TupleDesc table_tuple_desc(SCM x);
+static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
 static bool is_record(SCM x);
 static bool is_table(SCM x);
 static bool is_set_returning(HeapTuple proc_tuple);
@@ -260,10 +263,15 @@ static SCM point_x_proc;
 static SCM point_y_proc;
 static SCM polygon_boundbox_proc;
 static SCM polygon_points_proc;
+static SCM record_attr_names_proc;
+static SCM record_attr_names_hash_proc;
 static SCM record_attrs_proc;
 static SCM record_types_proc;
 static SCM string_to_decimal_proc;
+static SCM table_attr_names_proc;
+static SCM table_attr_names_hash_proc;
 static SCM table_rows_proc;
+static SCM table_types_proc;
 static SCM time_duration_symbol;
 static SCM time_monotonic_symbol;
 static SCM time_nanosecond_proc;
@@ -453,9 +461,14 @@ void _PG_init(void)
 	point_y_proc           = scm_eval_string(scm_from_locale_string("point-y"));
 	polygon_boundbox_proc  = scm_eval_string(scm_from_locale_string("polygon-boundbox"));
 	record_attrs_proc      = scm_eval_string(scm_from_locale_string("record-attrs"));
+	record_attr_names_proc      = scm_eval_string(scm_from_locale_string("record-attr-names"));
+	record_attr_names_hash_proc      = scm_eval_string(scm_from_locale_string("record-attr-names-hash"));
 	record_types_proc      = scm_eval_string(scm_from_locale_string("record-types"));
 	polygon_points_proc    = scm_eval_string(scm_from_locale_string("polygon-points"));
+	table_attr_names_proc      = scm_eval_string(scm_from_locale_string("table-attr-names"));
+	table_attr_names_hash_proc = scm_eval_string(scm_from_locale_string("table-attr-names-hash"));
 	table_rows_proc        = scm_eval_string(scm_from_locale_string("table-rows"));
+	table_types_proc       = scm_eval_string(scm_from_locale_string("table-types"));
 	time_duration_symbol   = scm_eval_string(scm_from_locale_string("time-duration"));
 	time_monotonic_symbol  = scm_eval_string(scm_from_locale_string("time-monotonic"));
 	time_nanosecond_proc   = scm_eval_string(scm_from_locale_string("time-nanosecond"));
@@ -590,8 +603,7 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 			return scm_to_setof_composite_datum(result, tuple_desc, per_query_ctx, rsinfo);
 
 		case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
-			elog(ERROR, "convert_result_to_datum: setof not implemented");
-			return scm_to_record_datum(result);
+			return scm_to_setof_record_datum(result, per_query_ctx, rsinfo);
 
 		case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 		case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
@@ -764,7 +776,7 @@ Datum scm_to_record_datum(SCM result)
 
 	data = scm_call_1(record_attrs_proc, result);
 	len = scm_c_vector_length(data);
-	tuple_desc = record_type_tuple_desc(scm_call_1(record_types_proc, result), len);
+	tuple_desc = record_tuple_desc(result);
 
 	ret_values = (Datum *) palloc0(sizeof(Datum) * len);
 	ret_is_null = (bool *) palloc0(sizeof(bool) * len);
@@ -789,20 +801,153 @@ Datum scm_to_record_datum(SCM result)
 	return result_datum;
 }
 
-TupleDesc record_type_tuple_desc(SCM type_desc_list, int len)
+Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
 {
-	int i;
-	TupleDesc tupdesc;
+    SCM rows;
+    SCM default_types = SCM_BOOL_F;
+    SCM prior_item_types = SCM_BOOL_F;
+    Datum result;
+	TupleDesc default_tuple_desc = NULL;
+	TupleDesc prior_item_tuple_desc = NULL;
+    Tuplestorestate *tupstore;
+    MemoryContext prior_ctx;
 
-	// Create an empty TupleDesc
-	tupdesc = CreateTemplateTupleDesc(len);
+    // Put tuplestore in context of the result, not the context of the function call. It will
+    // otherwise be reclaimed and cause a crash when Postgres attempts to use the result.
+    prior_ctx = MemoryContextSwitchTo(ctx);
 
-	for (i = 0; i < len; i++) {
-		SCM scm_type_name = scm_car(type_desc_list);
-		char *type_name_cstr = scm_to_locale_string(scm_symbol_to_string(scm_type_name));
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+
+
+    if (!is_table(x))
+        rows = x;
+
+    else {
+	    default_types = scm_call_1(table_types_proc, x);
+        rows = scm_call_1(table_rows_proc, x);
+        default_tuple_desc = table_tuple_desc(x);
+    }
+
+    while (rows != SCM_EOL) {
+	    SCM rec_attrs;
+        SCM item = scm_car(rows);
+        SCM types = SCM_BOOL_F;
+        TupleDesc tuple_desc;
+        Datum *attrs;
+        bool *is_null;
+
+        if (is_record(item)) {
+	        rec_attrs = scm_call_1(record_attrs_proc, item);
+	        types = scm_call_1(record_types_proc, item);
+
+	        if (scm_is_eq(types, default_types))
+		        tuple_desc = default_tuple_desc;
+
+	        else if (scm_is_eq(types, prior_item_types))
+		        tuple_desc = prior_item_tuple_desc;
+
+	        else {
+		        tuple_desc = record_tuple_desc(item);
+		        prior_item_types = types;
+		        prior_item_tuple_desc = tuple_desc;
+	        }
+        }
+        else {
+	        rec_attrs = item;
+	        types = default_types;
+	        tuple_desc = default_tuple_desc;
+        }
+
+        if (types == SCM_BOOL_F)
+	        elog(ERROR, "scm_to_setof_record_datum: unable to determine types for item %s", scm_to_string(item));
+
+        if (!scm_is_vector(rec_attrs))
+	        elog(ERROR, "scm_to_setof_record_datum: vector expected, not %s", scm_to_string(rec_attrs));
+
+        if (scm_c_vector_length(rec_attrs) != tuple_desc->natts)
+	        elog(ERROR, "scm_to_setof_record_datum: num attributes %zu does not equal record size %d", scm_c_vector_length(rec_attrs), tuple_desc->natts);
+
+        attrs = (Datum *) palloc(sizeof(Datum) * tuple_desc->natts);
+        is_null = (bool *) palloc(sizeof(bool) * tuple_desc->natts);
+
+        for (int i = 0; i < tuple_desc->natts; ++i) {
+
+	        Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
+	        SCM v = scm_c_vector_ref(rec_attrs, i);
+
+	        // TODO: handle attr->atttypmod
+	        if (v == SCM_EOL) {
+		        is_null[i] = true;
+		        attrs[i] = PointerGetDatum(NULL);
+	        }
+	        else {
+		        is_null[i] = false;
+		        attrs[i] = scm_to_datum(v, attr->atttypid);
+	        }
+        }
+
+        // Put the row into the tuplestore
+        tuplestore_putvalues(tupstore, tuple_desc, attrs, is_null);
+
+        pfree(attrs);
+        pfree(is_null);
+
+        rows = scm_cdr(rows);
+    }
+
+    // Prepare for tuplestore consumption (optional)
+    tuplestore_donestoring(tupstore);
+
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+
+    // Create a result tuplestore to be returned
+    result = PointerGetDatum(tupstore);
+
+    MemoryContextSwitchTo(prior_ctx);
+
+    return result;
+}
+
+TupleDesc record_tuple_desc(SCM x)
+{
+	SCM attr_names = scm_call_1(record_attr_names_proc, x);
+	SCM type_desc_list = scm_call_1(record_types_proc, x);
+
+	return build_tuple_desc(attr_names, type_desc_list);
+}
+
+TupleDesc table_tuple_desc(SCM x)
+{
+	SCM attr_names = scm_call_1(table_attr_names_proc, x);
+	SCM type_desc_list = scm_call_1(table_types_proc, x);
+
+	return build_tuple_desc(attr_names, type_desc_list);
+}
+
+TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list)
+{
+	int len = scm_to_int(scm_length(type_desc_list));
+	TupleDesc tupdesc = CreateTemplateTupleDesc(len);
+
+	for (int i = 0; i < len; i++) {
+		SCM type_name = scm_car(type_desc_list);
+		char *type_name_cstr = scm_to_locale_string(scm_symbol_to_string(type_name));
 		Oid typeOid = TypenameGetTypid(type_name_cstr);
 
-		TupleDescInitEntry(tupdesc, (AttrNumber)i+1, type_name_cstr, typeOid, -1, 0);
+		SCM attr_name;
+		char *attr_name_cstr;
+
+		if (attr_names == SCM_EOL || attr_names == SCM_BOOL_F)
+			attr_name_cstr = type_name_cstr;
+
+		else {
+			attr_name = scm_car(attr_names);
+			attr_names = scm_cdr(attr_names);
+			attr_name_cstr = scm_to_locale_string(scm_symbol_to_string(attr_name));
+		}
+
+		TupleDescInitEntry(tupdesc, (AttrNumber)i+1, attr_name_cstr, typeOid, -1, 0);
 
 		type_desc_list = scm_cdr(type_desc_list);
 		free(type_name_cstr);
@@ -1253,7 +1398,7 @@ Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
 
 SCM datum_composite_to_scm(Datum x, Oid type_oid)
 {
-	SCM attr_names_hash, type_names, values;
+	SCM attr_names, attr_names_hash, type_names, values;
 
 	TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, -1);
 	int natts = tuple_desc->natts;
@@ -1270,6 +1415,7 @@ SCM datum_composite_to_scm(Datum x, Oid type_oid)
 	heap_deform_tuple(&tuple_data, tuple_desc, attrs, is_null);
 
 	attr_names_hash = scm_c_make_hash_table(natts);
+	attr_names = SCM_EOL;
 	type_names = SCM_EOL;
 	values = scm_c_make_vector(natts, SCM_EOL);
 
@@ -1277,8 +1423,9 @@ SCM datum_composite_to_scm(Datum x, Oid type_oid)
 		Oid att_type_oid = tuple_desc->attrs[i].atttypid;
 		SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[i].attname));
 
-		scm_hash_set_x(attr_names_hash, symbol, scm_from_int(i));
+		attr_names = scm_cons(symbol, attr_names);
 		type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
+		scm_hash_set_x(attr_names_hash, symbol, scm_from_int(i));
 
 		if (!is_null[i])
 			scm_c_vector_set_x(values, i, datum_to_scm(attrs[i], att_type_oid));
@@ -1288,7 +1435,7 @@ SCM datum_composite_to_scm(Datum x, Oid type_oid)
 	pfree(is_null);
 	ReleaseTupleDesc(tuple_desc);
 
-	return scm_call_3(make_record_proc, attr_names_hash, type_names, values);
+	return scm_call_4(make_record_proc, type_names, values, attr_names, attr_names_hash);
 }
 
 SCM type_desc_expr(Oid type_oid)
@@ -2684,23 +2831,25 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 	case SPI_OK_UPDATE_RETURNING: {
 
 		TupleDesc tuple_desc;
-		SCM attr_names_hash, records, type_names;
+		SCM attr_names, attr_names_hash, records, type_names;
 
 		tuple_desc = SPI_tuptable->tupdesc;
 
-		attr_names_hash = scm_c_make_hash_table(tuple_desc->natts);
+		attr_names = SCM_EOL;
 		type_names = SCM_EOL;
+		attr_names_hash = scm_c_make_hash_table(tuple_desc->natts);
 
 		for (int col = tuple_desc->natts-1; col >= 0; col--) {
 			Oid att_type_oid = tuple_desc->attrs[col].atttypid;
 			SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[col].attname));
-			scm_hash_set_x(attr_names_hash, symbol, scm_from_int(col));
+			attr_names = scm_cons(symbol, attr_names);
 			type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
+			scm_hash_set_x(attr_names_hash, symbol, scm_from_int(col));
 		}
 
-		records = scm_c_make_vector(SPI_tuptable->numvals, SCM_EOL);
+		records = SCM_EOL;
 
-		for (long row = 0; row < SPI_tuptable->numvals; row++) {
+		for (long row = SPI_tuptable->numvals-1; row >= 0 ; row--) {
 
 			HeapTuple tuple = SPI_tuptable->vals[row];
 			SCM attrs = scm_c_make_vector(tuple_desc->natts, SCM_EOL);
@@ -2716,11 +2865,11 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 					scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
 			}
 
-			record = scm_call_3(make_record_proc, attr_names_hash, type_names, attrs);
-			scm_c_vector_set_x(records, row, record);
+			record = scm_call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
+			records = scm_cons(record, records);
 		}
 
-		table = scm_call_3(make_table_proc, attr_names_hash, type_names, records);
+		table = scm_call_4(make_table_proc, type_names, records, attr_names, attr_names_hash);
 
 		break;
 	}

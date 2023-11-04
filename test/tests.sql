@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(127);
+select plan(128);
 
 --------------------------------------------------------------------------------
 --
@@ -671,7 +671,7 @@ create type simple_record as (name text, count int, weight float8);
 create function f_record_arg_by_name(r simple_record) returns text as '(record-ref r ''name)' language scruple;
 create function f_record_arg_by_number(r simple_record) returns numeric as '(record-ref r 2)' language scruple;
 create function f_record_arg_type_name(r simple_record) returns text as '(symbol->string (car (record-types r)))' language scruple;
-create function f_ret_record() returns record as '(make-record #f ''(text int4 float8) #("a" 98 2.99792458e8))' language scruple;
+create function f_ret_record() returns record as '(make-record ''(text int4 float8) #("a" 98 2.99792458e8) ''(s c v) #f)' language scruple;
 
 select is(f_record_arg_by_name(row('foo', 5, 1.41)::simple_record), 'foo', 'record: argument by name');
 select is(f_record_arg_by_number(row('foo', 5, 1.41)::simple_record), 1.41, 'record: argument by number');
@@ -690,10 +690,12 @@ create function f_setof_text() returns setof text as $$(list "one" "two")$$ lang
 create function f_setof_int_array() returns setof int4[] as $$(list #(0 -1) #(1 0))$$ language scruple;
 
 create function f_setof_record() returns setof record as $$
-(let ((types '(text int4 float8))) ;; '
-  (make-table #f types
-              (list (make-record #f types #(1 "one" 1.0))
-                    (make-record #f types #(2 "two" 2.0)))))
+(let ((types '(int4 text float8))) ; '
+  (make-table types
+              (list (make-record types #(1 "one" 1.0) '() #f) ; '
+                    (make-record types #(2 "two" 2.0) '() #f)); '
+              '(a b c) ;'
+              #f))
 $$
 language scruple;
 
@@ -706,6 +708,13 @@ from f_setof_int_array() t;
 select ok(t.name = 'two', 'setof: record')
 from f_setof_record() t(id int, name text, weight float8)
 where t.id = 2;
+
+--do $$ begin raise notice '%s', (select f_setof_record())::text; end $$;
+
+select throws_ok(
+  'select f_setof_record()',
+  'function returning setof record called in context that cannot accept type record',
+  'setof: record');
 
 --------------------------------------------------------------------------------
 --
