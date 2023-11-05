@@ -21,10 +21,9 @@ The scope of the 1.0 release is detailed below.
 
 The 0.5.x versions will provide Guile primitives for accessing
 Postgres' Server Programming Interface so that queries may be made
-from scheme code. In addition, support for arrays, records, and set
-returning functions will be added.
+from scheme code.
 
-The 0.7.x versions will add support for domain types.
+The 0.7.x versions will add support for tsvector, tsquery, and domain types.
 
 The 0.9.x versions will add support for cursors and iterative query
 result handling.

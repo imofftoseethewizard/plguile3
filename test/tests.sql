@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(128);
+select plan(147);
 
 --------------------------------------------------------------------------------
 --
@@ -709,7 +709,9 @@ select ok(t.name = 'two', 'setof: record')
 from f_setof_record() t(id int, name text, weight float8)
 where t.id = 2;
 
---do $$ begin raise notice '%s', (select f_setof_record())::text; end $$;
+-- force call in context where columns are not defined to exercise
+-- convert_result_to_setof_record_datum; otherwise takes code path through
+-- convert_result_to_setof_composite_datum.
 
 select throws_ok(
   'select f_setof_record()',
@@ -724,6 +726,80 @@ select throws_ok(
 create function f_execute_simple() returns int4 as '(scalar (execute "select 1"))'
 language scruple;
 
+create function f_execute_with_args_int2() returns int2 as '(scalar (execute "select $1" ''(3)))'
+language scruple;
+
+create function f_execute_with_args_int4() returns int4 as '(scalar (execute "select $1" ''(3)))'
+language scruple;
+
+create function f_execute_with_args_int8() returns int8 as '(scalar (execute "select $1" ''(3)))'
+language scruple;
+
+create function f_execute_with_args_float4() returns float4 as '(scalar (execute "select $1" ''(3.14)))'
+language scruple;
+
+create function f_execute_with_args_float8() returns float8 as '(scalar (execute "select $1" ''(3.14)))'
+language scruple;
+
+create function f_execute_with_args_rat_float4() returns float4 as '(scalar (execute "select $1" ''(314/100)))'
+language scruple;
+
+create function f_execute_with_args_rat_float8() returns float8 as '(scalar (execute "select $1" ''(314/100)))'
+language scruple;
+
+create function f_execute_with_args_large_numeric() returns numeric as '(scalar (execute "select $1" ''(123456789012345678901234567890)))'
+language scruple;
+
+create function f_execute_with_args_rat_numeric() returns numeric as '(scalar (execute "select $1" ''(314/100)))'
+language scruple;
+
+create function f_execute_with_args_money() returns money as '(scalar (execute "select $1" ''(1234)))'
+language scruple;
+
+create function f_execute_with_args_text() returns text as '(scalar (execute "select $1" ''("hello")))'
+language scruple;
+
+create function f_execute_with_args_bytea() returns bytea as '(scalar (execute "select $1" ''(#u8(#x80 #x40 #x20))))'
+language scruple;
+
+create function f_execute_with_args_timestamp() returns timestamp as '(scalar (execute "select $1" `(,(make-date 123456789 56 34 12 1 1 1970 0))))'
+language scruple;
+
+create function f_execute_with_args_timestamptz() returns timestamptz as '(scalar (execute "select $1" `(,(make-date 123456789 56 34 12 1 1 1970 0))))'
+language scruple;
+
+create function f_execute_with_args_date() returns date as '(scalar (execute "select $1" `(,(make-date 123456789 56 34 12 1 1 1970 0))))'
+language scruple;
+
+create function f_execute_with_args_time() returns time as '(scalar (execute "select $1" `(,(make-time time-monotonic 123456789 (+ 56 (* 60 (+ 34 (* 60 12))))))))'
+language scruple;
+
+create function f_execute_with_args_timetz() returns timetz as '(scalar (execute "select $1" `(,(make-time time-monotonic 123456789 (+ 56 (* 60 (+ 34 (* 60 12))))))))'
+language scruple;
+
+create function f_execute_with_args_bool(x int) returns boolean as '(scalar (execute "select $1" `(,(> x 0))))'
+language scruple;
+
 select is(f_execute_simple(), 1, 'execute: simple');
+
+select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
+select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
+select is(f_execute_with_args_int8(), 3::int8, 'execute: with args int8');
+select is(f_execute_with_args_float4(), 3.14::float4, 'execute: with args float4');
+select is(f_execute_with_args_float8(), 3.14::float8, 'execute: with args float8');
+select is(f_execute_with_args_rat_float4(), 3.14::float4, 'execute: with args rational to float4');
+select is(f_execute_with_args_rat_float8(), 3.14::float8, 'execute: with args rational to float8');
+select is(f_execute_with_args_large_numeric(), 123456789012345678901234567890::numeric, 'execute: with args large numeric');
+select is(f_execute_with_args_rat_numeric(), 3.14::numeric, 'execute: with args rational to numeric');
+select is(f_execute_with_args_money(), 12.34::money, 'execute: with args money');
+select is(f_execute_with_args_text(), 'hello'::text, 'execute: with args text');
+select is(f_execute_with_args_bytea(), '\x804020'::bytea, 'execute: with args bytea');
+select is(f_execute_with_args_timestamp(), '1970-01-01 12:34:56.123456'::timestamp, 'execute: with args timestamp');
+select is(f_execute_with_args_timestamptz(), '1970-01-01 12:34:56.123456'::timestamptz, 'execute: with args timestamptz');
+select is(f_execute_with_args_date(), '1970-01-01'::date, 'execute: with args date');
+select is(f_execute_with_args_time(), '12:34:56.123456'::time, 'execute: with args time');
+select is(f_execute_with_args_timetz(), '12:34:56.123456'::timetz, 'execute: with args timetz');
+select is(f_execute_with_args_bool(1), true, 'execute: with args bool true');
+select is(f_execute_with_args_bool(0), false, 'execute: with args bool false');
 
 rollback;

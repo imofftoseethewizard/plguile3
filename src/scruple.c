@@ -179,6 +179,7 @@ static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
 static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Datum scm_to_record_datum(SCM result);
 static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static Oid infer_scm_type_oid(SCM x);
 static TupleDesc record_tuple_desc(SCM x);
 static TupleDesc table_tuple_desc(SCM x);
 static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
@@ -281,7 +282,7 @@ static HTAB *funcCache;
 static HTAB *typeCache;
 
 static SCM unbox_datum(SCM x);
-static SCM spi_execute(SCM command, SCM read_only, SCM count);
+static SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count);
 
 void _PG_init(void)
 {
@@ -482,7 +483,7 @@ void _PG_init(void)
 	string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
-	scm_c_define_gsubr("%execute", 3, 0, 0, (SCM (*)()) spi_execute);
+	scm_c_define_gsubr("%execute", 4, 0, 0, (SCM (*)()) spi_execute);
 }
 
 void _PG_fini(void)
@@ -1881,7 +1882,7 @@ Datum scm_to_datum_numeric(SCM x, Oid type_oid)
 				else
 					numeric_str = "-Infinity";
 			}
-			else if (scm_is_rational(x)) {
+			else if (scm_is_exact(x) && scm_is_rational(x) && scm_to_int(scm_denominator(x)) > 1) {
 				numeric_str = scm_to_string(scm_exact_to_inexact(x));
 			}
 			else {
@@ -2490,7 +2491,7 @@ SCM datum_uuid_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_uuid(SCM x, Oid type_oid)
 {
-	if (!SCM_BYTEVECTOR_P(x)) {
+	if (!scm_is_bytevector(x)) {
 		// Handle error: x is not a bytevector
 		ereport(ERROR, (errmsg("Expected a bytevector for UUID conversion")));
 	}
@@ -2799,7 +2800,7 @@ bool is_enum_type(Oid type_oid)
 // SPI Integration
 //
 
-SCM spi_execute(SCM command, SCM read_only, SCM count)
+SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 {
 	int ret;
 	SCM rows_processed;
@@ -2818,7 +2819,31 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 	}
 
 	SPI_connect();
-	ret = SPI_execute(scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
+
+	if (args == SCM_EOL)
+		ret = SPI_execute(
+			scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
+	else {
+		int nargs = scm_to_int(scm_length(args));
+		Oid *arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
+		Datum *arg_values = (Datum *)palloc(sizeof(Datum) * nargs);
+		char *arg_nulls = (char *)palloc0(sizeof(char) * nargs);
+
+		SCM rest = args;
+
+		for (int i = 0; i < nargs; i++) {
+			SCM arg = scm_car(rest);
+			Oid type_oid = infer_scm_type_oid(arg);
+			arg_types[i] = type_oid;
+			arg_values[i] = scm_to_datum(arg, type_oid);
+			arg_nulls[i] = 1;
+			rest = scm_cdr(rest);
+		}
+
+		ret = SPI_execute_with_args(
+			scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
+			scm_to_bool(read_only), scm_to_long(count));
+	}
 
 	if (ret < 0) {
 		// TODO
@@ -2884,6 +2909,89 @@ SCM spi_execute(SCM command, SCM read_only, SCM count)
 
 	return scm_values(scm_list_2(table, rows_processed));
 }
+
+Oid infer_scm_type_oid(SCM x)
+{
+	if (scm_is_number(x)) {
+
+		if (!scm_is_exact(x))
+			return TypenameGetTypid("float8");
+
+		else {
+
+			if (is_int2(x))
+				return TypenameGetTypid("int2");
+
+			if (is_int4(x))
+				return TypenameGetTypid("int4");
+
+			if (is_int8(x))
+				return TypenameGetTypid("int8");
+
+			if (scm_is_rational(x) && scm_to_int(scm_denominator(x)) > 1)
+				return TypenameGetTypid("float8");
+
+			return TypenameGetTypid("numeric");
+		}
+	}
+
+	if (scm_is_string(x))
+		return TypenameGetTypid("text");
+
+	if (x == SCM_BOOL_F || x == SCM_BOOL_T)
+		return TypenameGetTypid("bool");
+
+	if (is_boxed_datum(x))
+		return get_boxed_datum_type(x);
+
+	if (is_bit_string(x))
+		return TypenameGetTypid("bit");
+
+	if (is_box(x))
+		return TypenameGetTypid("box");
+
+	if (scm_is_bytevector(x))
+		return TypenameGetTypid("bytea");
+
+	if (is_circle(x))
+		return TypenameGetTypid("circle");
+
+	if (is_date(x))
+		return TypenameGetTypid("timestamptz");
+
+	if (is_decimal(x))
+		return TypenameGetTypid("numeric");
+
+	if (is_inet(x))
+		return TypenameGetTypid("inet");
+
+	if (is_line(x))
+		return TypenameGetTypid("line");
+
+	if (is_lseg(x))
+		return TypenameGetTypid("lseg");
+
+	if (is_macaddr(x))
+		return TypenameGetTypid("macaddr");
+
+	if (is_macaddr8(x))
+		return TypenameGetTypid("macaddr8");
+
+	if (is_path(x))
+		return TypenameGetTypid("path");
+
+	if (is_point(x))
+		return TypenameGetTypid("point");
+
+	if (is_polygon(x))
+		return TypenameGetTypid("polygon");
+
+	if (is_time(x))
+		return TypenameGetTypid("time");
+
+	return InvalidOid;
+}
+
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
 
