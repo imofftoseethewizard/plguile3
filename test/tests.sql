@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(147);
+select plan(162);
 
 --------------------------------------------------------------------------------
 --
@@ -476,9 +476,12 @@ select is(f_fruit_id('olive'::fruit), 'olive'::fruit, 'enum: identity mapping te
 --
 
 create function f_point_id(a point) returns point as 'a' language scruple;
+create function f_point_vec() returns point as '#(1 2)' language scruple;
 
 select ok(f_point_id(t.point) ~= t.point, 'point: identity mapping test')
 from (select point '(3.14, 2.72)') t(point);
+
+select ok(f_point_vec() ~= point '(1, 2)', 'point: vector point');
 
 --------------------------------------------------------------------------------
 --
@@ -753,6 +756,9 @@ language scruple;
 create function f_execute_with_args_rat_numeric() returns numeric as '(scalar (execute "select $1" ''(314/100)))'
 language scruple;
 
+create function f_execute_with_args_decimal() returns numeric as '(scalar (execute "select $1" `(,(make-decimal 314159 5))))'
+language scruple;
+
 create function f_execute_with_args_money() returns money as '(scalar (execute "select $1" ''(1234)))'
 language scruple;
 
@@ -777,10 +783,88 @@ language scruple;
 create function f_execute_with_args_timetz() returns timetz as '(scalar (execute "select $1" `(,(make-time time-monotonic 123456789 (+ 56 (* 60 (+ 34 (* 60 12))))))))'
 language scruple;
 
-create function f_execute_with_args_bool(x int) returns boolean as '(scalar (execute "select $1" `(,(> x 0))))'
+create function f_execute_with_args_boolean(x int) returns boolean as '(scalar (execute "select $1" `(,(> x 0))))'
 language scruple;
 
-select is(f_execute_simple(), 1, 'execute: simple');
+create function f_execute_with_args_point() returns point as '(scalar (execute "select $1" `(,(make-point 1 2))))'
+language scruple;
+
+create function f_execute_with_args_line() returns line as '(scalar (execute "select $1" `(,(make-line 3 2 1))))'
+language scruple;
+
+create function f_execute_with_args_lseg() returns lseg as '(scalar (execute "select $1" `(,(make-lseg (make-point 0 1) (make-point 2 3)))))'
+language scruple;
+
+create function f_execute_with_args_box() returns box as '(scalar (execute "select $1" `(,(make-box (make-point 0 1) (make-point 2 3)))))'
+language scruple;
+
+create function f_execute_with_args_path() returns path as '(scalar (execute "select $1" `(,(make-path #f (list->vector (list (make-point 0 1) (make-point 2 3) (make-point 4 1)))))))'
+language scruple;
+
+create function f_execute_with_args_fruit() returns fruit as $$
+(scalar (execute "select $1" '((fruit . apple)))) ; '
+$$ language scruple;
+
+create function f_execute_with_args_polygon() returns polygon as $$
+(scalar (execute "select $1"
+                 `(,(make-polygon
+                     (make-box (make-point 0 0) (make-point 2 2))
+                     (list->vector (list (make-point 0 1)
+                                         (make-point 1 2)
+                                         (make-point 2 1)
+                                         (make-point 1 0)
+                                         (make-point 0 1)))))))
+$$
+language scruple;
+
+create function f_execute_with_args_inet() returns inet as $$
+(scalar (execute "select $1"
+                 `(,(make-inet 'inet 32 #u8(192 168 1 42))))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_inet6() returns inet as $$
+(scalar (execute "select $1"
+                 `(,(make-inet 'inet6 128 #u8(#x20 #x01 #x04 #xf8  ;; '
+                                              #x00 #x03 #x00 #xba
+                                              #x02 #xe0 #x81 #xff
+                                              #xfe #x22 #xd1 #xf1)))))
+$$
+language scruple;
+
+create function f_execute_with_args_cidr() returns cidr as $$
+(scalar (execute "select $1"
+                 `(,(make-inet 'inet 8 #u8(10 0 0 0))))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_macaddr() returns macaddr as $$
+(scalar (execute "select $1"
+                 `(,(make-macaddr #u8(#x08 #x00 #x2b #x01 #x02 #x03)))))
+$$
+language scruple;
+
+create function f_execute_with_args_macaddr8() returns macaddr8 as $$
+(scalar (execute "select $1"
+                 `(,(make-macaddr8 #u8(#x08 #x00 #x2b #x01 #x02 #x03 #x04 #x05)))))
+$$
+language scruple;
+
+create function f_execute_with_args_bits() returns bit(6) as $$
+(scalar (execute "select $1"
+                 `(,(make-bit-string #u8(#xa9) 8))))
+$$
+language scruple;
+
+create function f_execute_with_args_uuid() returns uuid as $$
+(scalar (execute "select $1::uuid" '("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_xml() returns xml as $$
+(scalar (execute "select $1::xml" '("<foo>bar</foo>"))) ;; '
+$$
+language scruple;
 
 select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
 select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
@@ -791,6 +875,7 @@ select is(f_execute_with_args_rat_float4(), 3.14::float4, 'execute: with args ra
 select is(f_execute_with_args_rat_float8(), 3.14::float8, 'execute: with args rational to float8');
 select is(f_execute_with_args_large_numeric(), 123456789012345678901234567890::numeric, 'execute: with args large numeric');
 select is(f_execute_with_args_rat_numeric(), 3.14::numeric, 'execute: with args rational to numeric');
+select is(f_execute_with_args_decimal(), 3.14159::numeric, 'execute: with args decimal');
 select is(f_execute_with_args_money(), 12.34::money, 'execute: with args money');
 select is(f_execute_with_args_text(), 'hello'::text, 'execute: with args text');
 select is(f_execute_with_args_bytea(), '\x804020'::bytea, 'execute: with args bytea');
@@ -799,7 +884,24 @@ select is(f_execute_with_args_timestamptz(), '1970-01-01 12:34:56.123456'::times
 select is(f_execute_with_args_date(), '1970-01-01'::date, 'execute: with args date');
 select is(f_execute_with_args_time(), '12:34:56.123456'::time, 'execute: with args time');
 select is(f_execute_with_args_timetz(), '12:34:56.123456'::timetz, 'execute: with args timetz');
-select is(f_execute_with_args_bool(1), true, 'execute: with args bool true');
-select is(f_execute_with_args_bool(0), false, 'execute: with args bool false');
+select is(f_execute_with_args_boolean(1), true, 'execute: with args boolean true');
+select is(f_execute_with_args_boolean(0), false, 'execute: with args boolean false');
+select is(f_execute_with_args_fruit(), 'apple'::fruit, 'execute: with args fruit');
+select is(f_execute_with_args_point()::text, '(1,2)', 'execute: with args point');
+select is(f_execute_with_args_line()::text, '{3,2,1}', 'execute: with args line');
+select is(f_execute_with_args_lseg()::text, '[(0,1),(2,3)]', 'execute: with args lseg');
+select is(f_execute_with_args_box()::text, '(0,1),(2,3)', 'execute: with args box');
+select is(f_execute_with_args_path()::text, '[(0,1),(2,3),(4,1)]', 'execute: with args path');
+select is(f_execute_with_args_polygon()::text, '((0,1),(1,2),(2,1),(1,0),(0,1))', 'execute: with args polygon');
+select is(f_execute_with_args_inet(), inet '192.168.1.42', 'execute: with args inet');
+select is(f_execute_with_args_inet6(), inet '2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128', 'execute: with args inet6');
+select is(f_execute_with_args_cidr(), cidr '10.0.0.0/8', 'execute: with args cidr');
+select is(f_execute_with_args_macaddr(), macaddr '08:00:2b:01:02:03', 'execute: with args macaddr');
+select is(f_execute_with_args_macaddr8(), macaddr8 '08:00:2b:01:02:03:04:05', 'execute: with args macaddr8');
+select is(f_execute_with_args_uuid(), uuid 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'execute: with args uuid');
+select is(f_execute_with_args_xml()::text, '<foo>bar</foo>', 'execute: with args xml');
+
+
+
 
 rollback;

@@ -180,6 +180,7 @@ static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, Memo
 static Datum scm_to_record_datum(SCM result);
 static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Oid infer_scm_type_oid(SCM x);
+static Oid find_enum_datum_type(SCM type_name);
 static TupleDesc record_tuple_desc(SCM x);
 static TupleDesc table_tuple_desc(SCM x);
 static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
@@ -520,6 +521,7 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 
 	/* bool nonatomic; */
 
+	SCM scm_result;
 	Datum result;
 
 	elog(NOTICE, "scruple_call: begin");
@@ -568,7 +570,11 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 
 	elog(NOTICE, "scruple_call: calling scheme");
 
-	result = convert_result_to_datum(scm_apply(proc, arg_list, SCM_EOL), proc_tuple, fcinfo);
+	scm_result = scm_apply(proc, arg_list, SCM_EOL);
+
+	elog(NOTICE, "scruple_call: converting result");
+
+	result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
 
 	/* if (SPI_finish() != SPI_OK_FINISH) */
 	/* elog(ERROR, "SPI_finish() failed"); */
@@ -1284,7 +1290,7 @@ Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid)
 SCM datum_enum_to_scm(Datum x, Oid type_oid)
 {
 	HeapTuple tup;
-	SCM result;
+	SCM type_name, value_name, result;
 
 	tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(x));
 
@@ -1292,7 +1298,10 @@ SCM datum_enum_to_scm(Datum x, Oid type_oid)
 		elog(ERROR, "cache lookup failed for enum %lu", ObjectIdGetDatum(x));
 	}
 
-	result = scm_from_locale_symbol(NameStr(((Form_pg_enum) GETSTRUCT(tup))->enumlabel));
+	type_name = type_desc_expr(type_oid);
+	value_name = scm_from_locale_symbol(NameStr(((Form_pg_enum) GETSTRUCT(tup))->enumlabel));
+
+	result = scm_cons(type_name, value_name);
 
 	ReleaseSysCache(tup);
 
@@ -1302,23 +1311,37 @@ SCM datum_enum_to_scm(Datum x, Oid type_oid)
 Datum scm_to_datum_enum(SCM x, Oid type_oid)
 {
 	HeapTuple tup;
-	char *value_name;
+	SCM target_type_name, type_name, value_name;
+	char *value_name_cstr;
 	Datum result;
 
-	if (!scm_is_symbol(x)) {
-		elog(ERROR, "The SCM value must be a symbol");
+	if (!scm_is_pair(x)) {
+		elog(ERROR, "scm_to_datum_enum: a cons of two symbols is expected, not %s", scm_to_string(x));
 	}
 
-	value_name = scm_to_locale_string(scm_symbol_to_string(x));
+	type_name = scm_car(x);
+	value_name = scm_cdr(x);
+
+	if (!scm_is_symbol(type_name) || ! scm_is_symbol(value_name)) {
+		elog(ERROR, "scm_to_datum_enum: a cons of two symbols is expected, not %s", scm_to_string(x));
+	}
+
+	target_type_name = type_desc_expr(type_oid);
+
+	if (!scm_is_eq(target_type_name, type_name)) {
+		elog(ERROR, "scm_to_datum_enum: enum type mismatch: type %s expected, not %s", scm_to_string(target_type_name), scm_to_string(type_name));
+	}
+
+	value_name_cstr = scm_to_locale_string(scm_symbol_to_string(value_name));
 
 	tup = SearchSysCache2(ENUMTYPOIDNAME,
 	                      ObjectIdGetDatum(type_oid),
-	                      CStringGetDatum(value_name));
+	                      CStringGetDatum(value_name_cstr));
 
-	free(value_name);
+	free(value_name_cstr);
 
 	if (!HeapTupleIsValid(tup)) {
-		elog(ERROR, "Could not find enum value for string: %s", scm_to_string(x));
+		elog(ERROR, "Could not find enum value for string: %s", scm_to_string(value_name));
 	}
 
 	result = ((Form_pg_enum) GETSTRUCT(tup))->oid;
@@ -1928,28 +1951,37 @@ SCM datum_point_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_point(SCM x, Oid type_oid)
 {
-	if (!is_point(x)) {
-		elog(ERROR, "point result expected, not: %s", scm_to_string(x));
+	SCM scm_x, scm_y;
+	float8 x_val, y_val;
+	Point *point;
+
+	if (is_point(x)) {
+
+		scm_x = scm_call_1(point_x_proc, x);
+		scm_y = scm_call_1(point_y_proc, x);
+
 	}
 	else {
+		if (!scm_is_vector(x) || scm_c_vector_length(x) != 2)
+			elog(ERROR, "point result expected, not: %s", scm_to_string(x));
 
-		// Get x and y components from the Scheme point object
-		SCM scm_x = scm_call_1(point_x_proc, x);
-		SCM scm_y = scm_call_1(point_y_proc, x);
-
-		// Convert SCM x and y to float8
-		float8 x_val = scm_to_double(scm_x);
-		float8 y_val = scm_to_double(scm_y);
-
-		// Create a new PostgreSQL point
-		Point *point = (Point *) palloc(sizeof(Point));
-
-		point->x = x_val;
-		point->y = y_val;
-
-		// Convert the point to a Datum
-		return PointPGetDatum(point);
+		scm_x = scm_c_vector_ref(x, 0);
+		scm_y = scm_c_vector_ref(x, 1);
 	}
+
+	// Get x and y components from the Scheme point object
+	// Convert SCM x and y to float8
+	x_val = scm_to_double(scm_x);
+	y_val = scm_to_double(scm_y);
+
+	// Create a new PostgreSQL point
+	point = (Point *) palloc(sizeof(Point));
+
+	point->x = x_val;
+	point->y = y_val;
+
+	// Convert the point to a Datum
+	return PointPGetDatum(point);
 }
 
 SCM datum_line_to_scm(Datum x, Oid type_oid)
@@ -2944,6 +2976,9 @@ Oid infer_scm_type_oid(SCM x)
 	if (is_boxed_datum(x))
 		return get_boxed_datum_type(x);
 
+	if (scm_is_pair(x) && scm_is_symbol(scm_car(x)) && scm_is_symbol(scm_cdr(x)))
+		return find_enum_datum_type(scm_car(x));
+
 	if (is_bit_string(x))
 		return TypenameGetTypid("bit");
 
@@ -2990,6 +3025,14 @@ Oid infer_scm_type_oid(SCM x)
 		return TypenameGetTypid("time");
 
 	return InvalidOid;
+}
+
+Oid find_enum_datum_type(SCM type_name)
+{
+	char *type_name_cstr = scm_to_locale_string(scm_symbol_to_string(type_name));
+	Oid type_oid = TypenameGetTypid(type_name_cstr);
+	free(type_name_cstr);
+	return type_oid;
 }
 
 

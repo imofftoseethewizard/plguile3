@@ -23,7 +23,7 @@ The 0.5.x versions will provide Guile primitives for accessing
 Postgres' Server Programming Interface so that queries may be made
 from scheme code.
 
-The 0.7.x versions will add support for tsvector, tsquery, and domain types.
+The 0.7.x versions will add support for tsvector, tsquery, jsonpath, domain, and range types.
 
 The 0.9.x versions will add support for cursors and iterative query
 result handling.
@@ -46,7 +46,7 @@ The 0.21.x versions will include documentation and examples.
 The 0.23.x versions will provide support for Postgres 12, 13, 15, and
 16.
 
-The 0.25.x versions will provide packaging for pgxn, deb, and rpm.
+The 0.25.x versions will provide packaging for pgxn, deb, rpm, and apk.
 
 The 0.26.x versions will be the pre-1.0 beta.
 

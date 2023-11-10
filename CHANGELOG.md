@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.16] - 2023-11-10
+
+The enum representation was changed from a symbol representing the
+value to a pair encoding the type and the value, both symbols deriving
+from the name of the Postgres type and the enum value. The conversion
+from Scheme will now also convert 2-vectors to points as a convenience.
+
 ## [0.5.15] - 2023-11-5
 
 This add support for parameterized queries where arguments are
