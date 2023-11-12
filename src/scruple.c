@@ -134,6 +134,7 @@ static Datum scm_to_datum_numeric(SCM x, Oid type_oid);
 static Datum scm_to_datum_path(SCM x, Oid type_oid);
 static Datum scm_to_datum_point(SCM x, Oid type_oid);
 static Datum scm_to_datum_polygon(SCM x, Oid type_oid);
+static Datum scm_to_datum_record(SCM x, Oid type_oid);
 static Datum scm_to_datum_text(SCM x, Oid type_oid);
 static Datum scm_to_datum_time(SCM x, Oid type_oid);
 static Datum scm_to_datum_timetz(SCM x, Oid type_oid);
@@ -177,9 +178,10 @@ static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionC
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
 static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo);
-static Datum scm_to_record_datum(SCM result);
 static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Oid infer_scm_type_oid(SCM x);
+static Oid infer_array_type_oid(SCM x);
+static Oid unify_type_oid(Oid t1, Oid t2);
 static Oid find_enum_datum_type(SCM type_name);
 static TupleDesc record_tuple_desc(SCM x);
 static TupleDesc table_tuple_desc(SCM x);
@@ -190,6 +192,12 @@ static bool is_set_returning(HeapTuple proc_tuple);
 static bool is_enum_type(Oid type_oid);
 static SCM type_desc_expr(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
+static Oid int2_oid;
+static Oid int4_oid;
+static Oid int8_oid;
+static Oid float4_oid;
+static Oid float8_oid;
+static Oid numeric_oid;
 
 static SCM bit_string_data_proc;
 static SCM bit_string_length_proc;
@@ -303,6 +311,13 @@ void _PG_init(void)
 	typeInfo.entrysize = sizeof(TypeConvCacheEntry);
 	typeCache = hash_create("Scruple Type Cache", 128, &typeInfo, HASH_ELEM | HASH_BLOBS);
 
+	int2_oid = TypenameGetTypid("int2");
+	int4_oid = TypenameGetTypid("int4");
+	int8_oid = TypenameGetTypid("int8");
+	float4_oid = TypenameGetTypid("float4");
+	float8_oid = TypenameGetTypid("float8");
+	numeric_oid = TypenameGetTypid("numeric");
+
 	/* Fill type cache with to_scm and to_datum functions for known types */
 	insert_type_cache_entry(TypenameGetTypid("bit"),         datum_bit_string_to_scm,  scm_to_datum_bit_string);
 	insert_type_cache_entry(TypenameGetTypid("bool"),        datum_bool_to_scm,        scm_to_datum_bool);
@@ -331,6 +346,7 @@ void _PG_init(void)
 	insert_type_cache_entry(TypenameGetTypid("path"),        datum_path_to_scm,        scm_to_datum_path);
 	insert_type_cache_entry(TypenameGetTypid("point"),       datum_point_to_scm,       scm_to_datum_point);
 	insert_type_cache_entry(TypenameGetTypid("polygon"),     datum_polygon_to_scm,     scm_to_datum_polygon);
+	insert_type_cache_entry(TypenameGetTypid("record"),      datum_composite_to_scm,   scm_to_datum_record);
 	insert_type_cache_entry(TypenameGetTypid("text"),        datum_text_to_scm,        scm_to_datum_text);
 	insert_type_cache_entry(TypenameGetTypid("time"),        datum_time_to_scm,        scm_to_datum_time);
 	insert_type_cache_entry(TypenameGetTypid("timetz"),      datum_timetz_to_scm,      scm_to_datum_timetz);
@@ -615,7 +631,6 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 		case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 		case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
 			elog(ERROR, "convert_result_to_datum: setof not implemented");
-			elog(ERROR, "convert_result_to_datum: not implemented");
 			return (Datum) 0;
 
 		default:
@@ -633,7 +648,7 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 		return scm_to_composite_datum(result, tuple_desc);
 
 	case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
-		return scm_to_record_datum(result);
+		return scm_to_datum_record(result, rettype_oid);
 
 	case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 	case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
@@ -763,49 +778,6 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, MemoryContext ct
     MemoryContextSwitchTo(prior_ctx);
 
     return result;
-}
-
-Datum scm_to_record_datum(SCM result)
-{
-	HeapTuple ret_heap_tuple;
-
-	Datum *ret_values;
-	bool *ret_is_null;
-
-	Datum result_datum;
-
-	SCM data;
-	int len;
-	TupleDesc tuple_desc;
-
-	if (!is_record(result))
-		elog(ERROR, "record result expected, not: %s", scm_to_string(result));
-
-	data = scm_call_1(record_attrs_proc, result);
-	len = scm_c_vector_length(data);
-	tuple_desc = record_tuple_desc(result);
-
-	ret_values = (Datum *) palloc0(sizeof(Datum) * len);
-	ret_is_null = (bool *) palloc0(sizeof(bool) * len);
-
-	for (int i = 0; i < len; ++i) {
-
-		Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
-		SCM v = scm_c_vector_ref(data, i);
-
-		if (v == SCM_EOL)
-			ret_is_null[i] = true;
-		else
-			ret_values[i] = scm_to_datum(v, attr->atttypid);
-	}
-
-	ret_heap_tuple = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
-	result_datum = HeapTupleGetDatum(ret_heap_tuple);
-
-	pfree(ret_values);
-	pfree(ret_is_null);
-
-	return result_datum;
 }
 
 Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
@@ -1420,11 +1392,14 @@ Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
 	return PointerGetDatum(array);
 }
 
-SCM datum_composite_to_scm(Datum x, Oid type_oid)
+SCM datum_composite_to_scm(Datum x, Oid ignored)
 {
 	SCM attr_names, attr_names_hash, type_names, values;
 
-	TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, -1);
+	HeapTupleHeader rec = DatumGetHeapTupleHeader(x);
+	Oid type_oid = HeapTupleHeaderGetTypeId(rec);
+	TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, HeapTupleHeaderGetTypMod(rec));
+
 	int natts = tuple_desc->natts;
 	Datum *attrs = palloc(natts * sizeof(Datum));
 	bool *is_null = palloc(natts * sizeof(bool));
@@ -1432,9 +1407,9 @@ SCM datum_composite_to_scm(Datum x, Oid type_oid)
 	HeapTupleData tuple_data;
 
 	ItemPointerSetInvalid(&(tuple_data.t_self));
-	tuple_data.t_len = HeapTupleHeaderGetDatumLength((HeapTupleHeader) x);
+	tuple_data.t_len = HeapTupleHeaderGetDatumLength(rec);
 	tuple_data.t_tableOid = InvalidOid;
-	tuple_data.t_data = (HeapTupleHeader) x;
+	tuple_data.t_data = rec;
 
 	heap_deform_tuple(&tuple_data, tuple_desc, attrs, is_null);
 
@@ -1564,6 +1539,49 @@ Datum scm_to_datum_float8(SCM x, Oid type_oid)
 	else {
 		elog(ERROR, "number result expected, not: %s", scm_to_string(x));
 	}
+}
+
+Datum scm_to_datum_record(SCM result, Oid ignored)
+{
+	HeapTuple ret_heap_tuple;
+
+	Datum *ret_values;
+	bool *ret_is_null;
+
+	Datum result_datum;
+
+	SCM data;
+	int len;
+	TupleDesc tuple_desc;
+
+	if (!is_record(result))
+		elog(ERROR, "record result expected, not: %s", scm_to_string(result));
+
+	data = scm_call_1(record_attrs_proc, result);
+	len = scm_c_vector_length(data);
+	tuple_desc = record_tuple_desc(result);
+
+	ret_values = (Datum *) palloc0(sizeof(Datum) * len);
+	ret_is_null = (bool *) palloc0(sizeof(bool) * len);
+
+	for (int i = 0; i < len; ++i) {
+
+		Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
+		SCM v = scm_c_vector_ref(data, i);
+
+		if (v == SCM_EOL)
+			ret_is_null[i] = true;
+		else
+			ret_values[i] = scm_to_datum(v, attr->atttypid);
+	}
+
+	ret_heap_tuple = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
+	result_datum = HeapTupleGetDatum(ret_heap_tuple);
+
+	pfree(ret_values);
+	pfree(ret_is_null);
+
+	return result_datum;
 }
 
 SCM datum_text_to_scm(Datum x, Oid type_oid)
@@ -2838,6 +2856,8 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 	SCM rows_processed;
 	SCM table;
 
+	elog(NOTICE, "spi_execute: begin");
+
 	if (!scm_is_string(command)) {
 		// TODO
 	}
@@ -2852,6 +2872,8 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 
 	SPI_connect();
 
+	elog(NOTICE, "spi_execute: connected");
+
 	if (args == SCM_EOL)
 		ret = SPI_execute(
 			scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
@@ -2863,19 +2885,29 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 
 		SCM rest = args;
 
+		elog(NOTICE, "spi_execute: preparing arguments");
+
 		for (int i = 0; i < nargs; i++) {
 			SCM arg = scm_car(rest);
 			Oid type_oid = infer_scm_type_oid(arg);
+
+			if (type_oid == InvalidOid)
+				elog(ERROR, "not implemented");
+
 			arg_types[i] = type_oid;
 			arg_values[i] = scm_to_datum(arg, type_oid);
 			arg_nulls[i] = 1;
 			rest = scm_cdr(rest);
 		}
 
+		elog(NOTICE, "spi_execute: arguments ready");
+
 		ret = SPI_execute_with_args(
 			scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
 			scm_to_bool(read_only), scm_to_long(count));
 	}
+
+	elog(NOTICE, "spi_execute: processing result");
 
 	if (ret < 0) {
 		// TODO
@@ -2939,6 +2971,8 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 
 	SPI_finish();
 
+	elog(NOTICE, "spi_execute: done");
+
 	return scm_values(scm_list_2(table, rows_processed));
 }
 
@@ -2978,6 +3012,9 @@ Oid infer_scm_type_oid(SCM x)
 
 	if (scm_is_pair(x) && scm_is_symbol(scm_car(x)) && scm_is_symbol(scm_cdr(x)))
 		return find_enum_datum_type(scm_car(x));
+
+	if (scm_is_vector(x))
+		return infer_array_type_oid(x);
 
 	if (is_bit_string(x))
 		return TypenameGetTypid("bit");
@@ -3021,8 +3058,74 @@ Oid infer_scm_type_oid(SCM x)
 	if (is_polygon(x))
 		return TypenameGetTypid("polygon");
 
+	if (is_record(x))
+		return TypenameGetTypid("record");
+
 	if (is_time(x))
 		return TypenameGetTypid("time");
+
+	return InvalidOid;
+}
+
+Oid infer_array_type_oid(SCM x)
+{
+	Oid element_type_oid = InvalidOid;
+	int len = scm_c_vector_length(x);
+
+	for (int i = 0; i < len; ++i) {
+
+		Oid ith_type_oid = infer_scm_type_oid(scm_c_vector_ref(x, i));
+
+		if (element_type_oid == InvalidOid)
+			element_type_oid = ith_type_oid;
+
+		if (element_type_oid == ith_type_oid)
+			continue;
+
+		element_type_oid = unify_type_oid(element_type_oid, ith_type_oid);
+
+		if (element_type_oid == InvalidOid)
+			return InvalidOid;
+	}
+
+	if (element_type_oid == InvalidOid)
+		return InvalidOid;
+
+	return get_array_type(element_type_oid);
+}
+
+Oid unify_type_oid(Oid t1, Oid t2)
+{
+	if (t1 == int2_oid) {
+		if (t2 == int2_oid || t2 == int4_oid || t2 == int8_oid || t2 == numeric_oid)
+			return t2;
+	}
+	else if (t1 == int4_oid) {
+		if (t2 == int2_oid)
+			return t1;
+
+		if (t2 == int4_oid || t2 == int8_oid || t2 == numeric_oid)
+			return t2;
+	}
+	else if (t1 == int8_oid) {
+		if (t2 == int2_oid || t2 == int4_oid || t2 == int8_oid)
+			return t1;
+
+		if (t2 == numeric_oid)
+			return t2;
+	}
+	else if (t1 == numeric_oid) {
+		if (t2 == int2_oid || t2 == int4_oid || t2 == int8_oid || t2 == numeric_oid)
+			return t1;
+	}
+	else if (t1 == float4_oid) {
+		if (t2 == float8_oid)
+			return t2;
+	}
+	else if (t1 == float8_oid) {
+		if (t2 == float4_oid)
+			return t1;
+	}
 
 	return InvalidOid;
 }

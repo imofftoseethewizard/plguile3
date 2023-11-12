@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(162);
+select plan(169);
 
 --------------------------------------------------------------------------------
 --
@@ -866,6 +866,31 @@ create function f_execute_with_args_xml() returns xml as $$
 $$
 language scruple;
 
+create function f_execute_with_args_json() returns json as $$
+(scalar (execute "select $1::json" '("{\"foo\": [\"bar\", 42]}"))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_jsonb() returns jsonb as $$
+(scalar (execute "select $1::jsonb" '("{\"foo\": [\"bar\", 42]}"))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_text_array() returns text[] as $$
+(scalar (execute "select $1" '(#("one" "two" "three")))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_int_array() returns int[] as $$
+(scalar (execute "select $1" '(#(1 65537)))) ;; '
+$$
+language scruple;
+
+create function f_execute_with_args_simple_record() returns record as $$
+(scalar (execute "select row('foo', 5, 1.41)::simple_record"))
+$$
+language scruple;
+
 select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
 select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
 select is(f_execute_with_args_int8(), 3::int8, 'execute: with args int8');
@@ -900,8 +925,14 @@ select is(f_execute_with_args_macaddr(), macaddr '08:00:2b:01:02:03', 'execute: 
 select is(f_execute_with_args_macaddr8(), macaddr8 '08:00:2b:01:02:03:04:05', 'execute: with args macaddr8');
 select is(f_execute_with_args_uuid(), uuid 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'execute: with args uuid');
 select is(f_execute_with_args_xml()::text, '<foo>bar</foo>', 'execute: with args xml');
+select is(f_execute_with_args_json()::text, '{"foo": ["bar", 42]}', 'execute: with args json');
+select is(f_execute_with_args_json()->'foo'->>0, 'bar', 'execute: with args json unpacked');
+select is(f_execute_with_args_jsonb()::text, '{"foo": ["bar", 42]}', 'execute: with args jsonb');
+select is(f_execute_with_args_jsonb()->'foo'->>0, 'bar', 'execute: with args jsonb unpacked');
+select is(f_execute_with_args_text_array(), '{one,two,three}', 'execute: with args text array');
+select is(f_execute_with_args_int_array(), '{1,65537}', 'execute: with args int array');
 
-
-
+select ok(f_execute_with_args_simple_record() = t, 'execute: with args simple return')
+from (select 'foo', 5, 1.41::float8) t(text, int, float8);
 
 rollback;

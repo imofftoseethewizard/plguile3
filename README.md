@@ -1,9 +1,15 @@
 # Guile Scheme PostgreSQL Language Extension (Scruple)
 
+This project joins my favorite database to my favorite programming
+language.
+
 ## Status
 
 Demoable. Scruple supports creating scheme functions which can accept
-and return all built-in Postgres types.
+and return all built-in Postgres types. It also supports executing
+queries from scheme functions. Current stable(ish) release is 0.6.0,
+though be warned that anything off of the knife edge of the happy path
+is likely to cause a crash.
 
 ## Overview
 
@@ -18,10 +24,6 @@ of database functions using Guile Scheme.
 ## Roadmap
 
 The scope of the 1.0 release is detailed below.
-
-The 0.5.x versions will provide Guile primitives for accessing
-Postgres' Server Programming Interface so that queries may be made
-from scheme code.
 
 The 0.7.x versions will add support for tsvector, tsquery, jsonpath, domain, and range types.
 
