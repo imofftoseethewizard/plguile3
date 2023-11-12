@@ -184,6 +184,28 @@
   (data bit-string-data)
   (length bit-string-length))
 
+(define-record-type tsposition
+  (make-tsposition index weight)
+  tsposition?
+  (index tsposition-index)
+  (weight tsposition-weight))
+
+(define-record-type tslexeme
+  (make-tslexeme lexeme positions)
+  tslexeme?
+  (lexeme tslexeme-lexeme)
+  (positions tslexeme-positions))
+
+(define-record-type tsvector
+  (make-tsvector lexemes)
+  tsvector?
+  (lexemes tsvector-lexemes))
+
+(define-record-type tsquery
+  (make-tsquery ast)
+  tsquery?
+  (ast tsquery-ast))
+
 (define (int2-compatible? x)
   (and (integer? x)
        (>= x -32768)
