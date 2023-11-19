@@ -14,9 +14,10 @@
 #include <catalog/pg_proc.h>
 #include <catalog/pg_type.h>
 #include <executor/spi.h>
-#include "executor/tuptable.h"
+#include <executor/tuptable.h>
 #include <lib/stringinfo.h>
 #include <mb/pg_wchar.h>
+#include <tsearch/ts_type.h>
 #include <utils/array.h>
 #include <utils/builtins.h>
 #include <utils/date.h>
@@ -27,14 +28,18 @@
 #include <utils/hsearch.h>
 #include <utils/inet.h>
 #include <utils/jsonfuncs.h>
-#include "utils/lsyscache.h"
+#include <utils/lsyscache.h>
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
-#include "utils/tuplestore.h"
+#include <utils/tuplestore.h>
 #include <utils/typcache.h>
 #include <utils/uuid.h>
 #include <utils/varbit.h>
 #include <utils/xml.h>
+
+#if 0
+#include "tsearch/ts_utils.h"
+#endif
 
 #define NS_PER_USEC 1000
 #define SECS_PER_MONTH (DAYS_PER_MONTH * SECS_PER_DAY)
@@ -105,6 +110,7 @@ static SCM datum_text_to_scm(Datum x, Oid type_oid);
 static SCM datum_time_to_scm(Datum x, Oid type_oid);
 static SCM datum_timetz_to_scm(Datum x, Oid type_oid);
 static SCM datum_timestamptz_to_scm(Datum x, Oid type_oid);
+static SCM datum_tsvector_to_scm(Datum x, Oid type_oid);
 static SCM datum_uuid_to_scm(Datum x, Oid type_oid);
 static SCM datum_void_to_scm(Datum x, Oid type_oid);
 static SCM datum_xml_to_scm(Datum x, Oid type_oid);
@@ -139,6 +145,7 @@ static Datum scm_to_datum_text(SCM x, Oid type_oid);
 static Datum scm_to_datum_time(SCM x, Oid type_oid);
 static Datum scm_to_datum_timetz(SCM x, Oid type_oid);
 static Datum scm_to_datum_timestamptz(SCM x, Oid type_oid);
+static Datum scm_to_datum_tsvector(SCM x, Oid type_oid);
 static Datum scm_to_datum_uuid(SCM x, Oid type_oid);
 static Datum scm_to_datum_void(SCM x, Oid type_oid);
 static Datum scm_to_datum_xml(SCM x, Oid type_oid);
@@ -167,7 +174,12 @@ static bool is_path(SCM x);
 static bool is_point(SCM x);
 static bool is_polygon(SCM x);
 static bool is_time(SCM x);
+static bool is_tsvector(SCM x);
 
+static SCM scm_error_handler(void *data, SCM key, SCM args);
+static SCM eval_scheme(const char *cstr);
+static SCM call_scheme_1_inner(void *data);
+static SCM call_scheme_1(SCM func, SCM arg);
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static bool is_composite_type(Oid type_oid);
@@ -192,6 +204,10 @@ static bool is_set_returning(HeapTuple proc_tuple);
 static bool is_enum_type(Oid type_oid);
 static SCM type_desc_expr(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
+static uint16 get_tsposition_index(SCM position);
+static uint16 get_tsposition_weight(SCM position);
+static size_t calculate_tsvector_buffer_size(SCM x);
+
 static Oid int2_oid;
 static Oid int4_oid;
 static Oid int8_oid;
@@ -243,6 +259,7 @@ static SCM is_polygon_proc;
 static SCM is_record_proc;
 static SCM is_table_proc;
 static SCM is_time_proc;
+static SCM is_tsvector_proc;
 static SCM line_a_proc;
 static SCM line_b_proc;
 static SCM line_c_proc;
@@ -267,6 +284,10 @@ static SCM make_polygon_proc;
 static SCM make_record_proc;
 static SCM make_table_proc;
 static SCM make_time_proc;
+static SCM make_tslexeme_proc;
+static SCM make_tsposition_proc;
+static SCM make_tsvector_proc;
+static SCM normalize_tsvector_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
 static SCM point_x_proc;
@@ -286,6 +307,11 @@ static SCM time_duration_symbol;
 static SCM time_monotonic_symbol;
 static SCM time_nanosecond_proc;
 static SCM time_second_proc;
+static SCM tsvector_lexemes_proc;
+static SCM tslexeme_lexeme_proc;
+static SCM tslexeme_positions_proc;
+static SCM tsposition_index_proc;
+static SCM tsposition_weight_proc;
 
 static HTAB *funcCache;
 static HTAB *typeCache;
@@ -352,6 +378,7 @@ void _PG_init(void)
 	insert_type_cache_entry(TypenameGetTypid("timetz"),      datum_timetz_to_scm,      scm_to_datum_timetz);
 	insert_type_cache_entry(TypenameGetTypid("timestamp"),   datum_timestamptz_to_scm, scm_to_datum_timestamptz);
 	insert_type_cache_entry(TypenameGetTypid("timestamptz"), datum_timestamptz_to_scm, scm_to_datum_timestamptz);
+	insert_type_cache_entry(TypenameGetTypid("tsvector"),    datum_tsvector_to_scm,    scm_to_datum_tsvector);
 	insert_type_cache_entry(TypenameGetTypid("uuid"),        datum_uuid_to_scm,        scm_to_datum_uuid);
 	insert_type_cache_entry(TypenameGetTypid("varbit"),      datum_bit_string_to_scm,  scm_to_datum_bit_string);
 	insert_type_cache_entry(TypenameGetTypid("varchar"),     datum_text_to_scm,        scm_to_datum_text);
@@ -361,7 +388,9 @@ void _PG_init(void)
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
 
-	scm_eval_string(scm_from_locale_string((const char *)src_scruple_scm));
+	elog(NOTICE, "evaluating scruple.scm");
+	eval_scheme((const char *)src_scruple_scm);
+	elog(NOTICE, "done");
 
 	/* Define names in our scheme module for the type oids we work with. */
 
@@ -410,87 +439,97 @@ void _PG_init(void)
 	   procedure, not the inlined procedure. To fix this, we just eval the name, inducing the
 	   syntax transformer to give us proc we need.
 	*/
-	bit_string_data_proc   = scm_eval_string(scm_from_locale_string("bit-string-data"));
-	bit_string_length_proc = scm_eval_string(scm_from_locale_string("bit-string-length"));
-	box_a_proc             = scm_eval_string(scm_from_locale_string("box-a"));
-	box_b_proc             = scm_eval_string(scm_from_locale_string("box-b"));
-	boxed_datum_type_proc  = scm_eval_string(scm_from_locale_string("boxed-datum-type"));
-	boxed_datum_value_proc = scm_eval_string(scm_from_locale_string("boxed-datum-value"));
-	circle_center_proc     = scm_eval_string(scm_from_locale_string("circle-center"));
-	circle_radius_proc     = scm_eval_string(scm_from_locale_string("circle-radius"));
-	date_day_proc          = scm_eval_string(scm_from_locale_string("date-day"));
-	date_hour_proc         = scm_eval_string(scm_from_locale_string("date-hour"));
-	date_minute_proc       = scm_eval_string(scm_from_locale_string("date-minute"));
-	date_month_proc        = scm_eval_string(scm_from_locale_string("date-month"));
-	date_nanosecond_proc   = scm_eval_string(scm_from_locale_string("date-nanosecond"));
-	date_second_proc       = scm_eval_string(scm_from_locale_string("date-second"));
-	date_year_proc         = scm_eval_string(scm_from_locale_string("date-year"));
-	date_zone_offset_proc  = scm_eval_string(scm_from_locale_string("date-zone-offset"));
-	decimal_digits_proc    = scm_eval_string(scm_from_locale_string("decimal-digits"));
-	decimal_scale_proc     = scm_eval_string(scm_from_locale_string("decimal-scale"));
-	inet_address_proc      = scm_eval_string(scm_from_locale_string("inet-address"));
-	inet_bits_proc         = scm_eval_string(scm_from_locale_string("inet-bits"));
-	inet_family_proc       = scm_eval_string(scm_from_locale_string("inet-family"));
-	is_bit_string_proc     = scm_eval_string(scm_from_locale_string("bit-string?"));
-	is_box_proc            = scm_eval_string(scm_from_locale_string("box?"));
-	is_boxed_datum_proc    = scm_eval_string(scm_from_locale_string("boxed-datum?"));
-	is_circle_proc         = scm_eval_string(scm_from_locale_string("circle?"));
-	is_date_proc           = scm_eval_string(scm_from_locale_string("date?"));
-	is_decimal_proc        = scm_eval_string(scm_from_locale_string("decimal?"));
-	is_valid_decimal_proc  = scm_eval_string(scm_from_locale_string("valid-decimal?"));
-	is_inet_proc           = scm_eval_string(scm_from_locale_string("inet?"));
-	is_line_proc           = scm_eval_string(scm_from_locale_string("line?"));
-	is_lseg_proc           = scm_eval_string(scm_from_locale_string("lseg?"));
-	is_macaddr8_proc       = scm_eval_string(scm_from_locale_string("macaddr8?"));
-	is_macaddr_proc        = scm_eval_string(scm_from_locale_string("macaddr?"));
-	is_path_proc           = scm_eval_string(scm_from_locale_string("path?"));
-	is_point_proc          = scm_eval_string(scm_from_locale_string("point?"));
-	is_polygon_proc        = scm_eval_string(scm_from_locale_string("polygon?"));
-	is_record_proc         = scm_eval_string(scm_from_locale_string("record?"));
-	is_table_proc          = scm_eval_string(scm_from_locale_string("table?"));
-	is_time_proc           = scm_eval_string(scm_from_locale_string("time?"));
-	line_a_proc            = scm_eval_string(scm_from_locale_string("line-a"));
-	line_b_proc            = scm_eval_string(scm_from_locale_string("line-b"));
-	line_c_proc            = scm_eval_string(scm_from_locale_string("line-c"));
-	lseg_a_proc            = scm_eval_string(scm_from_locale_string("lseg-a"));
-	lseg_b_proc            = scm_eval_string(scm_from_locale_string("lseg-b"));
-	macaddr8_data_proc     = scm_eval_string(scm_from_locale_string("macaddr8-data"));
-	macaddr_data_proc      = scm_eval_string(scm_from_locale_string("macaddr-data"));
-	make_bit_string_proc   = scm_eval_string(scm_from_locale_string("make-bit-string"));
-	make_box_proc          = scm_eval_string(scm_from_locale_string("make-box"));
-	make_boxed_datum_proc  = scm_eval_string(scm_from_locale_string("make-boxed-datum"));
-	make_circle_proc       = scm_eval_string(scm_from_locale_string("make-circle"));
-	make_date_proc         = scm_eval_string(scm_from_locale_string("make-date"));
-	make_decimal_proc      = scm_eval_string(scm_from_locale_string("make-decimal"));
-	make_inet_proc         = scm_eval_string(scm_from_locale_string("make-inet"));
-	make_line_proc         = scm_eval_string(scm_from_locale_string("make-line"));
-	make_lseg_proc         = scm_eval_string(scm_from_locale_string("make-lseg"));
-	make_macaddr8_proc     = scm_eval_string(scm_from_locale_string("make-macaddr8"));
-	make_macaddr_proc      = scm_eval_string(scm_from_locale_string("make-macaddr"));
-	make_path_proc         = scm_eval_string(scm_from_locale_string("make-path"));
-	make_point_proc        = scm_eval_string(scm_from_locale_string("make-point"));
-	make_polygon_proc      = scm_eval_string(scm_from_locale_string("make-polygon"));
-	make_record_proc       = scm_eval_string(scm_from_locale_string("make-record"));
-	make_table_proc        = scm_eval_string(scm_from_locale_string("make-table"));
-	make_time_proc         = scm_eval_string(scm_from_locale_string("make-time"));
-	path_is_closed_proc    = scm_eval_string(scm_from_locale_string("path-closed?"));
-	path_points_proc       = scm_eval_string(scm_from_locale_string("path-points"));
-	point_x_proc           = scm_eval_string(scm_from_locale_string("point-x"));
-	point_y_proc           = scm_eval_string(scm_from_locale_string("point-y"));
-	polygon_boundbox_proc  = scm_eval_string(scm_from_locale_string("polygon-boundbox"));
-	record_attrs_proc      = scm_eval_string(scm_from_locale_string("record-attrs"));
-	record_attr_names_proc      = scm_eval_string(scm_from_locale_string("record-attr-names"));
-	record_attr_names_hash_proc      = scm_eval_string(scm_from_locale_string("record-attr-names-hash"));
-	record_types_proc      = scm_eval_string(scm_from_locale_string("record-types"));
-	polygon_points_proc    = scm_eval_string(scm_from_locale_string("polygon-points"));
-	table_attr_names_proc      = scm_eval_string(scm_from_locale_string("table-attr-names"));
-	table_attr_names_hash_proc = scm_eval_string(scm_from_locale_string("table-attr-names-hash"));
-	table_rows_proc        = scm_eval_string(scm_from_locale_string("table-rows"));
-	table_types_proc       = scm_eval_string(scm_from_locale_string("table-types"));
-	time_duration_symbol   = scm_eval_string(scm_from_locale_string("time-duration"));
-	time_monotonic_symbol  = scm_eval_string(scm_from_locale_string("time-monotonic"));
-	time_nanosecond_proc   = scm_eval_string(scm_from_locale_string("time-nanosecond"));
-	time_second_proc       = scm_eval_string(scm_from_locale_string("time-second"));
+	bit_string_data_proc   = eval_scheme("bit-string-data");
+	bit_string_length_proc = eval_scheme("bit-string-length");
+	box_a_proc             = eval_scheme("box-a");
+	box_b_proc             = eval_scheme("box-b");
+	boxed_datum_type_proc  = eval_scheme("boxed-datum-type");
+	boxed_datum_value_proc = eval_scheme("boxed-datum-value");
+	circle_center_proc     = eval_scheme("circle-center");
+	circle_radius_proc     = eval_scheme("circle-radius");
+	date_day_proc          = eval_scheme("date-day");
+	date_hour_proc         = eval_scheme("date-hour");
+	date_minute_proc       = eval_scheme("date-minute");
+	date_month_proc        = eval_scheme("date-month");
+	date_nanosecond_proc   = eval_scheme("date-nanosecond");
+	date_second_proc       = eval_scheme("date-second");
+	date_year_proc         = eval_scheme("date-year");
+	date_zone_offset_proc  = eval_scheme("date-zone-offset");
+	decimal_digits_proc    = eval_scheme("decimal-digits");
+	decimal_scale_proc     = eval_scheme("decimal-scale");
+	inet_address_proc      = eval_scheme("inet-address");
+	inet_bits_proc         = eval_scheme("inet-bits");
+	inet_family_proc       = eval_scheme("inet-family");
+	is_bit_string_proc     = eval_scheme("bit-string?");
+	is_box_proc            = eval_scheme("box?");
+	is_boxed_datum_proc    = eval_scheme("boxed-datum?");
+	is_circle_proc         = eval_scheme("circle?");
+	is_date_proc           = eval_scheme("date?");
+	is_decimal_proc        = eval_scheme("decimal?");
+	is_valid_decimal_proc  = eval_scheme("valid-decimal?");
+	is_inet_proc           = eval_scheme("inet?");
+	is_line_proc           = eval_scheme("line?");
+	is_lseg_proc           = eval_scheme("lseg?");
+	is_macaddr8_proc       = eval_scheme("macaddr8?");
+	is_macaddr_proc        = eval_scheme("macaddr?");
+	is_path_proc           = eval_scheme("path?");
+	is_point_proc          = eval_scheme("point?");
+	is_polygon_proc        = eval_scheme("polygon?");
+	is_record_proc         = eval_scheme("record?");
+	is_table_proc          = eval_scheme("table?");
+	is_time_proc           = eval_scheme("time?");
+	is_tsvector_proc           = eval_scheme("tsvector?");
+	line_a_proc            = eval_scheme("line-a");
+	line_b_proc            = eval_scheme("line-b");
+	line_c_proc            = eval_scheme("line-c");
+	lseg_a_proc            = eval_scheme("lseg-a");
+	lseg_b_proc            = eval_scheme("lseg-b");
+	macaddr8_data_proc     = eval_scheme("macaddr8-data");
+	macaddr_data_proc      = eval_scheme("macaddr-data");
+	make_bit_string_proc   = eval_scheme("make-bit-string");
+	make_box_proc          = eval_scheme("make-box");
+	make_boxed_datum_proc  = eval_scheme("make-boxed-datum");
+	make_circle_proc       = eval_scheme("make-circle");
+	make_date_proc         = eval_scheme("make-date");
+	make_decimal_proc      = eval_scheme("make-decimal");
+	make_inet_proc         = eval_scheme("make-inet");
+	make_line_proc         = eval_scheme("make-line");
+	make_lseg_proc         = eval_scheme("make-lseg");
+	make_macaddr8_proc     = eval_scheme("make-macaddr8");
+	make_macaddr_proc      = eval_scheme("make-macaddr");
+	make_path_proc         = eval_scheme("make-path");
+	make_point_proc        = eval_scheme("make-point");
+	make_polygon_proc      = eval_scheme("make-polygon");
+	make_record_proc       = eval_scheme("make-record");
+	make_table_proc        = eval_scheme("make-table");
+	make_time_proc         = eval_scheme("make-time");
+	make_tslexeme_proc         = eval_scheme("make-tslexeme");
+	make_tsposition_proc         = eval_scheme("make-tsposition");
+	make_tsvector_proc         = eval_scheme("make-tsvector");
+	normalize_tsvector_proc         = eval_scheme("normalize-tsvector");
+	path_is_closed_proc    = eval_scheme("path-closed?");
+	path_points_proc       = eval_scheme("path-points");
+	point_x_proc           = eval_scheme("point-x");
+	point_y_proc           = eval_scheme("point-y");
+	polygon_boundbox_proc  = eval_scheme("polygon-boundbox");
+	record_attrs_proc      = eval_scheme("record-attrs");
+	record_attr_names_proc      = eval_scheme("record-attr-names");
+	record_attr_names_hash_proc      = eval_scheme("record-attr-names-hash");
+	record_types_proc      = eval_scheme("record-types");
+	polygon_points_proc    = eval_scheme("polygon-points");
+	table_attr_names_proc      = eval_scheme("table-attr-names");
+	table_attr_names_hash_proc = eval_scheme("table-attr-names-hash");
+	table_rows_proc        = eval_scheme("table-rows");
+	table_types_proc       = eval_scheme("table-types");
+	time_duration_symbol   = eval_scheme("time-duration");
+	time_monotonic_symbol  = eval_scheme("time-monotonic");
+	time_nanosecond_proc   = eval_scheme("time-nanosecond");
+	time_second_proc       = eval_scheme("time-second");
+	tsvector_lexemes_proc       = eval_scheme("tsvector-lexemes");
+	tslexeme_lexeme_proc       = eval_scheme("tslexeme-lexeme");
+	tslexeme_positions_proc       = eval_scheme("tslexeme-positions");
+	tsposition_index_proc       = eval_scheme("tsposition-index");
+	tsposition_weight_proc       = eval_scheme("tsposition-weight");
 
 	decimal_to_string_proc  = scm_variable_ref(scm_c_lookup("decimal->string"));
 	decimal_to_inexact_proc = scm_variable_ref(scm_c_lookup("decimal->inexact"));
@@ -501,6 +540,45 @@ void _PG_init(void)
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
 	scm_c_define_gsubr("%execute", 4, 0, 0, (SCM (*)()) spi_execute);
+}
+
+/* Error handler function */
+SCM scm_error_handler(void *data, SCM key, SCM args)
+{
+	elog(NOTICE, "%s", scm_to_string(key));
+	elog(NOTICE, "%s", scm_to_string(args));
+    return SCM_BOOL_F;
+}
+
+/* Function to evaluate Scheme code with error handling */
+SCM eval_scheme(const char *cstr)
+{
+	 SCM str = scm_from_locale_string(cstr);
+
+	 return scm_internal_catch(
+		 SCM_BOOL_T,
+		 (scm_t_catch_body)scm_eval_string,
+		 (void *)str,
+		 scm_error_handler,
+		 NULL);
+}
+
+SCM call_scheme_1_inner(void *data)
+{
+    SCM *args = (SCM *)data;
+    return scm_call_1(args[0], args[1]);
+}
+
+SCM call_scheme_1(SCM func, SCM arg1)
+{
+    SCM args[2] = {func, arg1};
+
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        call_scheme_1_inner,
+        args,
+        scm_error_handler,
+        NULL);
 }
 
 void _PG_fini(void)
@@ -1072,7 +1150,7 @@ SCM scruple_compile_func(Oid func_oid)
 
 	elog(NOTICE, "scruple_compile: compiling source:\n%s", buf.data);
 
-	scm_eval_string(scm_from_locale_string(buf.data));
+	eval_scheme(buf.data);
 	scm_proc = scm_variable_ref(scm_c_lookup(proc_name));
 
 	elog(NOTICE, "scruple_compile: complete");
@@ -2649,7 +2727,7 @@ Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 {
 	// Convert SCM string to C string
 	char *cstr = scm_to_locale_string(x);
-	int len = scm_to_int(scm_string_length(x));
+	int len = scm_c_string_utf8_length(x);
 
 	Datum result = jsonb_from_cstring(cstr, len);
 
@@ -2657,6 +2735,161 @@ Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 	free(cstr);
 
 	return result;
+}
+
+SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
+{
+    TSVector tsvector = DatumGetTSVector(x);
+    WordEntry *entries = tsvector->entries;
+    SCM tsvector_scm_list = SCM_EOL;
+    SCM tslexeme_scm, tsposition_scm, tsvector_scm;
+    int i, j;
+
+    for (i = 0; i < tsvector->size; i++)
+    {
+	    char *lexeme = strndup(STRPTR(tsvector)+entries[i].pos, entries[i].len);
+        SCM lexeme_scm = scm_from_locale_string(lexeme);
+        SCM positions_scm_list = SCM_EOL;
+
+        WordEntryPos *positions = POSDATAPTR(tsvector, &entries[i]);
+        int num_positions = POSDATALEN(tsvector, &entries[i]);
+
+        free(lexeme);
+
+        for (j = 0; j < num_positions; j++)
+        {
+            int pos = WEP_GETPOS(positions[j]);
+            char weight = WEP_GETWEIGHT(positions[j]);
+            SCM pos_scm = scm_from_int(pos);
+            SCM weight_scm = scm_from_int(weight);
+
+            tsposition_scm = scm_call_2(make_tsposition_proc, pos_scm, weight_scm);
+            positions_scm_list = scm_append(scm_list_2(positions_scm_list, scm_list_1(tsposition_scm)));
+        }
+
+        tslexeme_scm = scm_call_2(make_tslexeme_proc, lexeme_scm, positions_scm_list);
+        tsvector_scm_list = scm_append(scm_list_2(tsvector_scm_list, scm_list_1(tslexeme_scm)));
+    }
+
+    tsvector_scm = scm_call_1(make_tsvector_proc, tsvector_scm_list);
+
+    elog(NOTICE, "datum_tsvector_to_scm: %s", scm_to_string(tsvector_scm));
+    return tsvector_scm;
+}
+
+Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
+{
+
+	SCM n = call_scheme_1(normalize_tsvector_proc, x);
+	size_t buffer_size = calculate_tsvector_buffer_size(n);
+	SCM lexemes = scm_call_1(tsvector_lexemes_proc, n);
+	long lexeme_count = scm_to_long(scm_length(lexemes));
+	size_t alloc_size = CALCDATASIZE(lexeme_count, buffer_size);
+
+	TSVector result;
+	WordEntry *entries;
+	char *buffer;
+	size_t offset;
+
+	if (buffer_size > MAXSTRPOS)
+		ereport(
+			ERROR,
+			(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			 errmsg(
+				 "string is too long for tsvector (%ld bytes, max %d bytes)",
+				 buffer_size, MAXSTRPOS)));
+
+	result = (TSVector) palloc0(alloc_size);
+	SET_VARSIZE(result, alloc_size);
+	result->size = lexeme_count;
+
+	entries = ARRPTR(result);
+	buffer = STRPTR(result);
+	offset = 0;
+
+	for (long i = 0; i < lexeme_count; i++) {
+		SCM lexeme = scm_car(lexemes);
+		SCM lexeme_str = scm_call_1(tslexeme_lexeme_proc, lexeme);
+		SCM positions = scm_call_1(tslexeme_positions_proc, lexeme);
+
+		size_t str_len = scm_c_string_utf8_length(lexeme_str);
+
+		entries[i].pos = offset;
+		entries[i].len = str_len;
+		memcpy(buffer + offset, scm_to_locale_string(lexeme_str), str_len);
+
+		offset += str_len;
+
+		if (positions == SCM_EOL)
+			entries[i].haspos = false;
+
+		else {
+			long position_count = scm_to_long(scm_length(positions));
+
+			if (position_count > 0xffff)
+				elog(ERROR, "too many positions");
+
+			entries[i].haspos = true;
+
+			offset = SHORTALIGN(offset);
+			*(uint16 *)(buffer + offset) = (uint16) position_count;
+			offset += sizeof(uint16);
+
+			while (positions != SCM_EOL) {
+				SCM position = scm_car(positions);
+				WordEntryPos *wep = (WordEntryPos *)(buffer + offset);
+
+				WEP_SETPOS(*wep, get_tsposition_index(position));
+				WEP_SETWEIGHT(*wep, get_tsposition_weight(position));
+
+				offset += sizeof(WordEntryPos);
+				positions = scm_cdr(positions);
+			}
+		}
+
+		lexemes = scm_cdr(lexemes);
+	}
+
+	return TSVectorGetDatum(result);
+}
+
+uint16 get_tsposition_index(SCM position)
+{
+	uint16 index = scm_to_uint16(scm_call_1(tsposition_index_proc, position));
+
+	if (index > 0x3fff)
+		elog(ERROR, "get_tsposition_index: index out of range: %d > %d", index, 0x3fff);
+
+	return index;
+}
+
+uint16 get_tsposition_weight(SCM position)
+{
+	uint16 weight = scm_to_uint16(scm_call_1(tsposition_weight_proc, position));
+
+	if (weight > 3)
+		elog(ERROR, "get_tsposition_weight: weight out of range: %d > %d", weight, 3);
+
+	return weight;
+}
+
+size_t calculate_tsvector_buffer_size(SCM x)
+{
+	SCM lexemes = scm_call_1(tsvector_lexemes_proc, x);
+	size_t buflen = 0;
+
+	while (lexemes != SCM_EOL) {
+		SCM lexeme = scm_car(lexemes);
+		long pos_count = scm_to_long(scm_length(scm_call_1(tslexeme_positions_proc, lexeme)));
+
+		buflen += scm_c_string_utf8_length(scm_call_1(tslexeme_lexeme_proc, lexeme));
+		buflen = SHORTALIGN(buflen);
+		buflen += pos_count * sizeof(WordEntryPos) + sizeof(uint16);
+
+		lexemes = scm_cdr(lexemes);
+	}
+
+	return buflen;
 }
 
 SCM datum_void_to_scm(Datum x, Oid type_oid)
@@ -2779,6 +3012,11 @@ bool is_time(SCM x)
 	return scm_is_true(scm_call_1(is_time_proc, x));
 }
 
+bool is_tsvector(SCM x)
+{
+	return scm_is_true(scm_call_1(is_tsvector_proc, x));
+}
+
 bool is_valid_decimal(SCM x)
 {
 	return scm_is_true(scm_call_1(is_valid_decimal_proc, x));
@@ -2892,7 +3130,7 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 			Oid type_oid = infer_scm_type_oid(arg);
 
 			if (type_oid == InvalidOid)
-				elog(ERROR, "not implemented");
+				elog(ERROR, "spi_execute: unable to infer result type");
 
 			arg_types[i] = type_oid;
 			arg_values[i] = scm_to_datum(arg, type_oid);
@@ -3063,6 +3301,9 @@ Oid infer_scm_type_oid(SCM x)
 
 	if (is_time(x))
 		return TypenameGetTypid("time");
+
+	if (is_tsvector(x))
+		return TypenameGetTypid("tsvector");
 
 	return InvalidOid;
 }

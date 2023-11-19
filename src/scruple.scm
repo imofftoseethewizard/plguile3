@@ -1,4 +1,5 @@
 (use-modules
+ (srfi srfi-1)  ; fold-right
  (srfi srfi-9)  ; define-record-type
  (srfi srfi-11) ; let-values
  (srfi srfi-19) ; date, time, etc (used in scruple.c)
@@ -205,6 +206,48 @@
   (make-tsquery ast)
   tsquery?
   (ast tsquery-ast))
+
+(define (normalize-tsvector v)
+  (make-tsvector (merge-lexemes (tsvector-lexemes v))))
+
+(define (merge-lexemes ls)
+  (map normalize-tslexeme
+       (fold-right (lambda (current result)
+                     (if (null? result)
+                         (list current)
+                         (if (string=? (tslexeme-lexeme current) (tslexeme-lexeme (car result)))
+                             (cons (merge-tslexemes current (car result)) (cdr result))
+                             (cons current result))))
+                   '()
+                   (sort ls tslexeme<?))))
+
+(define (tslexeme<? a b)
+  (string<? (tslexeme-lexeme a) (tslexeme-lexeme b)))
+
+(define (merge-tslexemes a b)
+  (make-tslexeme (tslexeme-lexeme a)
+                 (append (tslexeme-positions a) (tslexeme-positions b))))
+
+(define (normalize-tslexeme l)
+  (make-tslexeme (tslexeme-lexeme l)
+                 (merge-positions (tslexeme-positions l))))
+
+(define (merge-positions ps)
+  (fold-right (lambda (current result)
+                (if (null? result)
+                    (list current)
+                    (if (= (tsposition-index current) (tsposition-index (car result)))
+                        result
+                        (cons current result))))
+              '()
+              (sort ps tsposition<?)))
+
+(define (tsposition<? a b)
+  (let ((index-a (tsposition-index a))
+        (index-b (tsposition-index b)))
+    (or (< index-a index-b)
+      (and (= index-a index-b)
+           (< (tsposition-weight a) (tsposition-weight b))))))
 
 (define (int2-compatible? x)
   (and (integer? x)

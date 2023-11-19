@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(169);
+select plan(171);
 
 --------------------------------------------------------------------------------
 --
@@ -613,6 +613,18 @@ from (select B'101010111010011101011011010110000101') t(varbit);
 
 --------------------------------------------------------------------------------
 --
+-- Type tsvector
+--
+
+create function f_tsvector_id(a tsvector) returns tsvector as 'a' language scruple;
+
+do $$ begin raise notice '%s', f_tsvector_id('a:1A fat:2B,4C cat:5D'::tsvector); end $$;
+
+select ok(f_tsvector_id(t.tsvector) = t.tsvector, 'tsvector: identity mapping test')
+from (select 'a:1A fat:2B,4C cat:5D'::tsvector) t(tsvector);
+
+--------------------------------------------------------------------------------
+--
 -- Type uuid
 --
 
@@ -856,6 +868,13 @@ create function f_execute_with_args_bits() returns bit(6) as $$
 $$
 language scruple;
 
+create function f_execute_with_args_tsvector() returns tsvector as $$
+(scalar (execute "select $1"
+                 `(,(make-tsvector (list (make-tslexeme "foo"
+                                                        (list (make-tsposition 1 3))))))))
+$$
+language scruple;
+
 create function f_execute_with_args_uuid() returns uuid as $$
 (scalar (execute "select $1::uuid" '("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))) ;; '
 $$
@@ -923,6 +942,7 @@ select is(f_execute_with_args_inet6(), inet '2001:4f8:3:ba:2e0:81ff:fe22:d1f1/12
 select is(f_execute_with_args_cidr(), cidr '10.0.0.0/8', 'execute: with args cidr');
 select is(f_execute_with_args_macaddr(), macaddr '08:00:2b:01:02:03', 'execute: with args macaddr');
 select is(f_execute_with_args_macaddr8(), macaddr8 '08:00:2b:01:02:03:04:05', 'execute: with args macaddr8');
+select is(f_execute_with_args_tsvector(), 'foo:1A'::tsvector, 'execute: with args tsvector');
 select is(f_execute_with_args_uuid(), uuid 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'execute: with args uuid');
 select is(f_execute_with_args_xml()::text, '<foo>bar</foo>', 'execute: with args xml');
 select is(f_execute_with_args_json()::text, '{"foo": ["bar", 42]}', 'execute: with args json');
