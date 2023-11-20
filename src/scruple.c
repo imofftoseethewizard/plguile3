@@ -29,6 +29,7 @@
 #include <utils/inet.h>
 #include <utils/jsonfuncs.h>
 #include <utils/lsyscache.h>
+#include <utils/pg_crc.h>
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
 #include <utils/tuplestore.h>
@@ -110,6 +111,7 @@ static SCM datum_text_to_scm(Datum x, Oid type_oid);
 static SCM datum_time_to_scm(Datum x, Oid type_oid);
 static SCM datum_timetz_to_scm(Datum x, Oid type_oid);
 static SCM datum_timestamptz_to_scm(Datum x, Oid type_oid);
+static SCM datum_tsquery_to_scm(Datum x, Oid type_oid);
 static SCM datum_tsvector_to_scm(Datum x, Oid type_oid);
 static SCM datum_uuid_to_scm(Datum x, Oid type_oid);
 static SCM datum_void_to_scm(Datum x, Oid type_oid);
@@ -145,6 +147,7 @@ static Datum scm_to_datum_text(SCM x, Oid type_oid);
 static Datum scm_to_datum_time(SCM x, Oid type_oid);
 static Datum scm_to_datum_timetz(SCM x, Oid type_oid);
 static Datum scm_to_datum_timestamptz(SCM x, Oid type_oid);
+static Datum scm_to_datum_tsquery(SCM x, Oid type_oid);
 static Datum scm_to_datum_tsvector(SCM x, Oid type_oid);
 static Datum scm_to_datum_uuid(SCM x, Oid type_oid);
 static Datum scm_to_datum_void(SCM x, Oid type_oid);
@@ -174,6 +177,7 @@ static bool is_path(SCM x);
 static bool is_point(SCM x);
 static bool is_polygon(SCM x);
 static bool is_time(SCM x);
+static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
 
 static SCM scm_error_handler(void *data, SCM key, SCM args);
@@ -207,6 +211,9 @@ static Datum jsonb_from_cstring(char *json, int len);
 static uint16 get_tsposition_index(SCM position);
 static uint16 get_tsposition_weight(SCM position);
 static size_t calculate_tsvector_buffer_size(SCM x);
+static SCM tsquery_items_to_scm(QueryItem **qi_iter, char *operands);
+static void tsquery_expr_size(SCM expr, int *count, size_t *bytes);
+static void scm_to_tsquery_items(SCM expr, QueryItem **qi_iter, char *operands, size_t *offset);
 
 static Oid int2_oid;
 static Oid int4_oid;
@@ -258,6 +265,7 @@ static SCM is_polygon_proc;
 static SCM is_record_proc;
 static SCM is_table_proc;
 static SCM is_time_proc;
+static SCM is_tsquery_proc;
 static SCM is_tsvector_proc;
 static SCM is_valid_decimal_proc;
 static SCM line_a_proc;
@@ -286,6 +294,7 @@ static SCM make_table_proc;
 static SCM make_time_proc;
 static SCM make_tslexeme_proc;
 static SCM make_tsposition_proc;
+static SCM make_tsquery_proc;
 static SCM make_tsvector_proc;
 static SCM normalize_tsvector_proc;
 static SCM path_is_closed_proc;
@@ -311,7 +320,15 @@ static SCM tslexeme_lexeme_proc;
 static SCM tslexeme_positions_proc;
 static SCM tsposition_index_proc;
 static SCM tsposition_weight_proc;
+static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
+static SCM validate_tsquery_proc;
+
+static SCM and_symbol;
+static SCM not_symbol;
+static SCM or_symbol;
+static SCM phrase_symbol;
+static SCM value_symbol;
 
 static HTAB *funcCache;
 static HTAB *typeCache;
@@ -378,6 +395,7 @@ void _PG_init(void)
 	insert_type_cache_entry(TypenameGetTypid("timetz"),      datum_timetz_to_scm,      scm_to_datum_timetz);
 	insert_type_cache_entry(TypenameGetTypid("timestamp"),   datum_timestamptz_to_scm, scm_to_datum_timestamptz);
 	insert_type_cache_entry(TypenameGetTypid("timestamptz"), datum_timestamptz_to_scm, scm_to_datum_timestamptz);
+	insert_type_cache_entry(TypenameGetTypid("tsquery"),     datum_tsquery_to_scm,     scm_to_datum_tsquery);
 	insert_type_cache_entry(TypenameGetTypid("tsvector"),    datum_tsvector_to_scm,    scm_to_datum_tsvector);
 	insert_type_cache_entry(TypenameGetTypid("uuid"),        datum_uuid_to_scm,        scm_to_datum_uuid);
 	insert_type_cache_entry(TypenameGetTypid("varbit"),      datum_bit_string_to_scm,  scm_to_datum_bit_string);
@@ -478,6 +496,7 @@ void _PG_init(void)
 	is_record_proc              = eval_scheme("record?");
 	is_table_proc               = eval_scheme("table?");
 	is_time_proc                = eval_scheme("time?");
+	is_tsquery_proc             = eval_scheme("tsquery?");
 	is_tsvector_proc            = eval_scheme("tsvector?");
 	line_a_proc                 = eval_scheme("line-a");
 	line_b_proc                 = eval_scheme("line-b");
@@ -505,6 +524,7 @@ void _PG_init(void)
 	make_time_proc              = eval_scheme("make-time");
 	make_tslexeme_proc          = eval_scheme("make-tslexeme");
 	make_tsposition_proc        = eval_scheme("make-tsposition");
+	make_tsquery_proc           = eval_scheme("make-tsquery");
 	make_tsvector_proc          = eval_scheme("make-tsvector");
 	normalize_tsvector_proc     = eval_scheme("normalize-tsvector");
 	path_is_closed_proc         = eval_scheme("path-closed?");
@@ -530,6 +550,8 @@ void _PG_init(void)
 	tslexeme_positions_proc     = eval_scheme("tslexeme-positions");
 	tsposition_index_proc       = eval_scheme("tsposition-index");
 	tsposition_weight_proc      = eval_scheme("tsposition-weight");
+	tsquery_expr_proc           = eval_scheme("tsquery-expr");
+	validate_tsquery_proc       = eval_scheme("validate-tsquery");
 
 	decimal_to_string_proc  = scm_variable_ref(scm_c_lookup("decimal->string"));
 	decimal_to_inexact_proc = scm_variable_ref(scm_c_lookup("decimal->inexact"));
@@ -537,6 +559,12 @@ void _PG_init(void)
 	is_int4_proc            = scm_variable_ref(scm_c_lookup("int4-compatible?"));
 	is_int8_proc            = scm_variable_ref(scm_c_lookup("int8-compatible?"));
 	string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
+
+	and_symbol    = scm_from_utf8_symbol("AND");
+	not_symbol    = scm_from_utf8_symbol("NOT");
+	or_symbol     = scm_from_utf8_symbol("OR");
+	phrase_symbol = scm_from_utf8_symbol("PHRASE");
+	value_symbol  = scm_from_utf8_symbol("VALUE");
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
 	scm_c_define_gsubr("%execute", 4, 0, 0, (SCM (*)()) spi_execute);
@@ -2737,6 +2765,205 @@ Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 	return result;
 }
 
+SCM datum_tsquery_to_scm(Datum x, Oid type_oid)
+{
+	TSQuery query = DatumGetTSQuery(x);
+	QueryItem *query_items = GETQUERY(query);
+	char *operands = GETOPERAND(query);
+
+	return call_scheme_1(make_tsquery_proc, tsquery_items_to_scm(&query_items, operands));
+}
+
+Datum scm_to_datum_tsquery(SCM x, Oid type_oid)
+{
+	int item_count = 0;
+	size_t operand_bytes = 0;
+	size_t alloc_size;
+
+	SCM expr;
+	TSQuery query;
+	QueryItem *query_items;
+	size_t offset = 0;
+
+	if (!is_tsquery(x))
+		elog(ERROR, "tsquery result expected, not: %s", scm_to_string(x));
+
+	call_scheme_1(validate_tsquery_proc, x);
+
+	expr = scm_call_1(tsquery_expr_proc, x);
+
+	tsquery_expr_size(expr, &item_count, &operand_bytes);
+
+	alloc_size = COMPUTESIZE(item_count, operand_bytes);
+
+	/* Pack the QueryItems in the final TSQuery struct to return to caller */
+	query = (TSQuery) palloc0(alloc_size);
+	SET_VARSIZE(query, alloc_size);
+	query->size = item_count;
+
+	query_items = GETQUERY(query);
+	offset = 0;
+
+	scm_to_tsquery_items(expr, &query_items, GETOPERAND(query), &offset);
+
+	return TSQueryGetDatum(query);
+}
+
+void scm_to_tsquery_items(SCM expr, QueryItem **qi_iter, char *operands, size_t *offset)
+{
+	SCM op = scm_car(expr);
+
+	if (op == value_symbol) {
+
+		QueryOperand *operand = &(*qi_iter)->qoperand;
+		size_t len;
+		char *c_str = scm_to_locale_stringn(scm_cadr(expr), &len);
+		SCM weight = scm_caddr(expr);
+		SCM prefix = scm_cadddr(expr);
+
+		pg_crc32 valcrc;
+
+		operand->type = QI_VAL;
+		operand->weight = scm_to_uint8(weight);
+		operand->prefix = scm_to_bool(prefix);
+
+		INIT_LEGACY_CRC32(valcrc);
+		COMP_LEGACY_CRC32(valcrc, c_str, len);
+		FIN_LEGACY_CRC32(valcrc);
+
+		operand->valcrc = valcrc;
+
+		operand->length = len;
+		operand->distance = *offset;
+
+		strncpy(operands + *offset, c_str, len+1);
+
+		free(c_str);
+
+		*offset += len+1;
+		(*qi_iter)++;
+
+	}
+	else if (op == not_symbol) {
+
+		QueryOperator *operator = &(*qi_iter)->qoperator;
+
+		operator->type = QI_OPR;
+		operator->oper = OP_NOT;
+		operator->left = 1;
+
+		(*qi_iter)++;
+
+		scm_to_tsquery_items(scm_cadr(expr), qi_iter, operands, offset);
+
+	}
+	else if (op == and_symbol || op == or_symbol || op == phrase_symbol) {
+
+		QueryOperator *operator = &(*qi_iter)->qoperator;
+		QueryItem *op_item = *qi_iter;
+		SCM left_expr = scm_cadr(expr);
+		SCM right_expr = scm_caddr(expr);
+
+		operator->type = QI_OPR;
+
+		if (op != phrase_symbol)
+			operator->oper = op == and_symbol ? OP_AND : OP_OR;
+
+		else {
+			operator->oper = OP_PHRASE;
+			operator->distance = scm_to_int16(scm_cadddr(expr));
+		}
+
+		(*qi_iter)++;
+
+		scm_to_tsquery_items(right_expr, qi_iter, operands, offset);
+
+		operator->left = *qi_iter - op_item;
+
+		scm_to_tsquery_items(left_expr, qi_iter, operands, offset);
+
+	}
+	else
+		elog(ERROR, "scm_to_tsquery_items: unknown op; %s", scm_to_string(op));
+}
+
+void tsquery_expr_size(SCM expr, int *count, size_t *bytes)
+{
+	SCM op = scm_car(expr);
+
+	if (op == value_symbol) {
+		*bytes += scm_c_string_utf8_length(scm_cadr(expr))+1;
+		*count += 1;
+	}
+	else if (op == not_symbol) {
+		*count += 1;
+		tsquery_expr_size(scm_cadr(expr), count, bytes);
+	}
+	else if (op == and_symbol || op == or_symbol || op == phrase_symbol) {
+		*count += 1;
+		tsquery_expr_size(scm_cadr(expr), count, bytes);
+		tsquery_expr_size(scm_caddr(expr), count, bytes);
+	}
+	else
+		elog(ERROR, "tsquery_expr_size: unknown op; %s", scm_to_string(op));
+}
+
+
+SCM tsquery_items_to_scm(QueryItem **qi_iter, char *operands)
+{
+	/* since this function recurses, it could be driven to stack overflow. */
+	check_stack_depth();
+
+	if ((*qi_iter)->type == QI_VAL) {
+
+		QueryOperand *operand = &(*qi_iter)->qoperand;
+		char *text = operands + operand->distance;
+
+		SCM value = scm_from_locale_string(text);
+		SCM weight = scm_from_uint8(operand->weight);
+		SCM prefix = scm_from_bool(operand->prefix);
+
+		(*qi_iter)++;
+
+		return scm_list_4(value_symbol, value, weight, prefix);
+	}
+	else if ((*qi_iter)->qoperator.oper == OP_NOT) {
+
+		(*qi_iter)++;
+
+		return scm_list_2(not_symbol, tsquery_items_to_scm(qi_iter, operands));
+	}
+	else {
+
+		QueryOperator *operator = &(*qi_iter)->qoperator;
+		int8 op = operator->oper;
+		SCM distance, left, right;
+
+		(*qi_iter)++;
+
+		right = tsquery_items_to_scm(qi_iter, operands);
+		left = tsquery_items_to_scm(qi_iter, operands);
+
+		switch (op)
+		{
+			case OP_OR:
+				return scm_list_3(or_symbol, left, right);
+
+			case OP_AND:
+				return scm_list_3(and_symbol, left, right);
+
+			case OP_PHRASE:
+				distance = scm_from_uint16(operator->distance);
+				return scm_list_4(phrase_symbol, left, right, distance);
+
+			default:
+				/* OP_NOT is handled in above if-branch */
+				elog(ERROR, "unrecognized operator type: %d", op);
+				return SCM_EOL;
+		}
+	}
+}
+
 SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
 {
     TSVector tsvector = DatumGetTSVector(x);
@@ -3010,6 +3237,11 @@ bool is_table(SCM x)
 bool is_time(SCM x)
 {
 	return scm_is_true(scm_call_1(is_time_proc, x));
+}
+
+bool is_tsquery(SCM x)
+{
+	return scm_is_true(scm_call_1(is_tsquery_proc, x));
 }
 
 bool is_tsvector(SCM x)
@@ -3301,6 +3533,9 @@ Oid infer_scm_type_oid(SCM x)
 
 	if (is_time(x))
 		return TypenameGetTypid("time");
+
+	if (is_tsquery(x))
+		return TypenameGetTypid("tsquery");
 
 	if (is_tsvector(x))
 		return TypenameGetTypid("tsvector");

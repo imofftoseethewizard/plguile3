@@ -249,6 +249,40 @@
       (and (= index-a index-b)
            (< (tsposition-weight a) (tsposition-weight b))))))
 
+(define-record-type tsquery
+  (make-tsquery expr)
+  tsquery?
+  (expr tsquery-expr))
+
+(define (validate-tsquery q)
+  (validate-tsquery-expr (tsquery-expr q)))
+
+(define (validate-tsquery-expr e)
+  (if (not (pair? e))
+      (raise-exception `(invalid-tsquery-expr ,e))
+      (case (car e)
+        ((VALUE) (unless (and (= 4 (length e))
+                               (string? (cadr e))
+                               (exact? (caddr e))
+                               (<= 0 (caddr e) 15)
+                               (boolean? (cadddr e)))
+                    (raise-exception `(invalid-tsquery-value-expr ,e))))
+        ((NOT) (if (not (= 2 (length e)))
+                    (raise-exception `(invalid-tsquery-not-expr ,e))
+                    (validate-tsquery-expr (cadr e))))
+        ((AND OR) (if (not (= 3 (length e)))
+                       (raise-exception `(invalid-tsquery-binop-expr ,e))
+                       (begin
+                         (validate-tsquery-expr (cadr e))
+                         (validate-tsquery-expr (caddr e)))))
+        ((PHRASE) (if (not (and (= 4 (length e))
+                                 (exact? (cadddr e))
+                                 (<= 0 (cadddr e))))
+                       (raise-exception `(invalid-tsquery-phrase-expr ,e))
+                       (begin
+                         (validate-tsquery-expr (cadr e))
+                         (validate-tsquery-expr (caddr e))))))))
+
 (define (int2-compatible? x)
   (and (integer? x)
        (>= x -32768)
