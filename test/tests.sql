@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(173);
+select plan(174);
 
 --------------------------------------------------------------------------------
 --
@@ -675,6 +675,18 @@ select * from finish();
 
 --------------------------------------------------------------------------------
 --
+-- Type jsonpath
+--
+
+create function f_jsonpath_id(a jsonpath) returns jsonpath as 'a' language scruple;
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.foo.bar', 'jsonpath: identity mapping test')
+from (select 'strict $.foo.bar'::jsonpath) t(jsonpath);
+
+select * from finish();
+
+--------------------------------------------------------------------------------
+--
 -- Arrays
 --
 
@@ -885,9 +897,9 @@ language scruple;
 
 create function f_execute_with_args_tsquery() returns tsquery as $$
 (scalar (execute "select $1"
-                 `(,(make-tsquery '(AND (VALUE "fat" 8 #f)  ;; '
-                                        (PHRASE (OR (VALUE "rat" 6 #f) (VALUE "cat" 1 #t))
-                                                (VALUE "mat" 0 #f)
+                 `(,(make-tsquery '(and (value "fat" 8 #f)  ;; '
+                                        (phrase (or (value "rat" 6 #f) (value "cat" 1 #t))
+                                                (value "mat" 0 #f)
                                                 6))))))
 $$
 language scruple;
