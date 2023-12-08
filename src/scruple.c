@@ -39,10 +39,6 @@
 #include <utils/varbit.h>
 #include <utils/xml.h>
 
-#if 0
-#include "tsearch/ts_utils.h"
-#endif
-
 #define NS_PER_USEC 1000
 #define SECS_PER_MONTH (DAYS_PER_MONTH * SECS_PER_DAY)
 
@@ -157,7 +153,8 @@ static Datum scm_to_datum_void(SCM x, Oid type_oid);
 static Datum scm_to_datum_xml(SCM x, Oid type_oid);
 
 static Datum datum_date_to_timestamptz(Datum x);
-static char* scm_to_string(SCM x);
+static char *scm_to_string(SCM x);
+static SCM scm_c_list_ref(SCM obj, size_t k);
 
 static Oid get_boxed_datum_type(SCM x);
 static Datum get_boxed_datum_value(SCM x);
@@ -232,7 +229,20 @@ static bool jsp_get_array_subscript(JsonPathItem *v, JsonPathItem *from, JsonPat
 static void jsp_init(JsonPathItem *v, JsonPath *js);
 static bool jsp_next(JsonPathItem *v);
 static void jsp_init_by_buffer(JsonPathItem *v, char *base, int32 pos);
-
+static int scm_expr_to_jsp(StringInfo buf, SCM expr);
+static JsonPathItemType jsp_expr_type(SCM expr);
+static void scm_chained_expr_to_jsp(StringInfo buf, SCM expr);
+static void align_buffer(StringInfo buf);
+static int32 reserve_jsp_offset(StringInfo buf);
+static int32 reserve_jsp_offsets(StringInfo buf, uint32 count);
+static void write_jsp_any_bounds(StringInfo buf, SCM expr);
+static void write_jsp_arg(StringInfo buf, int32 base, int32 offset, SCM expr);
+static void write_jsp_bool(StringInfo buf, SCM expr);
+static int32 write_jsp_header(StringInfo buf, JsonPathItemType type);
+static void write_jsp_like_regex_flags(StringInfo buf, SCM flags);
+static void write_jsp_numeric(StringInfo buf, SCM expr);
+static void write_jsp_string(StringInfo buf, SCM s);
+static void write_jsp_uint32(StringInfo buf, SCM expr);
 
 static Oid int2_oid;
 static Oid int4_oid;
@@ -345,6 +355,7 @@ static SCM tsposition_index_proc;
 static SCM tsposition_weight_proc;
 static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
+static SCM validate_jsonpath_proc;
 static SCM validate_tsquery_proc;
 
 // Symbols for tsquery
@@ -370,23 +381,23 @@ static SCM equal_symbol;
 static SCM exists_symbol;
 static SCM filter_symbol;
 static SCM floor_symbol;
-static SCM greater_symbol;
 static SCM greater_or_equal_symbol;
+static SCM greater_symbol;
 static SCM icase_symbol;
 static SCM index_array_symbol;
 static SCM is_unknown_symbol;
 static SCM key_symbol;
 static SCM keyvalue_symbol;
 static SCM last_symbol;
-static SCM less_symbol;
 static SCM less_or_equal_symbol;
+static SCM less_symbol;
 static SCM like_regex_symbol;
-static SCM minus_symbol;
+static SCM negate_symbol;
 static SCM mline_symbol;
 static SCM mod_symbol;
 static SCM mul_symbol;
+static SCM nop_symbol;
 static SCM not_equal_symbol;
-static SCM plus_symbol;
 static SCM quote_symbol;
 static SCM root_symbol;
 static SCM size_symbol;
@@ -396,6 +407,8 @@ static SCM sub_symbol;
 static SCM type_symbol;
 static SCM var_symbol;
 static SCM wspace_symbol;
+
+static SCM jsp_op_types_hash;
 
 static HTAB *funcCache;
 static HTAB *typeCache;
@@ -623,6 +636,7 @@ void _PG_init(void)
 	tsposition_index_proc       = eval_scheme("tsposition-index");
 	tsposition_weight_proc      = eval_scheme("tsposition-weight");
 	tsquery_expr_proc           = eval_scheme("tsquery-expr");
+	validate_jsonpath_proc      = eval_scheme("validate-jsonpath");
 	validate_tsquery_proc       = eval_scheme("validate-tsquery");
 
 	decimal_to_string_proc  = scm_variable_ref(scm_c_lookup("decimal->string"));
@@ -647,7 +661,7 @@ void _PG_init(void)
 	current_symbol          = scm_from_utf8_symbol("@");
 	datetime_symbol         = scm_from_utf8_symbol("datetime");
 	div_symbol              = scm_from_utf8_symbol("/");
-	dotall_symbol           = scm_from_utf8_symbol("#:s");
+	dotall_symbol           = scm_from_utf8_symbol("dot-matches-newline");
 	double_symbol           = scm_from_utf8_symbol("double");
 	equal_symbol            = scm_from_utf8_symbol("=");
 	exists_symbol           = scm_from_utf8_symbol("exists");
@@ -655,7 +669,7 @@ void _PG_init(void)
 	floor_symbol            = scm_from_utf8_symbol("floor");
 	greater_symbol          = scm_from_utf8_symbol(">");
 	greater_or_equal_symbol = scm_from_utf8_symbol(">=");
-	icase_symbol            = scm_from_utf8_symbol("#:i");
+	icase_symbol            = scm_from_utf8_symbol("ignore-case");
 	index_array_symbol      = scm_from_utf8_symbol("index-array");
 	is_unknown_symbol       = scm_from_utf8_symbol("unknown?");
 	key_symbol              = scm_from_utf8_symbol("key");
@@ -664,13 +678,13 @@ void _PG_init(void)
 	less_symbol             = scm_from_utf8_symbol("<");
 	less_or_equal_symbol    = scm_from_utf8_symbol("<=");
 	like_regex_symbol       = scm_from_utf8_symbol("like-regex");
-	minus_symbol            = scm_from_utf8_symbol("-");
-	mline_symbol            = scm_from_utf8_symbol("#:m");
+	negate_symbol           = scm_from_utf8_symbol("negate");
+	mline_symbol            = scm_from_utf8_symbol("multi-line");
 	mod_symbol              = scm_from_utf8_symbol("%");
 	mul_symbol              = scm_from_utf8_symbol("*");
+	nop_symbol              = scm_from_utf8_symbol("nop");
 	not_equal_symbol        = scm_from_utf8_symbol("!=");
-	plus_symbol             = scm_from_utf8_symbol("+");
-	quote_symbol            = scm_from_utf8_symbol("#:q");
+	quote_symbol            = scm_from_utf8_symbol("literal");
 	root_symbol             = scm_from_utf8_symbol("root");
 	size_symbol             = scm_from_utf8_symbol("size");
 	starts_with_symbol      = scm_from_utf8_symbol("starts-with");
@@ -679,6 +693,47 @@ void _PG_init(void)
 	type_symbol             = scm_from_utf8_symbol("type");
 	var_symbol              = scm_from_utf8_symbol("var");
 	wspace_symbol           = scm_from_utf8_symbol("#:x");
+
+	jsp_op_types_hash = scm_c_make_hash_table(39); // will have 39 symbols in it
+
+	scm_hash_set_x(jsp_op_types_hash, abs_symbol,              scm_from_int(jpiAbs));
+	scm_hash_set_x(jsp_op_types_hash, add_symbol,              scm_from_int(jpiAdd));
+	scm_hash_set_x(jsp_op_types_hash, and_symbol,              scm_from_int(jpiAnd));
+	scm_hash_set_x(jsp_op_types_hash, any_array_symbol,        scm_from_int(jpiAnyArray));
+	scm_hash_set_x(jsp_op_types_hash, any_key_symbol,          scm_from_int(jpiAnyKey));
+	scm_hash_set_x(jsp_op_types_hash, any_symbol,              scm_from_int(jpiAny));
+	scm_hash_set_x(jsp_op_types_hash, ceiling_symbol,          scm_from_int(jpiCeiling));
+	scm_hash_set_x(jsp_op_types_hash, current_symbol,          scm_from_int(jpiCurrent));
+	scm_hash_set_x(jsp_op_types_hash, datetime_symbol,         scm_from_int(jpiDatetime));
+	scm_hash_set_x(jsp_op_types_hash, div_symbol,              scm_from_int(jpiDiv));
+	scm_hash_set_x(jsp_op_types_hash, double_symbol,           scm_from_int(jpiDouble));
+	scm_hash_set_x(jsp_op_types_hash, equal_symbol,            scm_from_int(jpiEqual));
+	scm_hash_set_x(jsp_op_types_hash, exists_symbol,           scm_from_int(jpiExists));
+	scm_hash_set_x(jsp_op_types_hash, filter_symbol,           scm_from_int(jpiFilter));
+	scm_hash_set_x(jsp_op_types_hash, floor_symbol,            scm_from_int(jpiFloor));
+	scm_hash_set_x(jsp_op_types_hash, greater_or_equal_symbol, scm_from_int(jpiGreaterOrEqual));
+	scm_hash_set_x(jsp_op_types_hash, greater_symbol,          scm_from_int(jpiGreater));
+	scm_hash_set_x(jsp_op_types_hash, index_array_symbol,      scm_from_int(jpiIndexArray));
+	scm_hash_set_x(jsp_op_types_hash, is_unknown_symbol,       scm_from_int(jpiIsUnknown));
+	scm_hash_set_x(jsp_op_types_hash, key_symbol,              scm_from_int(jpiKey));
+	scm_hash_set_x(jsp_op_types_hash, keyvalue_symbol,         scm_from_int(jpiKeyValue));
+	scm_hash_set_x(jsp_op_types_hash, last_symbol,             scm_from_int(jpiLast));
+	scm_hash_set_x(jsp_op_types_hash, less_or_equal_symbol,    scm_from_int(jpiLessOrEqual));
+	scm_hash_set_x(jsp_op_types_hash, less_symbol,             scm_from_int(jpiLess));
+	scm_hash_set_x(jsp_op_types_hash, like_regex_symbol,       scm_from_int(jpiLikeRegex));
+	scm_hash_set_x(jsp_op_types_hash, negate_symbol,           scm_from_int(jpiMinus));
+	scm_hash_set_x(jsp_op_types_hash, mod_symbol,              scm_from_int(jpiMod));
+	scm_hash_set_x(jsp_op_types_hash, mul_symbol,              scm_from_int(jpiMul));
+	scm_hash_set_x(jsp_op_types_hash, not_equal_symbol,        scm_from_int(jpiNotEqual));
+	scm_hash_set_x(jsp_op_types_hash, nop_symbol,              scm_from_int(jpiPlus));
+	scm_hash_set_x(jsp_op_types_hash, not_symbol,              scm_from_int(jpiNot));
+	scm_hash_set_x(jsp_op_types_hash, or_symbol,               scm_from_int(jpiOr));
+	scm_hash_set_x(jsp_op_types_hash, root_symbol,             scm_from_int(jpiRoot));
+	scm_hash_set_x(jsp_op_types_hash, size_symbol,             scm_from_int(jpiSize));
+	scm_hash_set_x(jsp_op_types_hash, starts_with_symbol,      scm_from_int(jpiStartsWith));
+	scm_hash_set_x(jsp_op_types_hash, sub_symbol,              scm_from_int(jpiSub));
+	scm_hash_set_x(jsp_op_types_hash, type_symbol,             scm_from_int(jpiType));
+	scm_hash_set_x(jsp_op_types_hash, var_symbol,              scm_from_int(jpiVariable));
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
 	scm_c_define_gsubr("%execute", 4, 0, 0, (SCM (*)()) spi_execute);
@@ -2893,7 +2948,29 @@ SCM datum_jsonpath_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
 {
-	return (Datum)0;
+	StringInfoData buf;
+	JsonPath *jsp;
+
+	elog(NOTICE, "scm_to_datum_jsonpath: expr: %s", scm_to_string(scm_call_1(jsonpath_expr_proc, x)));
+
+	// scm_call_1(validate_jsonpath_proc, x); //TODO
+
+	initStringInfo(&buf);
+	appendStringInfoSpaces(&buf, JSONPATH_HDRSZ);
+
+	scm_expr_to_jsp(&buf, scm_call_1(jsonpath_expr_proc, x));
+
+	jsp = (JsonPath *)buf.data;
+	SET_VARSIZE(jsp, buf.len);
+
+	jsp->header = JSONPATH_VERSION;
+
+	if (scm_call_1(jsonpath_is_strict_proc, x) == SCM_BOOL_F)
+		jsp->header |= JSONPATH_LAX;
+
+	elog(NOTICE, "scm_to_datum_jsonpath: done");
+
+	return PointerGetDatum(jsp);
 }
 
 SCM jsp_to_scm(JsonPathItem *v, SCM expr)
@@ -2918,32 +2995,33 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 	{
 		// Literals
 		case jpiBool:
-			return scm_cons(jspGetBool(v) ? SCM_BOOL_T : SCM_BOOL_F, expr);
+			return jspGetBool(v) ? SCM_BOOL_T : SCM_BOOL_F;
 
 		case jpiNull:
-			return scm_cons(SCM_EOL, expr);
+			return SCM_EOL;
 
 		case jpiNumeric:
 			n = NumericGetDatum(jsp_get_numeric(v));
 			arg = scm_from_locale_string(DatumGetCString(DirectFunctionCall1(numeric_out, n)));
-			return scm_cons(scm_call_1(string_to_decimal_proc, arg), expr);
-
-		case jpiRoot:
-			return scm_cons(root_symbol, expr);
+			return scm_call_1(string_to_decimal_proc, arg);
 
 		case jpiString:
-			return scm_cons(scm_from_locale_string(jsp_get_string(v)), expr);
+			return scm_from_locale_string(jsp_get_string(v));
+
+		// Special Symbols
+		case jpiCurrent:
+		case jpiLast:
+		case jpiRoot:
+			return scm_list_1(jsp_operation_symbol(v->type));
 
 		// Generic forms
 		case jpiAbs:
 		case jpiAnyArray:
 		case jpiAnyKey:
 		case jpiCeiling:
-		case jpiCurrent:
 		case jpiDouble:
 		case jpiFloor:
 		case jpiKeyValue:
-		case jpiLast:
 		case jpiSize:
 		case jpiType:
 			op = jsp_operation_symbol(v->type);
@@ -2956,7 +3034,7 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 		case jpiPlus:
 			op = jsp_operation_symbol(v->type);
 			jsp_get_arg(v, &elem);
-			return scm_list_2(scm_list_2(op, jsp_to_scm(&elem, SCM_EOL)), expr);
+			return scm_list_2(op, jsp_to_scm(&elem, SCM_EOL));
 
 		case jpiAdd:
 		case jpiAnd:
@@ -2978,11 +3056,10 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 			jsp_get_left_arg(v, &left_elem);
 			jsp_get_right_arg(v, &right_elem);
 
-			return scm_cons(scm_list_3(
-				                op,
-				                jsp_to_scm(&left_elem, SCM_EOL),
-				                jsp_to_scm(&right_elem, SCM_EOL)),
-			                expr);
+			return scm_list_3(
+				op,
+				jsp_to_scm(&left_elem, SCM_EOL),
+				jsp_to_scm(&right_elem, SCM_EOL));
 
 		// Special forms
 		case jpiAny:
@@ -3013,20 +3090,17 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 
 			arg = SCM_EOL;
 
-			for (int i = v->content.array.nelems-1; i > 0; i--)
-			{
+			for (int i = v->content.array.nelems-1; i >= 0 ; i--) {
+
 				JsonPathItem from;
 				JsonPathItem to;
 				bool range = jsp_get_array_subscript(v, &from, &to, i);
 
-				if (!range)
-					scm_cons(jsp_to_scm(&from, SCM_EOL), arg);
-
-				else {
-					scm_cons(scm_cons(jsp_to_scm(&from, SCM_EOL),
-					                  jsp_to_scm(&to, SCM_EOL)),
-					         arg);
-				}
+				arg = scm_cons(
+					scm_list_2(
+						jsp_to_scm(&from, SCM_EOL),
+						range ? jsp_to_scm(&to, SCM_EOL) : SCM_BOOL_F),
+					arg);
 			}
 
 			return scm_list_3(index_array_symbol, arg, expr);
@@ -3036,17 +3110,16 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 
 		case jpiLikeRegex:
 
-			jsp_init_by_buffer(&right_elem, v->base, v->content.like_regex.expr);
+			jsp_init_by_buffer(&left_elem, v->base, v->content.like_regex.expr);
 
 			return scm_list_4(
 				like_regex_symbol,
+				jsp_to_scm(&left_elem, SCM_EOL),
 				scm_from_locale_string(v->content.like_regex.pattern),
-				jsp_regex_flags_to_scm(v->content.like_regex.flags),
-				jsp_to_scm(&right_elem, SCM_EOL));
+				jsp_regex_flags_to_scm(v->content.like_regex.flags));
 
 		case jpiVariable:
-			return scm_list_2(scm_list_2(var_symbol, scm_from_locale_string(jsp_get_string(v))),
-			                  expr);
+			return scm_list_2(var_symbol, scm_from_locale_string(jsp_get_string(v)));
 
 		default:
 			elog(ERROR, "unrecognized jsonpath item type: %d", v->type);
@@ -3058,40 +3131,40 @@ SCM jsp_operation_symbol(JsonPathItemType type)
 {
 	switch (type)
 	{
-	case jpiAbs:            return abs_symbol;
-	case jpiAdd:            return add_symbol;
-	case jpiAnd:            return and_symbol;
-	case jpiAnyArray:       return any_array_symbol;
-	case jpiAnyKey:         return any_key_symbol;
-	case jpiCeiling:        return ceiling_symbol;
-	case jpiCurrent:        return current_symbol;
-	case jpiDiv:            return div_symbol;
-	case jpiDouble:         return double_symbol;
-	case jpiEqual:          return equal_symbol;
-	case jpiExists:         return exists_symbol;
-	case jpiFloor:          return floor_symbol;
-	case jpiGreater:        return greater_symbol;
-	case jpiGreaterOrEqual: return greater_or_equal_symbol;
-	case jpiIsUnknown:      return is_unknown_symbol;
-	case jpiKeyValue:       return keyvalue_symbol;
-	case jpiLast:           return last_symbol;
-	case jpiLess:           return less_symbol;
-	case jpiLessOrEqual:    return less_or_equal_symbol;
-	case jpiLikeRegex:      return like_regex_symbol;
-	case jpiMinus:          return minus_symbol;
-	case jpiMod:            return mod_symbol;
-	case jpiMul:            return mul_symbol;
-	case jpiNot:            return not_symbol;
-	case jpiNotEqual:       return not_equal_symbol;
-	case jpiOr:             return or_symbol;
-	case jpiPlus:           return plus_symbol;
-	case jpiRoot:           return root_symbol;
-	case jpiSize:           return size_symbol;
-	case jpiStartsWith:     return starts_with_symbol;
-	case jpiSub:            return sub_symbol;
-	case jpiType:           return type_symbol;
-	default:
-		return SCM_BOOL_F;
+		case jpiAbs:            return abs_symbol;
+		case jpiAdd:            return add_symbol;
+		case jpiAnd:            return and_symbol;
+		case jpiAnyArray:       return any_array_symbol;
+		case jpiAnyKey:         return any_key_symbol;
+		case jpiCeiling:        return ceiling_symbol;
+		case jpiCurrent:        return current_symbol;
+		case jpiDiv:            return div_symbol;
+		case jpiDouble:         return double_symbol;
+		case jpiEqual:          return equal_symbol;
+		case jpiExists:         return exists_symbol;
+		case jpiFloor:          return floor_symbol;
+		case jpiGreater:        return greater_symbol;
+		case jpiGreaterOrEqual: return greater_or_equal_symbol;
+		case jpiIsUnknown:      return is_unknown_symbol;
+		case jpiKeyValue:       return keyvalue_symbol;
+		case jpiLast:           return last_symbol;
+		case jpiLess:           return less_symbol;
+		case jpiLessOrEqual:    return less_or_equal_symbol;
+		case jpiLikeRegex:      return like_regex_symbol;
+		case jpiMinus:          return negate_symbol;
+		case jpiMod:            return mod_symbol;
+		case jpiMul:            return mul_symbol;
+		case jpiNot:            return not_symbol;
+		case jpiNotEqual:       return not_equal_symbol;
+		case jpiOr:             return or_symbol;
+		case jpiPlus:           return nop_symbol; // unary plus doesn't do anything
+		case jpiRoot:           return root_symbol;
+		case jpiSize:           return size_symbol;
+		case jpiStartsWith:     return starts_with_symbol;
+		case jpiSub:            return sub_symbol;
+		case jpiType:           return type_symbol;
+		default:
+			return SCM_BOOL_F;
 	}
 }
 
@@ -3118,11 +3191,11 @@ SCM jsp_regex_flags_to_scm(uint32 flags)
 	SCM result = SCM_EOL;
 
 	if (flags) {
-		if (flags & JSP_REGEX_ICASE)  scm_cons(result, icase_symbol);
-		if (flags & JSP_REGEX_DOTALL) scm_cons(result, dotall_symbol);
-		if (flags & JSP_REGEX_MLINE)  scm_cons(result, mline_symbol);
-		if (flags & JSP_REGEX_WSPACE) scm_cons(result, wspace_symbol);
-		if (flags & JSP_REGEX_QUOTE)  scm_cons(result, quote_symbol);
+		if (flags & JSP_REGEX_DOTALL) result = scm_cons(dotall_symbol, result);
+		if (flags & JSP_REGEX_ICASE)  result = scm_cons(icase_symbol, result);
+		if (flags & JSP_REGEX_MLINE)  result = scm_cons(mline_symbol, result);
+		if (flags & JSP_REGEX_QUOTE)  result = scm_cons(quote_symbol, result);
+		if (flags & JSP_REGEX_WSPACE) result = scm_cons(wspace_symbol, result);
 	}
 
 	return result;
@@ -3257,6 +3330,376 @@ void jsp_init_by_buffer(JsonPathItem *v, char *base, int32 pos)
 		default:
 			elog(ERROR, "unrecognized jsonpath item type: %d", v->type);
 	}
+}
+
+int scm_expr_to_jsp(StringInfo buf, SCM expr)
+{
+	int32 base, next = 0;
+	int32 arg, left, right;
+
+	JsonPathItemType type = jsp_expr_type(expr);
+
+	check_stack_depth();
+	CHECK_FOR_INTERRUPTS();
+
+	switch (type) {
+
+		// Literals
+		case jpiBool:
+			write_jsp_header(buf, type);
+			write_jsp_bool(buf, expr);
+			break;
+
+		case jpiNull:
+			write_jsp_header(buf, type);
+			break;
+
+		case jpiNumeric:
+			write_jsp_header(buf, type);
+			write_jsp_numeric(buf, expr);
+			break;
+
+		case jpiString:
+			write_jsp_header(buf, type);
+			write_jsp_string(buf, expr);
+			break;
+
+		// Special symbols
+		case jpiRoot:
+		case jpiCurrent:
+		case jpiLast:
+			next = write_jsp_header(buf, type);
+			break;
+
+		// Generic forms
+		case jpiAbs:
+		case jpiAnyArray:
+		case jpiAnyKey:
+		case jpiCeiling:
+		case jpiDouble:
+		case jpiFloor:
+		case jpiKeyValue:
+		case jpiSize:
+		case jpiType:
+			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 1));
+			next = write_jsp_header(buf, type);
+			break;
+
+		case jpiExists:
+		case jpiIsUnknown:
+		case jpiMinus:
+		case jpiNot:
+		case jpiPlus:
+			base = buf->len;
+			next = write_jsp_header(buf, type);
+			write_jsp_arg(buf, base, reserve_jsp_offset(buf), scm_c_list_ref(expr, 1));
+			break;
+
+		case jpiAdd:
+		case jpiAnd:
+		case jpiDiv:
+		case jpiEqual:
+		case jpiGreater:
+		case jpiGreaterOrEqual:
+		case jpiLess:
+		case jpiLessOrEqual:
+		case jpiMod:
+		case jpiMul:
+		case jpiNotEqual:
+		case jpiOr:
+		case jpiStartsWith:
+		case jpiSub:
+			/*
+			 * First, reserve place for left/right arg's positions, then
+			 * record both args and sets actual position in reserved
+			 * places.
+			 */
+			base = buf->len;
+			write_jsp_header(buf, type);
+
+			left  = reserve_jsp_offset(buf);
+			right = reserve_jsp_offset(buf);
+
+			write_jsp_arg(buf, base, left,  scm_c_list_ref(expr, 1));
+			write_jsp_arg(buf, base, right, scm_c_list_ref(expr, 2));
+
+			break;
+
+		// Special forms
+		case jpiAny:
+
+			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 3));
+			next = write_jsp_header(buf, type);
+
+			write_jsp_any_bounds(buf, scm_c_list_ref(expr, 1));
+			write_jsp_any_bounds(buf, scm_c_list_ref(expr, 2));
+
+			break;
+
+		case jpiDatetime: {
+
+			SCM format;
+
+			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 2));
+			base = buf->len;
+			next = write_jsp_header(buf, type);
+
+			arg = reserve_jsp_offset(buf);
+
+			format = scm_c_list_ref(expr, 1);
+
+			if (format != SCM_BOOL_F)
+				write_jsp_arg(buf, base, arg, format);
+
+			break;
+		}
+
+		case jpiFilter:
+
+			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 2));
+
+			base = buf->len;
+			next = write_jsp_header(buf, type);
+
+			arg = reserve_jsp_offset(buf);
+
+			write_jsp_arg(buf, base, arg, scm_c_list_ref(expr, 1));
+
+			break;
+
+		case jpiIndexArray: {
+
+			SCM indices = scm_c_list_ref(expr, 1);
+			SCM count = scm_length(indices);
+			int32 offset;
+
+			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 2));
+
+			base = buf->len;
+			next = write_jsp_header(buf, type);
+
+			write_jsp_uint32(buf, count);
+
+			offset = reserve_jsp_offsets(buf, 2 * scm_to_uint32(count));
+
+			while (indices != SCM_EOL) {
+
+				SCM index = scm_car(indices);
+				SCM from = scm_c_list_ref(index, 0);
+				SCM to = scm_c_list_ref(index, 1);
+
+				write_jsp_arg(buf, base, offset, from);
+				offset += sizeof(uint32);
+
+				if (to != SCM_BOOL_F)
+					write_jsp_arg(buf, base, offset, to);
+
+				offset += sizeof(uint32);
+
+				indices = scm_cdr(indices);
+			}
+			break;
+		}
+
+		case jpiKey:
+
+			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 2));
+			next = write_jsp_header(buf, type);
+
+			write_jsp_string(buf, scm_c_list_ref(expr, 1));
+
+			break;
+
+		case jpiLikeRegex:
+
+			base = buf->len;
+			next = write_jsp_header(buf, type);
+
+			write_jsp_like_regex_flags(buf, scm_c_list_ref(expr, 3));
+
+			arg = reserve_jsp_offset(buf);
+
+			write_jsp_string(buf, scm_c_list_ref(expr, 2));
+			write_jsp_arg(buf, base, arg, scm_c_list_ref(expr, 1));
+
+			break;
+
+		case jpiVariable:
+			next = write_jsp_header(buf, type);
+			write_jsp_string(buf, scm_c_list_ref(expr, 1));
+			break;
+
+		default:
+			break;
+	}
+
+	return next;
+}
+
+JsonPathItemType jsp_expr_type(SCM expr)
+{
+	if (expr == SCM_EOL)
+		return jpiNull;
+
+	if (scm_is_pair(expr)) {
+
+		SCM op = scm_car(expr);
+		SCM type = scm_hash_ref(jsp_op_types_hash, op, SCM_BOOL_F);
+
+		if (type == SCM_BOOL_F)
+			elog(ERROR, "jsp_expr_type: unknown operator: %s", scm_to_string(op));
+
+		return (JsonPathItemType)scm_to_int(type);
+	}
+
+	if (scm_is_bool(expr))
+		return jpiBool;
+
+	if (scm_is_number(expr) || is_decimal(expr))
+		return jpiNumeric;
+
+	if (scm_is_string(expr))
+		return jpiString;
+
+	elog(ERROR, "jsp_expr_type: unknown jsonpath expression: %s", scm_to_string(expr));
+	// unreachable
+	return 0;
+}
+
+void scm_chained_expr_to_jsp(StringInfo buf, SCM expr)
+{
+	int32 next = scm_expr_to_jsp(buf, expr);
+
+	align_buffer(buf);
+	*(int32 *)(buf->data + next) = buf->len - (next - sizeof(int32));
+}
+
+void align_buffer(StringInfo buf)
+{
+	uint32 size = INTALIGN(buf->len) - buf->len;
+
+	if (size) {
+		memset(buf->data, 0, size);
+		buf->len += size;
+	}
+}
+
+int32 reserve_jsp_offset(StringInfo buf)
+{
+	return reserve_jsp_offsets(buf, 1);
+}
+
+int32 reserve_jsp_offsets(StringInfo buf, uint32 count)
+{
+	int32 pos = buf->len;
+
+	if (count > 0) {
+
+		uint32 size = count * sizeof(uint32);
+
+		enlargeStringInfo(buf, size);
+
+		memset(buf->data + buf->len, 0, size);
+		buf->len += size;
+	}
+
+	return pos;
+}
+
+void write_jsp_any_bounds(StringInfo buf, SCM expr)
+{
+	uint32 v = expr == SCM_BOOL_F ? PG_UINT32_MAX : scm_to_uint32(expr);
+	appendBinaryStringInfo(buf, (char *)&v, sizeof(v));
+}
+
+void write_jsp_arg(StringInfo buf, int32 base, int32 offset, SCM expr)
+{
+	*(int32 *)(buf->data + offset) = buf->len - base;
+	scm_expr_to_jsp(buf, expr);
+}
+
+void write_jsp_bool(StringInfo buf, SCM expr)
+{
+	bool b = scm_to_bool(expr);
+	appendBinaryStringInfo(buf, (char *)&b, sizeof(b));
+}
+
+int32 write_jsp_header(StringInfo buf, JsonPathItemType type)
+{
+	elog(NOTICE, "write_jsp_header: type: %d", type);
+
+	appendStringInfoChar(buf, (char)type);
+
+	/*
+	 * We align buffer to int32 because a series of int32 values often goes
+	 * after the header, and we want to read them directly by dereferencing
+	 * int32 pointer (see jspInitByBuffer()).
+	 */
+	align_buffer(buf);
+
+	/*
+	 * Reserve space for next item pointer.  Actual value will be recorded
+	 * later, after next and children items processing.
+	 */
+	return reserve_jsp_offset(buf);
+}
+
+void write_jsp_like_regex_flags(StringInfo buf, SCM flags) {
+
+	uint32 regex_flags = 0;
+
+	while (flags != SCM_EOL) {
+
+		SCM flag = scm_car(flags);
+
+		if (flag == dotall_symbol)
+			regex_flags |= JSP_REGEX_DOTALL;
+
+		else if (flag == icase_symbol)
+			regex_flags |= JSP_REGEX_ICASE;
+
+		else if (flag == mline_symbol)
+			regex_flags |= JSP_REGEX_MLINE;
+
+		else if (flag == quote_symbol)
+			regex_flags |= JSP_REGEX_QUOTE;
+
+		else if (flag == wspace_symbol)
+			regex_flags |= JSP_REGEX_WSPACE;
+
+		else
+			elog(ERROR, "write_jsp_like_regex_flags: unrecognized flag: %s", scm_to_string(flag));
+
+		flags = scm_cdr(flags);
+	}
+
+	appendBinaryStringInfo(buf, (char *)&regex_flags, sizeof(regex_flags));
+}
+
+void write_jsp_numeric(StringInfo buf, SCM expr)
+{
+	Datum datum = scm_to_datum_numeric(expr, InvalidOid);
+	Numeric numeric = DatumGetNumeric(datum);
+	appendBinaryStringInfo(buf, (char *)numeric, VARSIZE(numeric));
+}
+
+void write_jsp_string(StringInfo buf, SCM s)
+{
+	size_t len;
+	char *c_str = scm_to_locale_stringn(s, &len);
+	uint32 u32_len = len;
+
+	appendBinaryStringInfo(buf, (char *)&u32_len, sizeof(u32_len));
+	appendBinaryStringInfo(buf, c_str, u32_len);
+	appendStringInfoChar(buf, '\0');
+
+	free(c_str);
+}
+
+void write_jsp_uint32(StringInfo buf, SCM expr)
+{
+	uint32 v = scm_to_uint32(expr);
+	appendBinaryStringInfo(buf, (char *)&v, sizeof(v));
 }
 
 SCM datum_tsquery_to_scm(Datum x, Oid type_oid)
@@ -3758,6 +4201,11 @@ Datum datum_date_to_timestamptz(Datum x)
 	DateADT date = DatumGetDateADT(x);
 	TimestampTz timestamp = date2timestamptz_opt_overflow(date, NULL);
 	return TimestampTzGetDatum(timestamp);
+}
+
+SCM scm_c_list_ref(SCM obj, size_t k)
+{
+	return scm_list_ref(obj, scm_from_size_t(k));
 }
 
 char *scm_to_string(SCM obj)

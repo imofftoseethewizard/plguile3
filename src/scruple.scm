@@ -289,6 +289,142 @@
   (strict? jsonpath-strict?)
   (expr jsonpath-expr))
 
+(define (validate-jsonpath jsp)
+  ;; returns #t if the path is valid, otherwise a pair describing
+  ;; the way in which it fails.
+
+  (validate-jsonpath-expr (jsonpath-expr jsp) validate-jsonpath-expr))
+
+(define (validate-jsonpath-expr e validate-expr)
+  (cond
+   ((or (null? e) (boolean? e) (decimal? e) (string? e))
+    #t)
+
+   ((pair? e)
+    (let ((len (length e))
+          (op (car e)))
+      (case op
+        ((root)
+         (or (= 1 len)
+             (raise-exception `(jsonpath-invalid-root-expr ,e))))
+
+        ((abs any-array any-key ceiling double exists floor keyvalue size type unknown?)
+         (or (and (= 2 len)
+                  (validate-expr (list-ref e 1) validate-expr))
+             (raise-exception `(jsonpath-invalid-unary-expr ,e))))
+
+        ((+ -)
+         (case len
+           ((2)
+            (validate-expr (list-ref e 1) validate-expr))
+
+           ((3)
+            (and
+             (validate-expr (list-ref e 1) validate-expr)
+             (validate-expr (list-ref e 2) validate-expr)))
+
+           (else
+            (raise-exception `(jsonpath-invalid-unary-or-binary-expr ,e)))))
+
+        ((* / % = != > >= < <= and or starts-with)
+         (or (and (= 3 len)
+                  (validate-expr (list-ref e 1) validate-expr)
+                  (validate-expr (list-ref e 2) validate-expr))
+             (raise-exception `(jsonpath-invalid-binary-expr ,e))))
+
+        ((any)
+         (or (and (= 4 len)
+                  (validate-jsonpath-any-bounds (list-ref e 1))
+                  (validate-jsonpath-any-bounds (list-ref e 2))
+                  (validate-expr (list-ref e 3) validate-expr))
+             (raise-exception `(jsonpath-invalid-any-expr ,e))))
+
+        ((datetime)
+         (case len
+           ((2)
+            (validate-expr (list-ref e 1) validate-expr))
+
+           ((3)
+            (and
+             (validate-expr (list-ref e 1) validate-expr)
+             (validate-expr (list-ref e 2) validate-expr)))
+
+           (else
+            (raise-exception `(jsonpath-invalid-datetime-expr ,e)))))
+
+        ((filter)
+         (or (and (= 3 len)
+                  (validate-jsonpath-filter-expr (list-ref e 1) validate-expr)
+                  (validate-expr (list-ref e 2) validate-expr))
+             (raise-exception `(jsonpath-invalid-filter-expr ,e))))
+
+        ((index-array)
+         (or (and (= 3 len)
+                  (validate-jsonpath-index-exprs (list-ref e 1) validate-expr)
+                  (validate-expr (list-ref e 2) validate-expr))
+             (raise-exception `(jsonpath-invalid-index-array-expr ,e))))
+
+        ((key)
+         (or (and (= 3 len)
+                  (string? (list-ref e 1))
+                  (validate-expr (list-ref e 2) validate-expr))
+             (raise-exception `(jsonpath-invalid-key-expr ,e))))
+
+        ((like-regex)
+         (or (and (= 4 len)
+                  (validate-expr (list-ref e 1) validate-expr)
+                  (string? (list-ref e 2))
+                  (validate-jsonpath-regex-flags (list-ref e 3)))
+             (raise-exception `(jsonpath-invalid-like-regex-expr ,e))))
+
+        ((var)
+         (or (and (= 2 len)
+                  (string? (list-ref e 1)))
+             (raise-exception `(jsonpath-invalid-string-expr ,e))))
+
+        (else
+         (raise-exception `(jsonpath-invalid-expr-unknown-op ,e))))))
+
+   (else
+    `(unknown-jsonpath-expr ,e))))
+
+(define (validate-jsonpath-any-bounds e)
+  (or (not e)
+      (int4-compatible? e)
+      (raise-exception `(jsonpath-invalid-any-bounds ,e))))
+
+(define (validate-jsonpath-filter-expr e validate-expr)
+  (letrec ((validate (lambda (e)
+                       (or (eq? e '(@))
+                           (validate-expr e validate)))))
+    (validate e)))
+
+(define (validate-jsonpath-index-exprs exprs validate-expr)
+  (or (and (pair? exprs)
+           (not (null? exprs))
+           (letrec ((validate (lambda (e)
+                                (or (eq? e '(last))
+                                    (validate-expr e validate)))))
+             (let loop ((es exprs))
+               (or (null? es)
+                   (and (validate (list-ref (car es) 0))
+                        (validate (list-ref (car es) 1))
+                        (loop (cdr es)))))))
+
+      (raise-exception `(jsonpath-invalid-index-exprs ,exprs))))
+
+(define (validate-jsonpath-regex-flags flags)
+  (or (and (pair? flags)
+           (let loop ((fs flags))
+             (and (case (car fs)
+                    ((dotall ispace mline quote wspace)
+                     #t)
+                    (else
+                     (raise-exception `(jsonpath-invalid-regex-flag ,(car fs)))))
+                  (loop (cdr fs)))))
+
+      (raise-exception `(jsonpath-invalid-regex-flags ,flags))))
+
 (define (int2-compatible? x)
   (and (integer? x)
        (>= x -32768)

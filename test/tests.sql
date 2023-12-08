@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(174);
+select plan(201);
 
 --------------------------------------------------------------------------------
 --
@@ -671,8 +671,6 @@ create function f_jsonb_id(a jsonb) returns jsonb as 'a' language scruple;
 select ok(f_jsonb_id(t.jsonb)->'foo'->>0 = 'bar', 'jsonb: identity mapping test')
 from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);
 
-select * from finish();
-
 --------------------------------------------------------------------------------
 --
 -- Type jsonpath
@@ -680,10 +678,86 @@ select * from finish();
 
 create function f_jsonpath_id(a jsonpath) returns jsonpath as 'a' language scruple;
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.foo.bar', 'jsonpath: identity mapping test')
-from (select 'strict $.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.foo.bar'::jsonpath) t(jsonpath);
 
-select * from finish();
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*].foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*].foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.*.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.*.foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.**.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.**.foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.**{4}.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.**{4}.foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.**{2 to 6}.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.**{2 to 6}.foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.**{1 to last}.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.**{1 to last}.foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '1'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '1'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[1, 2, 3].foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[1,2,3].foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[1 to 5, 2, 3].foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[1 to 5,2,3].foo.bar'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$."$gizmo"'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$."$gizmo"'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$gizmo'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$gizmo'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '+ $gizmo'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '+ $gizmo'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '- $[*]'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '- $[*]'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '6 + $gizmo'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '6 + $gizmo'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = 'true'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select 'true'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.dt.datetime()'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.dt.datetime()'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.dt.datetime("fmt")'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.dt.datetime("fmt")'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$.dt.datetime("fmt").type()'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$.dt.datetime("fmt").type()'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ == "a")'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ == "a")'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ >= $.x + 2)'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ >= $.x + 2)'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ >= $.x - 2)'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ >= $.x - 2)'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@.job == null).name'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@.job == null).name'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? ((@ > 0) is unknown)'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? ((@ > 0) is unknown)'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ like_regex "^ab.*c" flag "i")'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ like_regex "^ab.*c" flag "i")'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ starts with "John")'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ starts with "John")'::jsonpath) t(jsonpath);
+
+select ok(f_jsonpath_id(t.jsonpath)::text = 'strict $ ? (exists (@.name)) .name'::jsonpath::text, 'jsonpath: identity mapping test')
+from (select 'strict $ ? (exists (@.name)) .name'::jsonpath) t(jsonpath);
 
 --------------------------------------------------------------------------------
 --
@@ -924,6 +998,11 @@ create function f_execute_with_args_jsonb() returns jsonb as $$
 $$
 language scruple;
 
+create function f_execute_with_args_jsonpath() returns jsonpath as $$
+(scalar (execute "select $1::jsonpath" '("strict $ ? (exists (@.name)) .name"))) ;; '
+$$
+language scruple;
+
 create function f_execute_with_args_text_array() returns text[] as $$
 (scalar (execute "select $1" '(#("one" "two" "three")))) ;; '
 $$
@@ -979,6 +1058,7 @@ select is(f_execute_with_args_json()::text, '{"foo": ["bar", 42]}', 'execute: wi
 select is(f_execute_with_args_json()->'foo'->>0, 'bar', 'execute: with args json unpacked');
 select is(f_execute_with_args_jsonb()::text, '{"foo": ["bar", 42]}', 'execute: with args jsonb');
 select is(f_execute_with_args_jsonb()->'foo'->>0, 'bar', 'execute: with args jsonb unpacked');
+select is(f_execute_with_args_jsonpath()::text, 'strict $ ? (exists (@.name)) .name'::jsonpath::text, 'execute: with args jsonpath');
 select is(f_execute_with_args_text_array(), '{one,two,three}', 'execute: with args text array');
 select is(f_execute_with_args_int_array(), '{1,65537}', 'execute: with args int array');
 

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2023-12-08
+
+This release completes support for jsonpath.
+
 ## [0.7.3] - 2023-11-24
 
 This release includes partial support for jsonpath. Values are loaded
