@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(203);
+select plan(205);
 
 --------------------------------------------------------------------------------
 --
@@ -791,6 +791,16 @@ from (select 'a', 98, 2.99792458e8::float8) t(text, int, float8);
 
 --------------------------------------------------------------------------------
 --
+-- Ranges
+--
+
+create function f_int4range_id(a int4range) returns int4range as 'a' language scruple;
+
+select ok(f_int4range_id(t.v) = t.v, 'int4range: int4 identity mapping test')
+from (select '[0, 60]'::int4range) t(v);
+
+--------------------------------------------------------------------------------
+--
 -- Domains
 --
 
@@ -1030,6 +1040,11 @@ create function f_execute_with_args_simple_record() returns record as $$
 $$
 language scruple;
 
+create function f_execute_with_args_int4range() returns int4range as $$
+(scalar (execute "select '[0, 60]'::int4range"))
+$$
+language scruple;
+
 create function f_execute_with_args_posint() returns posint as $$
 (scalar (execute "select 14::posint"))
 $$
@@ -1082,6 +1097,7 @@ select is(f_execute_with_args_int_array(), '{1,65537}', 'execute: with args int 
 select ok(f_execute_with_args_simple_record() = t, 'execute: with args simple return')
 from (select 'foo', 5, 1.41::float8) t(text, int, float8);
 
+select is(f_execute_with_args_int4range(), '[0, 60]'::int4range, 'execute: with args int4range');
 select is(f_execute_with_args_posint(), 14::posint, 'execute: with args posint');
 
 rollback;

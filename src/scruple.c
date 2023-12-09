@@ -1371,7 +1371,7 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 	TypeConvCacheEntry *entry =
 		(TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
 
-	Oid element_type_oid;
+	Oid base_type_oid, element_type_oid;
 
 	if (found && entry->to_scm) {
 		return entry->to_scm(datum, type_oid);
@@ -1389,6 +1389,12 @@ SCM datum_to_scm(Datum datum, Oid type_oid)
 
 	if (is_composite_type(type_oid))
 		return datum_composite_to_scm(datum, type_oid);
+
+	// Domain types
+	base_type_oid = getBaseType(type_oid);
+
+	if (base_type_oid != type_oid)
+		return datum_to_scm(datum, base_type_oid);
 
 	elog(NOTICE, "datum_to_scm: conversion function for type OID %u not found", type_oid);
 	return make_boxed_datum(type_oid, datum);
@@ -1414,7 +1420,7 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 	bool found;
 	TypeConvCacheEntry *entry;
 
-	Oid element_type_oid;
+	Oid base_type_oid, element_type_oid;
 
 	if (is_boxed_datum(scm))
 		return convert_boxed_datum_to_datum(scm, type_oid);
@@ -1428,6 +1434,12 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 
 	if (OidIsValid(element_type_oid))
 		return scm_to_datum_array(scm, element_type_oid);
+
+	// Domain types
+	base_type_oid = getBaseType(type_oid);
+
+	if (base_type_oid != type_oid)
+		return scm_to_datum(scm, base_type_oid);
 
 	elog(ERROR, "scm_to_datum: conversion function for type OID %u not found", type_oid);
 	// Unreachable
