@@ -48,6 +48,9 @@ and configuration settings.
 The 0.19.x versions will normalize error messages and properly trap
 and report errors from Guile.
 
+Version 0.20.0 will be the pre-1.0 alpha release. At this point, the
+extension will be functionally complete.
+
 The 0.21.x versions will refine and refactor scruple.scm.
 
 The 0.23.x versions will include documentation and examples.
@@ -57,7 +60,7 @@ The 0.25.x versions will provide support for Postgres 12, 13, 15, and
 
 The 0.27.x versions will provide packaging for pgxn, deb, rpm, and apk.
 
-The 0.28.x versions will be the pre-1.0 beta.
+Version 0.28.0 will be the pre-1.0 beta release.
 
 Post 1.0 improvements:
 

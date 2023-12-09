@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(201);
+select plan(203);
 
 --------------------------------------------------------------------------------
 --
@@ -678,86 +678,86 @@ from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);
 
 create function f_jsonpath_id(a jsonpath) returns jsonpath as 'a' language scruple;
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*].foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*].foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*].foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.*.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.*.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.*.foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.**.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.**.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.**.foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.**{4}.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.**{4}.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.**{4}.foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.**{2 to 6}.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.**{2 to 6}.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.**{2 to 6}.foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.**{1 to last}.foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.**{1 to last}.foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.**{1 to last}.foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '1'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '1'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '1'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[1, 2, 3].foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[1,2,3].foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[1,2,3].foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[1 to 5, 2, 3].foo.bar'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[1 to 5,2,3].foo.bar'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[1 to 5,2,3].foo.bar'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$."$gizmo"'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$."$gizmo"'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$."$gizmo"'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$gizmo'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$gizmo'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$gizmo'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '+ $gizmo'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '+ $gizmo'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '+ $gizmo'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '- $[*]'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '- $[*]'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '- $[*]'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '6 + $gizmo'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '6 + $gizmo'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '6 + $gizmo'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = 'true'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select 'true'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select 'true'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.dt.datetime()'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.dt.datetime()'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.dt.datetime()'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.dt.datetime("fmt")'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.dt.datetime("fmt")'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.dt.datetime("fmt")'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$.dt.datetime("fmt").type()'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$.dt.datetime("fmt").type()'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$.dt.datetime("fmt").type()'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ == "a")'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? (@ == "a")'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ == "a")'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ >= $.x + 2)'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? (@ >= $.x + 2)'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ >= $.x + 2)'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ >= $.x - 2)'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? (@ >= $.x - 2)'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ >= $.x - 2)'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@.job == null).name'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? (@.job == null).name'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@.job == null).name'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? ((@ > 0) is unknown)'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? ((@ > 0) is unknown)'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? ((@ > 0) is unknown)'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ like_regex "^ab.*c" flag "i")'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? (@ like_regex "^ab.*c" flag "i")'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ like_regex "^ab.*c" flag "i")'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = '$[*] ? (@ starts with "John")'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select '$[*] ? (@ starts with "John")'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select '$[*] ? (@ starts with "John")'::jsonpath) t(v);
 
-select ok(f_jsonpath_id(t.jsonpath)::text = 'strict $ ? (exists (@.name)) .name'::jsonpath::text, 'jsonpath: identity mapping test')
-from (select 'strict $ ? (exists (@.name)) .name'::jsonpath) t(jsonpath);
+select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
+from (select 'strict $ ? (exists (@.name)) .name'::jsonpath) t(v);
 
 --------------------------------------------------------------------------------
 --
@@ -788,6 +788,18 @@ select is(f_record_arg_type_name(row('foo', 5, 1.41)::simple_record), 'text', 'r
 
 select ok(f_ret_record() = t, 'record: simple return test')
 from (select 'a', 98, 2.99792458e8::float8) t(text, int, float8);
+
+--------------------------------------------------------------------------------
+--
+-- Domains
+--
+
+create domain posint as integer check (value > 0);
+
+create function f_posint_id(a posint) returns posint as 'a' language scruple;
+
+select ok(f_posint_id(t.v) = t.v, 'domain type: identity mapping test')
+from (select 42::posint) t(v);
 
 --------------------------------------------------------------------------------
 --
@@ -1018,6 +1030,11 @@ create function f_execute_with_args_simple_record() returns record as $$
 $$
 language scruple;
 
+create function f_execute_with_args_posint() returns posint as $$
+(scalar (execute "select 14::posint"))
+$$
+language scruple;
+
 select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
 select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
 select is(f_execute_with_args_int8(), 3::int8, 'execute: with args int8');
@@ -1064,5 +1081,7 @@ select is(f_execute_with_args_int_array(), '{1,65537}', 'execute: with args int 
 
 select ok(f_execute_with_args_simple_record() = t, 'execute: with args simple return')
 from (select 'foo', 5, 1.41::float8) t(text, int, float8);
+
+select is(f_execute_with_args_posint(), 14::posint, 'execute: with args posint');
 
 rollback;
