@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(205);
+select plan(206);
 
 --------------------------------------------------------------------------------
 --
@@ -1041,7 +1041,18 @@ $$
 language scruple;
 
 create function f_execute_with_args_int4range() returns int4range as $$
-(scalar (execute "select '[0, 60]'::int4range"))
+(scalar (execute "select '[0, 60)'::int4range"))
+$$
+language scruple;
+
+create function bool_diff(a bool, b bool) returns float8 as $$
+  select case when a = b then 0.0 when a and not b then 1.0 else -1.0 end
+$$ language sql immutable;
+
+create type boolrange as range (subtype = bool, subtype_diff = bool_diff);
+
+create function f_execute_with_args_boolrange() returns boolrange as $$
+(scalar (execute "select '[false, true]'::boolrange"))
 $$
 language scruple;
 
@@ -1097,7 +1108,9 @@ select is(f_execute_with_args_int_array(), '{1,65537}', 'execute: with args int 
 select ok(f_execute_with_args_simple_record() = t, 'execute: with args simple return')
 from (select 'foo', 5, 1.41::float8) t(text, int, float8);
 
-select is(f_execute_with_args_int4range(), '[0, 60]'::int4range, 'execute: with args int4range');
+select is(f_execute_with_args_int4range(), '[0, 60)'::int4range, 'execute: with args int4range');
 select is(f_execute_with_args_posint(), 14::posint, 'execute: with args posint');
+
+select is(f_execute_with_args_boolrange(), '[false, true]'::boolrange, 'execute: with args boolrange');
 
 rollback;

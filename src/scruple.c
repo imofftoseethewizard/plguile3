@@ -5,6 +5,7 @@
 #include <funcapi.h>
 #include <miscadmin.h>
 #include <access/genam.h>
+#include <access/heapam.h>
 #include <access/htup_details.h>
 #include <access/relation.h>
 #include <catalog/namespace.h>
@@ -12,6 +13,7 @@
 #include <catalog/pg_enum.h>
 #include <catalog/pg_operator.h>
 #include <catalog/pg_proc.h>
+#include <catalog/pg_range.h>
 #include <catalog/pg_type.h>
 #include <executor/spi.h>
 #include <executor/tuptable.h>
@@ -31,6 +33,8 @@
 #include <utils/jsonpath.h>
 #include <utils/lsyscache.h>
 #include <utils/pg_crc.h>
+#include <utils/rangetypes.h>
+#include <utils/rel.h>
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
 #include <utils/tuplestore.h>
@@ -67,6 +71,11 @@ typedef struct {
 	SCM scm_proc;
 } FuncCacheEntry;
 
+typedef struct {
+	Oid subtype_oid;
+	Oid range_type_oid;
+} RangeCacheEntry;
+
 typedef SCM (*ToScmFunc)(Datum, Oid);
 typedef Datum (*ToDatumFunc)(SCM, Oid);
 
@@ -86,6 +95,7 @@ static SCM datum_bytea_to_scm(Datum x, Oid type_oid);
 static SCM datum_circle_to_scm(Datum x, Oid type_oid);
 static SCM datum_composite_to_scm(Datum x, Oid type_oid);
 static SCM datum_date_to_scm(Datum x, Oid type_oid);
+static SCM datum_datemultirange_to_scm(Datum x, Oid type_oid);
 static SCM datum_enum_to_scm(Datum x, Oid type_oid);
 static SCM datum_float4_to_scm(Datum x, Oid type_oid);
 static SCM datum_float8_to_scm(Datum x, Oid type_oid);
@@ -93,6 +103,8 @@ static SCM datum_inet_to_scm(Datum x, Oid type_oid);
 static SCM datum_int2_to_scm(Datum x, Oid type_oid);
 static SCM datum_int4_to_scm(Datum x, Oid type_oid);
 static SCM datum_int8_to_scm(Datum x, Oid type_oid);
+static SCM datum_int4multirange_to_scm(Datum x, Oid type_oid);
+static SCM datum_int8multirange_to_scm(Datum x, Oid type_oid);
 static SCM datum_interval_to_scm(Datum x, Oid type_oid);
 static SCM datum_json_to_scm(Datum x, Oid type_oid);
 static SCM datum_jsonb_to_scm(Datum x, Oid type_oid);
@@ -102,14 +114,18 @@ static SCM datum_lseg_to_scm(Datum x, Oid type_oid);
 static SCM datum_macaddr8_to_scm(Datum x, Oid type_oid);
 static SCM datum_macaddr_to_scm(Datum x, Oid type_oid);
 static SCM datum_numeric_to_scm(Datum x, Oid type_oid);
+static SCM datum_nummultirange_to_scm(Datum x, Oid type_oid);
 static SCM datum_path_to_scm(Datum x, Oid type_oid);
 static SCM datum_point_to_scm(Datum x, Oid type_oid);
 static SCM datum_polygon_to_scm(Datum x, Oid type_oid);
+static SCM datum_range_to_scm(Datum x, Oid type_oid);
 static SCM datum_text_to_scm(Datum x, Oid type_oid);
 static SCM datum_time_to_scm(Datum x, Oid type_oid);
-static SCM datum_timetz_to_scm(Datum x, Oid type_oid);
 static SCM datum_timestamptz_to_scm(Datum x, Oid type_oid);
+static SCM datum_timetz_to_scm(Datum x, Oid type_oid);
+static SCM datum_tsmultirange_to_scm(Datum x, Oid type_oid);
 static SCM datum_tsquery_to_scm(Datum x, Oid type_oid);
+static SCM datum_tstzmultirange_to_scm(Datum x, Oid type_oid);
 static SCM datum_tsvector_to_scm(Datum x, Oid type_oid);
 static SCM datum_uuid_to_scm(Datum x, Oid type_oid);
 static SCM datum_void_to_scm(Datum x, Oid type_oid);
@@ -122,13 +138,16 @@ static Datum scm_to_datum_box(SCM x, Oid type_oid);
 static Datum scm_to_datum_bytea(SCM x, Oid type_oid);
 static Datum scm_to_datum_circle(SCM x, Oid type_oid);
 static Datum scm_to_datum_date(SCM x, Oid type_oid);
+static Datum scm_to_datum_datemultirange(SCM x, Oid type_oid);
 static Datum scm_to_datum_enum(SCM x, Oid type_oid);
 static Datum scm_to_datum_float4(SCM x, Oid type_oid);
 static Datum scm_to_datum_float8(SCM x, Oid type_oid);
 static Datum scm_to_datum_inet(SCM x, Oid type_oid);
 static Datum scm_to_datum_int2(SCM x, Oid type_oid);
 static Datum scm_to_datum_int4(SCM x, Oid type_oid);
+static Datum scm_to_datum_int4multirange(SCM x, Oid type_oid);
 static Datum scm_to_datum_int8(SCM x, Oid type_oid);
+static Datum scm_to_datum_int8multirange(SCM x, Oid type_oid);
 static Datum scm_to_datum_interval(SCM x, Oid type_oid);
 static Datum scm_to_datum_json(SCM x, Oid type_oid);
 static Datum scm_to_datum_jsonb(SCM x, Oid type_oid);
@@ -138,15 +157,19 @@ static Datum scm_to_datum_lseg(SCM x, Oid type_oid);
 static Datum scm_to_datum_macaddr(SCM x, Oid type_oid);
 static Datum scm_to_datum_macaddr8(SCM x, Oid type_oid);
 static Datum scm_to_datum_numeric(SCM x, Oid type_oid);
+static Datum scm_to_datum_nummultirange(SCM x, Oid type_oid);
 static Datum scm_to_datum_path(SCM x, Oid type_oid);
 static Datum scm_to_datum_point(SCM x, Oid type_oid);
 static Datum scm_to_datum_polygon(SCM x, Oid type_oid);
+static Datum scm_to_datum_range(SCM x, Oid type_oid);
 static Datum scm_to_datum_record(SCM x, Oid type_oid);
 static Datum scm_to_datum_text(SCM x, Oid type_oid);
 static Datum scm_to_datum_time(SCM x, Oid type_oid);
-static Datum scm_to_datum_timetz(SCM x, Oid type_oid);
 static Datum scm_to_datum_timestamptz(SCM x, Oid type_oid);
+static Datum scm_to_datum_timetz(SCM x, Oid type_oid);
+static Datum scm_to_datum_tsmultirange(SCM x, Oid type_oid);
 static Datum scm_to_datum_tsquery(SCM x, Oid type_oid);
+static Datum scm_to_datum_tstzmultirange(SCM x, Oid type_oid);
 static Datum scm_to_datum_tsvector(SCM x, Oid type_oid);
 static Datum scm_to_datum_uuid(SCM x, Oid type_oid);
 static Datum scm_to_datum_void(SCM x, Oid type_oid);
@@ -177,6 +200,7 @@ static bool is_macaddr8(SCM x);
 static bool is_path(SCM x);
 static bool is_point(SCM x);
 static bool is_polygon(SCM x);
+static bool is_range(SCM x);
 static bool is_time(SCM x);
 static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
@@ -185,9 +209,9 @@ static SCM scm_error_handler(void *data, SCM key, SCM args);
 static SCM eval_scheme(const char *cstr);
 static SCM call_scheme_1_inner(void *data);
 static SCM call_scheme_1(SCM func, SCM arg);
+static void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid);
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
-static bool is_composite_type(Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static SCM scruple_compile_func(Oid func_oid);
@@ -198,15 +222,16 @@ static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, Memo
 static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Oid infer_scm_type_oid(SCM x);
 static Oid infer_array_type_oid(SCM x);
+static Oid infer_range_type_oid(SCM x);
 static Oid unify_type_oid(Oid t1, Oid t2);
 static Oid find_enum_datum_type(SCM type_name);
+static Oid find_range_type_oid(Oid subtype_oid);
 static TupleDesc record_tuple_desc(SCM x);
 static TupleDesc table_tuple_desc(SCM x);
 static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
 static bool is_record(SCM x);
 static bool is_table(SCM x);
 static bool is_set_returning(HeapTuple proc_tuple);
-static bool is_enum_type(Oid type_oid);
 static SCM type_desc_expr(Oid type_oid);
 static Datum jsonb_from_cstring(char *json, int len);
 static uint16 get_tsposition_index(SCM position);
@@ -243,13 +268,25 @@ static void write_jsp_like_regex_flags(StringInfo buf, SCM flags);
 static void write_jsp_numeric(StringInfo buf, SCM expr);
 static void write_jsp_string(StringInfo buf, SCM s);
 static void write_jsp_uint32(StringInfo buf, SCM expr);
+static SCM range_flags_to_scm(char flags);
+static SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid);
+static char scm_range_flags_to_char(SCM range);
 
-static Oid int2_oid;
-static Oid int4_oid;
-static Oid int8_oid;
+static Oid date_oid;
+static Oid daterange_oid;
 static Oid float4_oid;
 static Oid float8_oid;
+static Oid int2_oid;
+static Oid int4_oid;
+static Oid int4range_oid;
+static Oid int8_oid;
+static Oid int8range_oid;
 static Oid numeric_oid;
+static Oid numrange_oid;
+static Oid timestamp_oid;
+static Oid timestamptz_oid;
+static Oid tsrange_oid;
+static Oid tstzrange_oid;
 
 static SCM bit_string_data_proc;
 static SCM bit_string_length_proc;
@@ -292,6 +329,7 @@ static SCM is_macaddr_proc;
 static SCM is_path_proc;
 static SCM is_point_proc;
 static SCM is_polygon_proc;
+static SCM is_range_proc;
 static SCM is_record_proc;
 static SCM is_table_proc;
 static SCM is_time_proc;
@@ -322,6 +360,7 @@ static SCM make_macaddr_proc;
 static SCM make_path_proc;
 static SCM make_point_proc;
 static SCM make_polygon_proc;
+static SCM make_range_proc;
 static SCM make_record_proc;
 static SCM make_table_proc;
 static SCM make_time_proc;
@@ -336,6 +375,9 @@ static SCM point_x_proc;
 static SCM point_y_proc;
 static SCM polygon_boundbox_proc;
 static SCM polygon_points_proc;
+static SCM range_flags_proc;
+static SCM range_lower_proc;
+static SCM range_upper_proc;
 static SCM record_attr_names_hash_proc;
 static SCM record_attr_names_proc;
 static SCM record_attrs_proc;
@@ -357,6 +399,13 @@ static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
 static SCM validate_jsonpath_proc;
 static SCM validate_tsquery_proc;
+
+// Symbols for range type flags
+static SCM empty_symbol;
+static SCM lower_inclusive_symbol;
+static SCM lower_infinite_symbol;
+static SCM upper_inclusive_symbol;
+static SCM upper_infinite_symbol;
 
 // Symbols for tsquery
 static SCM and_symbol;
@@ -410,79 +459,115 @@ static SCM wspace_symbol;
 
 static SCM jsp_op_types_hash;
 
-static HTAB *funcCache;
-static HTAB *typeCache;
+static HTAB *func_cache;
+static HTAB *range_cache;
+static HTAB *type_cache;
 
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count);
 
 void _PG_init(void)
 {
-	HASHCTL funcInfo;
-	HASHCTL typeInfo;
+	HASHCTL func_info;
+	HASHCTL range_info;
+	HASHCTL type_info;
 
 	// TODO: check that `SHOW server_encoding` is 'UTF8'
 
 	/* Initialize hash tables */
-	memset(&funcInfo, 0, sizeof(funcInfo));
-	funcInfo.keysize = sizeof(Oid);
-	funcInfo.entrysize = sizeof(FuncCacheEntry);
-	funcCache = hash_create("Scruple Function Cache", 128, &funcInfo, HASH_ELEM | HASH_BLOBS);
+	memset(&func_info, 0, sizeof(func_info));
+	func_info.keysize = sizeof(Oid);
+	func_info.entrysize = sizeof(FuncCacheEntry);
+	func_cache = hash_create("Scruple Function Cache", 128, &func_info, HASH_ELEM | HASH_BLOBS);
 
-	memset(&typeInfo, 0, sizeof(typeInfo));
-	typeInfo.keysize = sizeof(Oid);
-	typeInfo.entrysize = sizeof(TypeConvCacheEntry);
-	typeCache = hash_create("Scruple Type Cache", 128, &typeInfo, HASH_ELEM | HASH_BLOBS);
+	memset(&range_info, 0, sizeof(range_info));
+	range_info.keysize = sizeof(Oid);
+	range_info.entrysize = sizeof(RangeCacheEntry);
+	range_cache = hash_create("Scruple Range Cache", 128, &range_info, HASH_ELEM | HASH_BLOBS);
 
-	int2_oid = TypenameGetTypid("int2");
-	int4_oid = TypenameGetTypid("int4");
-	int8_oid = TypenameGetTypid("int8");
-	float4_oid = TypenameGetTypid("float4");
-	float8_oid = TypenameGetTypid("float8");
-	numeric_oid = TypenameGetTypid("numeric");
+	memset(&type_info, 0, sizeof(type_info));
+	type_info.keysize = sizeof(Oid);
+	type_info.entrysize = sizeof(TypeConvCacheEntry);
+	type_cache = hash_create("Scruple Type Cache", 128, &type_info, HASH_ELEM | HASH_BLOBS);
+
+	daterange_oid   = TypenameGetTypid("daterange");
+	date_oid        = TypenameGetTypid("date");
+	int2_oid        = TypenameGetTypid("int2");
+	int4_oid        = TypenameGetTypid("int4");
+	int8_oid        = TypenameGetTypid("int8");
+	int4range_oid   = TypenameGetTypid("int4range");
+	int8range_oid   = TypenameGetTypid("int8range");
+	float4_oid      = TypenameGetTypid("float4");
+	float8_oid      = TypenameGetTypid("float8");
+	numeric_oid     = TypenameGetTypid("numeric");
+	numrange_oid    = TypenameGetTypid("numrange");
+	timestamp_oid   = TypenameGetTypid("timestamp");
+	timestamptz_oid = TypenameGetTypid("timestamptz");
+	tsrange_oid     = TypenameGetTypid("tsrange");
+	tstzrange_oid   = TypenameGetTypid("tstzrange");
+
+	insert_range_cache_entry(date_oid, daterange_oid);
+	insert_range_cache_entry(int2_oid, int4range_oid);
+	insert_range_cache_entry(int4_oid, int4range_oid);
+	insert_range_cache_entry(int8_oid, int8range_oid);
+	insert_range_cache_entry(numeric_oid, numrange_oid);
+	insert_range_cache_entry(timestamp_oid, tsrange_oid);
+	insert_range_cache_entry(timestamptz_oid, tstzrange_oid);
 
 	/* Fill type cache with to_scm and to_datum functions for known types */
-	insert_type_cache_entry(TypenameGetTypid("bit"),         datum_bit_string_to_scm,  scm_to_datum_bit_string);
-	insert_type_cache_entry(TypenameGetTypid("bool"),        datum_bool_to_scm,        scm_to_datum_bool);
-	insert_type_cache_entry(TypenameGetTypid("box"),         datum_box_to_scm,         scm_to_datum_box);
-	insert_type_cache_entry(TypenameGetTypid("bpchar"),      datum_text_to_scm,        scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("bytea"),       datum_bytea_to_scm,       scm_to_datum_bytea);
-	insert_type_cache_entry(TypenameGetTypid("char"),        datum_text_to_scm,        scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("cidr"),        datum_inet_to_scm,        scm_to_datum_inet);
-	insert_type_cache_entry(TypenameGetTypid("circle"),      datum_circle_to_scm,      scm_to_datum_circle);
-	insert_type_cache_entry(TypenameGetTypid("date"),        datum_date_to_scm,        scm_to_datum_date);
-	insert_type_cache_entry(TypenameGetTypid("float4"),      datum_float4_to_scm,      scm_to_datum_float4);
-	insert_type_cache_entry(TypenameGetTypid("float8"),      datum_float8_to_scm,      scm_to_datum_float8);
-	insert_type_cache_entry(TypenameGetTypid("inet"),        datum_inet_to_scm,        scm_to_datum_inet);
-	insert_type_cache_entry(TypenameGetTypid("int2"),        datum_int2_to_scm,        scm_to_datum_int2);
-	insert_type_cache_entry(TypenameGetTypid("int4"),        datum_int4_to_scm,        scm_to_datum_int4);
-	insert_type_cache_entry(TypenameGetTypid("int8"),        datum_int8_to_scm,        scm_to_datum_int8);
-	insert_type_cache_entry(TypenameGetTypid("interval"),    datum_interval_to_scm,    scm_to_datum_interval);
-	insert_type_cache_entry(TypenameGetTypid("json"),        datum_json_to_scm,        scm_to_datum_json);
-	insert_type_cache_entry(TypenameGetTypid("jsonb"),       datum_jsonb_to_scm,       scm_to_datum_jsonb);
-	insert_type_cache_entry(TypenameGetTypid("jsonpath"),    datum_jsonpath_to_scm,    scm_to_datum_jsonpath);
-	insert_type_cache_entry(TypenameGetTypid("line"),        datum_line_to_scm,        scm_to_datum_line);
-	insert_type_cache_entry(TypenameGetTypid("lseg"),        datum_lseg_to_scm,        scm_to_datum_lseg);
-	insert_type_cache_entry(TypenameGetTypid("macaddr"),     datum_macaddr_to_scm,     scm_to_datum_macaddr);
-	insert_type_cache_entry(TypenameGetTypid("macaddr8"),    datum_macaddr8_to_scm,    scm_to_datum_macaddr8);
-	insert_type_cache_entry(TypenameGetTypid("money"),       datum_int8_to_scm,        scm_to_datum_int8);
-	insert_type_cache_entry(TypenameGetTypid("numeric"),     datum_numeric_to_scm,     scm_to_datum_numeric);
-	insert_type_cache_entry(TypenameGetTypid("path"),        datum_path_to_scm,        scm_to_datum_path);
-	insert_type_cache_entry(TypenameGetTypid("point"),       datum_point_to_scm,       scm_to_datum_point);
-	insert_type_cache_entry(TypenameGetTypid("polygon"),     datum_polygon_to_scm,     scm_to_datum_polygon);
-	insert_type_cache_entry(TypenameGetTypid("record"),      datum_composite_to_scm,   scm_to_datum_record);
-	insert_type_cache_entry(TypenameGetTypid("text"),        datum_text_to_scm,        scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("time"),        datum_time_to_scm,        scm_to_datum_time);
-	insert_type_cache_entry(TypenameGetTypid("timetz"),      datum_timetz_to_scm,      scm_to_datum_timetz);
-	insert_type_cache_entry(TypenameGetTypid("timestamp"),   datum_timestamptz_to_scm, scm_to_datum_timestamptz);
-	insert_type_cache_entry(TypenameGetTypid("timestamptz"), datum_timestamptz_to_scm, scm_to_datum_timestamptz);
-	insert_type_cache_entry(TypenameGetTypid("tsquery"),     datum_tsquery_to_scm,     scm_to_datum_tsquery);
-	insert_type_cache_entry(TypenameGetTypid("tsvector"),    datum_tsvector_to_scm,    scm_to_datum_tsvector);
-	insert_type_cache_entry(TypenameGetTypid("uuid"),        datum_uuid_to_scm,        scm_to_datum_uuid);
-	insert_type_cache_entry(TypenameGetTypid("varbit"),      datum_bit_string_to_scm,  scm_to_datum_bit_string);
-	insert_type_cache_entry(TypenameGetTypid("varchar"),     datum_text_to_scm,        scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("void"),        datum_void_to_scm,        scm_to_datum_void);
-	insert_type_cache_entry(TypenameGetTypid("xml"),         datum_xml_to_scm,         scm_to_datum_xml);
+	insert_type_cache_entry(TypenameGetTypid("bit"),            datum_bit_string_to_scm,     scm_to_datum_bit_string);
+	insert_type_cache_entry(TypenameGetTypid("bool"),           datum_bool_to_scm,           scm_to_datum_bool);
+	insert_type_cache_entry(TypenameGetTypid("box"),            datum_box_to_scm,            scm_to_datum_box);
+	insert_type_cache_entry(TypenameGetTypid("bpchar"),         datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("bytea"),          datum_bytea_to_scm,          scm_to_datum_bytea);
+	insert_type_cache_entry(TypenameGetTypid("char"),           datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("cidr"),           datum_inet_to_scm,           scm_to_datum_inet);
+	insert_type_cache_entry(TypenameGetTypid("circle"),         datum_circle_to_scm,         scm_to_datum_circle);
+	insert_type_cache_entry(TypenameGetTypid("date"),           datum_date_to_scm,           scm_to_datum_date);
+	insert_type_cache_entry(TypenameGetTypid("datemultirange"), datum_datemultirange_to_scm, scm_to_datum_datemultirange);
+	insert_type_cache_entry(TypenameGetTypid("daterange"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("float4"),         datum_float4_to_scm,         scm_to_datum_float4);
+	insert_type_cache_entry(TypenameGetTypid("float8"),         datum_float8_to_scm,         scm_to_datum_float8);
+	insert_type_cache_entry(TypenameGetTypid("inet"),           datum_inet_to_scm,           scm_to_datum_inet);
+	insert_type_cache_entry(TypenameGetTypid("int2"),           datum_int2_to_scm,           scm_to_datum_int2);
+	insert_type_cache_entry(TypenameGetTypid("int4"),           datum_int4_to_scm,           scm_to_datum_int4);
+	insert_type_cache_entry(TypenameGetTypid("int4multirange"), datum_int4multirange_to_scm, scm_to_datum_int4multirange);
+	insert_type_cache_entry(TypenameGetTypid("int4range"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("int8"),           datum_int8_to_scm,           scm_to_datum_int8);
+	insert_type_cache_entry(TypenameGetTypid("int8multirange"), datum_int8multirange_to_scm, scm_to_datum_int8multirange);
+	insert_type_cache_entry(TypenameGetTypid("int8range"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("interval"),       datum_interval_to_scm,       scm_to_datum_interval);
+	insert_type_cache_entry(TypenameGetTypid("json"),           datum_json_to_scm,           scm_to_datum_json);
+	insert_type_cache_entry(TypenameGetTypid("jsonb"),          datum_jsonb_to_scm,          scm_to_datum_jsonb);
+	insert_type_cache_entry(TypenameGetTypid("jsonpath"),       datum_jsonpath_to_scm,       scm_to_datum_jsonpath);
+	insert_type_cache_entry(TypenameGetTypid("line"),           datum_line_to_scm,           scm_to_datum_line);
+	insert_type_cache_entry(TypenameGetTypid("lseg"),           datum_lseg_to_scm,           scm_to_datum_lseg);
+	insert_type_cache_entry(TypenameGetTypid("macaddr"),        datum_macaddr_to_scm,        scm_to_datum_macaddr);
+	insert_type_cache_entry(TypenameGetTypid("macaddr8"),       datum_macaddr8_to_scm,       scm_to_datum_macaddr8);
+	insert_type_cache_entry(TypenameGetTypid("money"),          datum_int8_to_scm,           scm_to_datum_int8);
+	insert_type_cache_entry(TypenameGetTypid("numeric"),        datum_numeric_to_scm,        scm_to_datum_numeric);
+	insert_type_cache_entry(TypenameGetTypid("nummultirange"),  datum_nummultirange_to_scm,  scm_to_datum_nummultirange);
+	insert_type_cache_entry(TypenameGetTypid("numrange"),       datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("path"),           datum_path_to_scm,           scm_to_datum_path);
+	insert_type_cache_entry(TypenameGetTypid("point"),          datum_point_to_scm,          scm_to_datum_point);
+	insert_type_cache_entry(TypenameGetTypid("polygon"),        datum_polygon_to_scm,        scm_to_datum_polygon);
+	insert_type_cache_entry(TypenameGetTypid("record"),         datum_composite_to_scm,      scm_to_datum_record);
+	insert_type_cache_entry(TypenameGetTypid("text"),           datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("time"),           datum_time_to_scm,           scm_to_datum_time);
+	insert_type_cache_entry(TypenameGetTypid("timestamp"),      datum_timestamptz_to_scm,    scm_to_datum_timestamptz);
+	insert_type_cache_entry(TypenameGetTypid("timestamptz"),    datum_timestamptz_to_scm,    scm_to_datum_timestamptz);
+	insert_type_cache_entry(TypenameGetTypid("timetz"),         datum_timetz_to_scm,         scm_to_datum_timetz);
+	insert_type_cache_entry(TypenameGetTypid("tsmultirange"),   datum_tsmultirange_to_scm,   scm_to_datum_tsmultirange);
+	insert_type_cache_entry(TypenameGetTypid("tsquery"),        datum_tsquery_to_scm,        scm_to_datum_tsquery);
+	insert_type_cache_entry(TypenameGetTypid("tsrange"),        datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("tstzmultirange"), datum_tstzmultirange_to_scm, scm_to_datum_tstzmultirange);
+	insert_type_cache_entry(TypenameGetTypid("tstzrange"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("tsvector"),       datum_tsvector_to_scm,       scm_to_datum_tsvector);
+	insert_type_cache_entry(TypenameGetTypid("uuid"),           datum_uuid_to_scm,           scm_to_datum_uuid);
+	insert_type_cache_entry(TypenameGetTypid("varbit"),         datum_bit_string_to_scm,     scm_to_datum_bit_string);
+	insert_type_cache_entry(TypenameGetTypid("varchar"),        datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("void"),           datum_void_to_scm,           scm_to_datum_void);
+	insert_type_cache_entry(TypenameGetTypid("xml"),            datum_xml_to_scm,            scm_to_datum_xml);
 
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
@@ -565,7 +650,6 @@ void _PG_init(void)
 	is_circle_proc              = eval_scheme("circle?");
 	is_date_proc                = eval_scheme("date?");
 	is_decimal_proc             = eval_scheme("decimal?");
-	is_valid_decimal_proc       = eval_scheme("valid-decimal?");
 	is_inet_proc                = eval_scheme("inet?");
 	is_jsonpath_proc            = eval_scheme("jsonpath?");
 	is_line_proc                = eval_scheme("line?");
@@ -575,11 +659,13 @@ void _PG_init(void)
 	is_path_proc                = eval_scheme("path?");
 	is_point_proc               = eval_scheme("point?");
 	is_polygon_proc             = eval_scheme("polygon?");
+	is_range_proc               = eval_scheme("range?");
 	is_record_proc              = eval_scheme("record?");
 	is_table_proc               = eval_scheme("table?");
 	is_time_proc                = eval_scheme("time?");
 	is_tsquery_proc             = eval_scheme("tsquery?");
 	is_tsvector_proc            = eval_scheme("tsvector?");
+	is_valid_decimal_proc       = eval_scheme("valid-decimal?");
 	jsonpath_expr_proc          = eval_scheme("jsonpath-expr");
 	jsonpath_is_strict_proc     = eval_scheme("jsonpath-strict?");
 	line_a_proc                 = eval_scheme("line-a");
@@ -604,6 +690,7 @@ void _PG_init(void)
 	make_path_proc              = eval_scheme("make-path");
 	make_point_proc             = eval_scheme("make-point");
 	make_polygon_proc           = eval_scheme("make-polygon");
+	make_range_proc             = eval_scheme("make-range");
 	make_record_proc            = eval_scheme("make-record");
 	make_table_proc             = eval_scheme("make-table");
 	make_time_proc              = eval_scheme("make-time");
@@ -617,25 +704,28 @@ void _PG_init(void)
 	point_x_proc                = eval_scheme("point-x");
 	point_y_proc                = eval_scheme("point-y");
 	polygon_boundbox_proc       = eval_scheme("polygon-boundbox");
-	record_attrs_proc           = eval_scheme("record-attrs");
-	record_attr_names_proc      = eval_scheme("record-attr-names");
-	record_attr_names_hash_proc = eval_scheme("record-attr-names-hash");
-	record_types_proc           = eval_scheme("record-types");
 	polygon_points_proc         = eval_scheme("polygon-points");
-	table_attr_names_proc       = eval_scheme("table-attr-names");
+	range_flags_proc            = eval_scheme("range-flags");
+	range_lower_proc            = eval_scheme("range-lower");
+	range_upper_proc            = eval_scheme("range-upper");
+	record_attr_names_hash_proc = eval_scheme("record-attr-names-hash");
+	record_attr_names_proc      = eval_scheme("record-attr-names");
+	record_attrs_proc           = eval_scheme("record-attrs");
+	record_types_proc           = eval_scheme("record-types");
 	table_attr_names_hash_proc  = eval_scheme("table-attr-names-hash");
+	table_attr_names_proc       = eval_scheme("table-attr-names");
 	table_rows_proc             = eval_scheme("table-rows");
 	table_types_proc            = eval_scheme("table-types");
 	time_duration_symbol        = eval_scheme("time-duration");
 	time_monotonic_symbol       = eval_scheme("time-monotonic");
 	time_nanosecond_proc        = eval_scheme("time-nanosecond");
 	time_second_proc            = eval_scheme("time-second");
-	tsvector_lexemes_proc       = eval_scheme("tsvector-lexemes");
 	tslexeme_lexeme_proc        = eval_scheme("tslexeme-lexeme");
 	tslexeme_positions_proc     = eval_scheme("tslexeme-positions");
 	tsposition_index_proc       = eval_scheme("tsposition-index");
 	tsposition_weight_proc      = eval_scheme("tsposition-weight");
 	tsquery_expr_proc           = eval_scheme("tsquery-expr");
+	tsvector_lexemes_proc       = eval_scheme("tsvector-lexemes");
 	validate_jsonpath_proc      = eval_scheme("validate-jsonpath");
 	validate_tsquery_proc       = eval_scheme("validate-tsquery");
 
@@ -645,6 +735,12 @@ void _PG_init(void)
 	is_int4_proc            = scm_variable_ref(scm_c_lookup("int4-compatible?"));
 	is_int8_proc            = scm_variable_ref(scm_c_lookup("int8-compatible?"));
 	string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
+
+	empty_symbol           = scm_from_utf8_symbol("empty");
+	lower_inclusive_symbol = scm_from_utf8_symbol("lower-inclusive");
+	lower_infinite_symbol  = scm_from_utf8_symbol("lower-infinite");
+	upper_inclusive_symbol = scm_from_utf8_symbol("upper-inclusive");
+	upper_infinite_symbol  = scm_from_utf8_symbol("upper-infinite");
 
 	and_symbol    = scm_from_utf8_symbol("and");
 	not_symbol    = scm_from_utf8_symbol("not");
@@ -784,7 +880,7 @@ void _PG_fini(void)
 	HASH_SEQ_STATUS status;
 	FuncCacheEntry *entry;
 
-	hash_seq_init(&status, funcCache);
+	hash_seq_init(&status, func_cache);
 
 	while ((entry = (FuncCacheEntry *) hash_seq_search(&status)) != NULL) {
 		scm_gc_unprotect_object(entry->scm_proc);
@@ -793,8 +889,9 @@ void _PG_fini(void)
 	hash_seq_term(&status);
 
 	/* Clean up hash tables */
-	hash_destroy(funcCache);
-	hash_destroy(typeCache);
+	hash_destroy(func_cache);
+	hash_destroy(range_cache);
+	hash_destroy(type_cache);
 }
 
 Datum scruple_call(PG_FUNCTION_ARGS)
@@ -822,7 +919,7 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 	entry.scm_proc = SCM_EOL;
 
 	hash_entry =
-		(FuncCacheEntry *)hash_search(funcCache, (void *)&entry.func_oid, HASH_ENTER, &found);
+		(FuncCacheEntry *)hash_search(func_cache, (void *)&entry.func_oid, HASH_ENTER, &found);
 
 	if (found) {
 		proc = hash_entry->scm_proc;
@@ -1239,7 +1336,7 @@ Datum scruple_compile(PG_FUNCTION_ARGS)
 	scm_gc_protect_object(entry.scm_proc);
 
 	hash_entry =
-		(FuncCacheEntry *)hash_search(funcCache, (void *)&entry.func_oid, HASH_ENTER, &found);
+		(FuncCacheEntry *)hash_search(func_cache, (void *)&entry.func_oid, HASH_ENTER, &found);
 
 	if (found) {
 		// Unprotect the previously compiled function and replace the
@@ -1368,51 +1465,53 @@ SCM unbox_datum(SCM x)
 SCM datum_to_scm(Datum datum, Oid type_oid)
 {
 	bool found;
-	TypeConvCacheEntry *entry =
-		(TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
-
+	TypeConvCacheEntry *entry;
 	Oid base_type_oid, element_type_oid;
 
-	if (found && entry->to_scm) {
+	entry = (TypeConvCacheEntry *)hash_search(type_cache, &type_oid, HASH_FIND, &found);
+
+	if (found && entry->to_scm)
 		return entry->to_scm(datum, type_oid);
-	}
 
-	if (is_enum_type(type_oid)) {
-		insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
-		return datum_enum_to_scm(datum, type_oid);
-	}
+	switch (get_typtype(type_oid)) {
 
-	element_type_oid = get_element_type(type_oid);
-
-	if (OidIsValid(element_type_oid))
-		return datum_array_to_scm(datum, element_type_oid);
-
-	if (is_composite_type(type_oid))
+	case TYPTYPE_COMPOSITE:
+		insert_type_cache_entry(type_oid, datum_composite_to_scm, scm_to_datum_record);
 		return datum_composite_to_scm(datum, type_oid);
 
-	// Domain types
-	base_type_oid = getBaseType(type_oid);
+	case TYPTYPE_DOMAIN:
+		base_type_oid = getBaseType(type_oid);
 
-	if (base_type_oid != type_oid)
+		if (base_type_oid == type_oid)
+			break;
+
+		entry = (TypeConvCacheEntry *)hash_search(type_cache, &base_type_oid, HASH_FIND, &found);
+		if (found && entry->to_scm)
+			insert_type_cache_entry(type_oid, entry->to_scm, entry->to_datum);
+
 		return datum_to_scm(datum, base_type_oid);
+
+	case TYPTYPE_ENUM:
+		insert_type_cache_entry(type_oid, datum_enum_to_scm, scm_to_datum_enum);
+		return datum_enum_to_scm(datum, type_oid);
+
+	case TYPTYPE_MULTIRANGE:
+		elog(ERROR, "datum_to_scm: not implemented");
+		break;
+
+	case TYPTYPE_RANGE:
+		insert_type_cache_entry(type_oid, datum_range_to_scm, scm_to_datum_range);
+		return datum_range_to_scm(datum, type_oid);
+
+	default:
+		element_type_oid = get_element_type(type_oid);
+
+		if (OidIsValid(element_type_oid))
+			return datum_array_to_scm(datum, element_type_oid);
+	}
 
 	elog(NOTICE, "datum_to_scm: conversion function for type OID %u not found", type_oid);
 	return make_boxed_datum(type_oid, datum);
-}
-
-bool is_composite_type(Oid type_oid)
-{
-	HeapTuple type_tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
-	Form_pg_type type_struct;
-	bool result;
-
-	if (!HeapTupleIsValid(type_tup))
-		elog(ERROR, "cache lookup failed for type %u", type_oid);
-
-	type_struct = (Form_pg_type) GETSTRUCT(type_tup);
-	result = type_struct->typtype == 'c';
-	ReleaseSysCache(type_tup);
-	return result;
 }
 
 Datum scm_to_datum(SCM scm, Oid type_oid)
@@ -1425,7 +1524,7 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 	if (is_boxed_datum(scm))
 		return convert_boxed_datum_to_datum(scm, type_oid);
 
-	entry = (TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_FIND, &found);
+	entry = (TypeConvCacheEntry *)hash_search(type_cache, &type_oid, HASH_FIND, &found);
 
 	if (found && entry->to_datum)
 		return entry->to_datum(scm, type_oid);
@@ -4068,6 +4167,184 @@ size_t calculate_tsvector_buffer_size(SCM x)
 	return buflen;
 }
 
+SCM datum_range_to_scm(Datum x, Oid type_oid)
+{
+	RangeType *range = DatumGetRangeTypeP(x);
+	TypeCacheEntry *typcache = lookup_type_cache(type_oid, TYPECACHE_RANGE_INFO);
+	Oid subtype_oid = get_range_subtype(type_oid);
+
+	RangeBound lower, upper;
+	bool empty;
+	char flags;
+
+	SCM scm_flags, scm_lower, scm_upper;
+
+	range_deserialize(typcache, range, &lower, &upper, &empty);
+	flags = range_get_flags(range);
+
+	scm_flags = range_flags_to_scm(flags);
+
+	scm_lower = range_bound_to_scm(&lower, subtype_oid);
+	scm_upper = range_bound_to_scm(&upper, subtype_oid);
+
+	return scm_call_3(make_range_proc, scm_lower, scm_upper, scm_flags);
+}
+
+SCM range_flags_to_scm(char flags)
+{
+	SCM result = SCM_EOL;
+
+	if (flags) {
+		if (flags & RANGE_EMPTY)  result = scm_cons(empty_symbol, result);
+		if (flags & RANGE_LB_INC) result = scm_cons(lower_inclusive_symbol, result);
+		if (flags & RANGE_LB_INF) result = scm_cons(lower_infinite_symbol, result);
+		if (flags & RANGE_UB_INC) result = scm_cons(upper_inclusive_symbol, result);
+		if (flags & RANGE_UB_INF) result = scm_cons(upper_infinite_symbol, result);
+	}
+
+	return result;
+}
+
+SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid)
+{
+	return bound->infinite ? empty_symbol : datum_to_scm(bound->val, subtype_oid);
+}
+
+Datum scm_to_datum_range(SCM x, Oid type_oid)
+{
+	TypeCacheEntry *typcache = lookup_type_cache(type_oid, TYPECACHE_RANGE_INFO);
+	Oid subtype_oid = get_range_subtype(type_oid);
+
+	RangeBound lower, upper;
+	char flags;
+
+	SCM scm_lower, scm_upper;
+
+	RangeType *range;
+
+	if (!is_range(x))
+		elog(ERROR, "range result expected, not: %s", scm_to_string(x));
+
+	flags = scm_range_flags_to_char(x);
+
+	lower.lower = true;
+	upper.lower = false;
+
+	scm_lower = scm_call_1(range_lower_proc, x);
+	scm_upper = scm_call_1(range_upper_proc, x);
+
+	lower.inclusive = flags & RANGE_LB_INC;
+	upper.inclusive = flags & RANGE_UB_INC;
+
+	lower.infinite = scm_lower == empty_symbol;
+	upper.infinite = scm_upper == empty_symbol;
+
+	if (!lower.infinite)
+		lower.val = scm_to_datum(scm_lower, subtype_oid);
+
+	if (!upper.infinite)
+		upper.val = scm_to_datum(scm_upper, subtype_oid);
+
+	range = range_serialize(typcache, &lower, &upper, flags & RANGE_EMPTY);
+
+	return RangeTypePGetDatum(range);
+}
+
+char scm_range_flags_to_char(SCM range)
+{
+
+	SCM scm_flags = scm_call_1(range_flags_proc, range);
+
+	char flags = 0;
+
+	while (scm_flags != SCM_EOL) {
+
+		SCM flag = scm_car(scm_flags);
+
+		if (flag == empty_symbol)
+			flags |= RANGE_EMPTY;
+
+		else if (flag == lower_inclusive_symbol)
+			flags |= RANGE_LB_INC;
+
+		else if (flag == lower_infinite_symbol)
+			flags |= RANGE_LB_INF;
+
+		else if (flag == upper_inclusive_symbol)
+			flags |= RANGE_UB_INC;
+
+		else if (flag == upper_infinite_symbol)
+			flags |= RANGE_UB_INF;
+
+		else
+			elog(ERROR, "scm_range_flags_to_char: unrecognized flag: %s", scm_to_string(flag));
+
+		scm_flags = scm_cdr(scm_flags);
+	}
+
+	return flags;
+}
+
+SCM datum_int4multirange_to_scm(Datum x, Oid type_oid)
+{
+	return SCM_UNDEFINED;
+}
+
+Datum scm_to_datum_int4multirange(SCM x, Oid type_oid)
+{
+	return (Datum) 0;
+}
+
+SCM datum_nummultirange_to_scm(Datum x, Oid type_oid)
+{
+	return SCM_UNDEFINED;
+}
+
+Datum scm_to_datum_nummultirange(SCM x, Oid type_oid)
+{
+	return (Datum) 0;
+}
+
+SCM datum_tsmultirange_to_scm(Datum x, Oid type_oid)
+{
+	return SCM_UNDEFINED;
+}
+
+Datum scm_to_datum_tsmultirange(SCM x, Oid type_oid)
+{
+	return (Datum) 0;
+}
+
+SCM datum_tstzmultirange_to_scm(Datum x, Oid type_oid)
+{
+	return SCM_UNDEFINED;
+}
+
+Datum scm_to_datum_tstzmultirange(SCM x, Oid type_oid)
+{
+	return (Datum) 0;
+}
+
+SCM datum_datemultirange_to_scm(Datum x, Oid type_oid)
+{
+	return SCM_UNDEFINED;
+}
+
+Datum scm_to_datum_datemultirange(SCM x, Oid type_oid)
+{
+	return (Datum) 0;
+}
+
+SCM datum_int8multirange_to_scm(Datum x, Oid type_oid)
+{
+	return SCM_UNDEFINED;
+}
+
+Datum scm_to_datum_int8multirange(SCM x, Oid type_oid)
+{
+	return (Datum) 0;
+}
+
 SCM datum_void_to_scm(Datum x, Oid type_oid)
 {
 	return SCM_UNDEFINED;
@@ -4178,6 +4455,11 @@ bool is_polygon(SCM x)
 	return scm_is_true(scm_call_1(is_polygon_proc, x));
 }
 
+bool is_range(SCM x)
+{
+	return scm_is_true(scm_call_1(is_range_proc, x));
+}
+
 bool is_record(SCM x)
 {
 	return scm_is_true(scm_call_1(is_record_proc, x));
@@ -4237,11 +4519,28 @@ char *scm_to_string(SCM obj)
 	return result;
 }
 
+void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid)
+{
+	bool found;
+	RangeCacheEntry *entry;
+
+	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_ENTER, &found);
+
+	if (found) {
+		elog(ERROR, "Unexpected duplicate in range cache: %d", subtype_oid);
+	}
+	else {
+		// Initialize the new entry.
+		entry->subtype_oid = subtype_oid;
+		entry->range_type_oid = range_type_oid;
+	}
+}
+
 void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum)
 {
 	bool found;
 	TypeConvCacheEntry *entry =
-		(TypeConvCacheEntry *)hash_search(typeCache, &type_oid, HASH_ENTER, &found);
+		(TypeConvCacheEntry *)hash_search(type_cache, &type_oid, HASH_ENTER, &found);
 
 	if (found) {
 		elog(ERROR, "Unexpected duplicate in type cache: %d", type_oid);
@@ -4252,26 +4551,6 @@ void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datu
 		entry->to_scm = to_scm;
 		entry->to_datum = to_datum;
 	}
-}
-
-bool is_enum_type(Oid type_oid)
-{
-	HeapTuple tup;
-	Form_pg_type type_form;
-	bool result;
-
-	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
-
-	if (!HeapTupleIsValid(tup)) {
-		elog(ERROR, "cache lookup failed for type %u", type_oid);
-	}
-
-	type_form = (Form_pg_type) GETSTRUCT(tup);
-	result = type_form->typtype == TYPTYPE_ENUM;
-
-	ReleaseSysCache(tup);
-
-	return result;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4502,6 +4781,9 @@ Oid infer_scm_type_oid(SCM x)
 	if (is_jsonpath(x))
 		return TypenameGetTypid("jsonpath");
 
+	if (is_range(x))
+		return infer_range_type_oid(x);
+
 	return InvalidOid;
 }
 
@@ -4576,6 +4858,81 @@ Oid find_enum_datum_type(SCM type_name)
 	return type_oid;
 }
 
+Oid infer_range_type_oid(SCM x)
+{
+	SCM lower, upper;
+	Oid lower_oid, upper_oid;
+	Oid range_type_oid, subtype_oid;
+
+	RangeCacheEntry *entry;
+	bool found;
+
+	lower = scm_call_1(range_lower_proc, x);
+	upper = scm_call_1(range_upper_proc, x);
+
+	lower_oid = infer_scm_type_oid(lower);
+	upper_oid = infer_scm_type_oid(upper);
+
+	if (lower == empty_symbol) {
+		if (upper == empty_symbol)
+			// empty range
+			return int4range_oid;
+
+		else
+			subtype_oid = upper_oid;
+	}
+	else {
+		if (upper == empty_symbol)
+			subtype_oid = lower_oid;
+
+		else
+			subtype_oid = unify_type_oid(lower_oid, upper_oid);
+	}
+
+	if (subtype_oid == InvalidOid)
+		elog(ERROR, "infer_range_type_oid: unable to infer range type for %s", scm_to_string(x));
+
+	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_FIND, &found);
+
+	if (found)
+		return entry->range_type_oid;
+
+	range_type_oid = find_range_type_oid(subtype_oid);
+
+	if (range_type_oid == InvalidOid)
+		elog(ERROR, "infer_range_type_oid: unable to infer range type for %s", scm_to_string(x));
+
+	insert_range_cache_entry(subtype_oid, range_type_oid);
+
+	return range_type_oid;
+}
+
+Oid find_range_type_oid(Oid subtype_oid)
+{
+    Oid range_type_oid = InvalidOid;
+    Relation rel;
+    TableScanDesc scan;
+    HeapTuple tup;
+
+    rel = table_open(RangeRelationId, AccessShareLock);
+
+    scan = table_beginscan_catalog(rel, 0, NULL);
+
+    while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    {
+        Form_pg_range range_form = (Form_pg_range) GETSTRUCT(tup);
+        if (range_form->rngsubtype == subtype_oid)
+        {
+            range_type_oid = range_form->rngtypid;
+            break;
+        }
+    }
+
+    table_endscan(scan);
+    table_close(rel, AccessShareLock);
+
+    return range_type_oid;
+}
 
 /* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
 

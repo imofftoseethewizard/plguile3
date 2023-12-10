@@ -425,6 +425,13 @@
 
       (raise-exception `(jsonpath-invalid-regex-flags ,flags))))
 
+(define-record-type range
+  (make-range lower upper flags)
+  range?
+  (lower range-lower)
+  (upper range-upper)
+  (flags range-flags))
+
 (define (int2-compatible? x)
   (and (integer? x)
        (>= x -32768)
