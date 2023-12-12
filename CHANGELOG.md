@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2023-12-12
+
+This release adds support for multirange types and completes support
+for all Postgres types (up to the rewrite of JSONB handling in
+versions 0.9.x).
+
 ## [0.7.6] - 2023-12-10
 
 This release adds support for range types and stubs some of the support for

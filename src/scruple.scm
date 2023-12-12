@@ -432,6 +432,11 @@
   (upper range-upper)
   (flags range-flags))
 
+(define-record-type mulitrange
+  (make-multirange ranges)
+  multirange?
+  (ranges multirange-ranges))
+
 (define (int2-compatible? x)
   (and (integer? x)
        (>= x -32768)

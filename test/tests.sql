@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(206);
+select plan(208);
 
 --------------------------------------------------------------------------------
 --
@@ -801,6 +801,16 @@ from (select '[0, 60]'::int4range) t(v);
 
 --------------------------------------------------------------------------------
 --
+-- Multiranges
+--
+
+create function f_int4multirange_id(a int4multirange) returns int4multirange as 'a' language scruple;
+
+select ok(f_int4multirange_id(t.v) = t.v, 'int4multirange: identity mapping test')
+from (select '{[3,7), [8,9)}'::int4multirange) t(v);
+
+--------------------------------------------------------------------------------
+--
 -- Domains
 --
 
@@ -1056,6 +1066,11 @@ create function f_execute_with_args_boolrange() returns boolrange as $$
 $$
 language scruple;
 
+create function f_execute_with_args_int4multirange() returns int4multirange as $$
+(scalar (execute "select '{[3,7), [8,9)}'::int4multirange"))
+$$
+language scruple;
+
 create function f_execute_with_args_posint() returns posint as $$
 (scalar (execute "select 14::posint"))
 $$
@@ -1112,5 +1127,6 @@ select is(f_execute_with_args_int4range(), '[0, 60)'::int4range, 'execute: with 
 select is(f_execute_with_args_posint(), 14::posint, 'execute: with args posint');
 
 select is(f_execute_with_args_boolrange(), '[false, true]'::boolrange, 'execute: with args boolrange');
+select is(f_execute_with_args_int4multirange(), '{[3,7), [8,9)}'::int4multirange, 'execute: with args int4multirange');
 
 rollback;
