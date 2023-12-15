@@ -184,6 +184,7 @@ static bool is_inet(SCM x);
 static bool is_int2(SCM x);
 static bool is_int4(SCM x);
 static bool is_int8(SCM x);
+static bool is_jsonb(SCM x);
 static bool is_jsonpath(SCM x);
 static bool is_line(SCM x);
 static bool is_lseg(SCM x);
@@ -228,13 +229,20 @@ static bool is_record(SCM x);
 static bool is_table(SCM x);
 static bool is_set_returning(HeapTuple proc_tuple);
 static SCM type_desc_expr(Oid type_oid);
-static Datum jsonb_from_cstring(char *json, int len);
+static SCM jsonb_to_scm_expr(Jsonb *jsb);
+static SCM jsb_scalar_to_scm(JsonbValue *jsb);
 static uint16 get_tsposition_index(SCM position);
 static uint16 get_tsposition_weight(SCM position);
 static size_t calculate_tsvector_buffer_size(SCM x);
 static SCM tsquery_items_to_scm(QueryItem **qi_iter, char *operands);
 static void tsquery_expr_size(SCM expr, int *count, size_t *bytes);
 static void scm_to_tsquery_items(SCM expr, QueryItem **qi_iter, char *operands, size_t *offset);
+static Jsonb *jsonb_root_expr_to_jsonb(SCM expr);
+static void jsonb_expr_to_jsbv(SCM expr, JsonbValue *jsbv);
+static void jsonb_array_expr_to_jsbv(SCM expr, JsonbValue *jsbv);
+static void jsonb_object_expr_to_jsbv(SCM expr, JsonbValue *jsbv);
+static void jsonb_raw_scalar_expr_to_jsbv(SCM expr, JsonbValue *jsbv);
+static void jsonb_scalar_expr_to_jsbv(SCM expr, JsonbValue *jsbv);
 static SCM jsp_to_scm(JsonPathItem *v, SCM expr);
 static SCM jsp_item_to_scm(JsonPathItem *v, SCM expr);
 static SCM jsp_operation_symbol(JsonPathItemType type);
@@ -311,6 +319,7 @@ static SCM is_inet_proc;
 static SCM is_int2_proc;
 static SCM is_int4_proc;
 static SCM is_int8_proc;
+static SCM is_jsonb_proc;
 static SCM is_jsonpath_proc;
 static SCM is_line_proc;
 static SCM is_lseg_proc;
@@ -327,6 +336,7 @@ static SCM is_time_proc;
 static SCM is_tsquery_proc;
 static SCM is_tsvector_proc;
 static SCM is_valid_decimal_proc;
+static SCM jsonb_expr_proc;
 static SCM jsonpath_expr_proc;
 static SCM jsonpath_is_strict_proc;
 static SCM line_a_proc;
@@ -343,6 +353,7 @@ static SCM make_circle_proc;
 static SCM make_date_proc;
 static SCM make_decimal_proc;
 static SCM make_inet_proc;
+static SCM make_jsonb_proc;
 static SCM make_jsonpath_proc;
 static SCM make_line_proc;
 static SCM make_lseg_proc;
@@ -449,6 +460,9 @@ static SCM sub_symbol;
 static SCM type_symbol;
 static SCM var_symbol;
 static SCM wspace_symbol;
+
+// symbols for jsonb
+static SCM null_symbol;
 
 static SCM jsp_op_types_hash;
 
@@ -639,6 +653,7 @@ void _PG_init(void)
 	is_date_proc                = eval_scheme("date?");
 	is_decimal_proc             = eval_scheme("decimal?");
 	is_inet_proc                = eval_scheme("inet?");
+	is_jsonb_proc               = eval_scheme("jsonb?");
 	is_jsonpath_proc            = eval_scheme("jsonpath?");
 	is_line_proc                = eval_scheme("line?");
 	is_lseg_proc                = eval_scheme("lseg?");
@@ -655,6 +670,7 @@ void _PG_init(void)
 	is_tsquery_proc             = eval_scheme("tsquery?");
 	is_tsvector_proc            = eval_scheme("tsvector?");
 	is_valid_decimal_proc       = eval_scheme("valid-decimal?");
+	jsonb_expr_proc             = eval_scheme("jsonb-expr");
 	jsonpath_expr_proc          = eval_scheme("jsonpath-expr");
 	jsonpath_is_strict_proc     = eval_scheme("jsonpath-strict?");
 	line_a_proc                 = eval_scheme("line-a");
@@ -671,6 +687,7 @@ void _PG_init(void)
 	make_date_proc              = eval_scheme("make-date");
 	make_decimal_proc           = eval_scheme("make-decimal");
 	make_inet_proc              = eval_scheme("make-inet");
+	make_jsonb_proc             = eval_scheme("make-jsonb");
 	make_jsonpath_proc          = eval_scheme("make-jsonpath");
 	make_line_proc              = eval_scheme("make-line");
 	make_lseg_proc              = eval_scheme("make-lseg");
@@ -779,7 +796,9 @@ void _PG_init(void)
 	sub_symbol              = scm_from_utf8_symbol("-");
 	type_symbol             = scm_from_utf8_symbol("type");
 	var_symbol              = scm_from_utf8_symbol("var");
-	wspace_symbol           = scm_from_utf8_symbol("#:x");
+	wspace_symbol           = scm_from_utf8_symbol("whitespace");
+
+	null_symbol           = scm_from_utf8_symbol("null");
 
 	jsp_op_types_hash = scm_c_make_hash_table(39); // will have 39 symbols in it
 
@@ -3010,30 +3029,189 @@ Datum scm_to_datum_json(SCM x, Oid type_oid)
 
 SCM datum_jsonb_to_scm(Datum x, Oid type_oid)
 {
-	// Convert Datum to JsonbValue
-	Jsonb *jsonbValue = DatumGetJsonbP(x);
+	return scm_call_1(make_jsonb_proc, jsonb_to_scm_expr(DatumGetJsonbP(x)));
+}
 
-	// Serialize JsonbValue to C string
-	char *cstr = JsonbToCString(NULL, &jsonbValue->root, VARSIZE(jsonbValue));
+SCM jsonb_to_scm_expr(Jsonb *jsb)
+{
+	JsonbIterator *it;
+	JsonbValue v;
+	JsonbIteratorToken type;
+	bool raw_scalar = false;
 
-	// Convert C string to SCM string
-	SCM scmString = scm_from_locale_string(cstr);
+	SCM current = SCM_EOL, stack = SCM_EOL;
 
-	return scmString;
+	it = JsonbIteratorInit(&jsb->root);
+
+	while ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE) {
+
+		switch (type) {
+
+			case WJB_BEGIN_ARRAY:
+				stack = scm_cons(current, stack);
+				current = SCM_EOL;
+				raw_scalar = v.val.array.rawScalar;
+				break;
+
+			case WJB_BEGIN_OBJECT:
+				stack = scm_cons(current, stack);
+				current = SCM_EOL;
+				break;
+
+			case WJB_ELEM:
+			case WJB_KEY:
+			case WJB_VALUE:
+				current = scm_cons(jsb_scalar_to_scm(&v), current);
+				break;
+
+			case WJB_END_ARRAY:
+				if (raw_scalar)
+					current = scm_cons(scm_car(current), scm_car(stack));
+				else
+					current = scm_cons(scm_vector(scm_reverse(current)), scm_car(stack));
+
+				stack = scm_cdr(stack);
+				break;
+
+			case WJB_END_OBJECT:
+				current = scm_cons(scm_reverse(current), scm_car(stack));
+				stack = scm_cdr(stack);
+				break;
+
+			default:
+				elog(ERROR, "unknown jsonb iterator token type");
+		}
+	}
+
+	return scm_car(current);
+}
+
+SCM jsb_scalar_to_scm(JsonbValue *jsb)
+{
+	switch (jsb->type) {
+		case jbvNull:
+			return null_symbol;
+
+		case jbvString:
+			return scm_from_locale_stringn(jsb->val.string.val, jsb->val.string.len);
+
+		case jbvNumeric:
+			return datum_numeric_to_scm(PointerGetDatum(jsb->val.numeric), InvalidOid);
+
+		case jbvBool:
+			return scm_from_bool(jsb->val.boolean);
+
+		default:
+			elog(ERROR, "unknown jsonb scalar type");
+	}
 }
 
 Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 {
-	// Convert SCM string to C string
-	char *cstr = scm_to_locale_string(x);
-	int len = scm_c_string_utf8_length(x);
+	SCM expr = is_jsonb(x) ? scm_call_1(jsonb_expr_proc, x) : x;
 
-	Datum result = jsonb_from_cstring(cstr, len);
+	// scm_call_1(validate_jsonb_proc, expr); //TODO
 
-	// Free C string
-	free(cstr);
+	return JsonbPGetDatum(jsonb_root_expr_to_jsonb(expr));
+}
 
-	return result;
+Jsonb *jsonb_root_expr_to_jsonb(SCM expr)
+{
+	JsonbValue jsbv;
+
+	if (scm_is_vector(expr) || scm_is_pair(expr))
+		jsonb_expr_to_jsbv(expr, &jsbv);
+
+	else
+		jsonb_raw_scalar_expr_to_jsbv(expr, &jsbv);
+
+	return JsonbValueToJsonb(&jsbv);
+}
+
+void jsonb_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
+{
+	if (scm_is_vector(expr))
+		jsonb_array_expr_to_jsbv(expr, jsbv);
+
+	else if (scm_is_pair(expr))
+		jsonb_object_expr_to_jsbv(expr, jsbv);
+
+	else
+		jsonb_scalar_expr_to_jsbv(expr, jsbv);
+}
+
+void jsonb_array_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
+{
+	int i, len = scm_c_vector_length(expr);
+	JsonbValue *elem;
+
+	jsbv->type = jbvArray;
+	jsbv->val.array.nElems = len;
+	jsbv->val.array.elems = (JsonbValue *)palloc(sizeof(JsonbValue) * len);
+	jsbv->val.array.rawScalar = false;
+
+	for (i = 0, elem = jsbv->val.array.elems; i < len; i++, elem++)
+		jsonb_expr_to_jsbv(scm_c_vector_ref(expr, i), elem);
+}
+
+void jsonb_object_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
+{
+	int i, len = scm_to_int(scm_length(expr))/2;
+	JsonbPair *pair;
+	SCM x = expr;
+
+	jsbv->type = jbvObject;
+	jsbv->val.object.nPairs = len;
+	jsbv->val.object.pairs = (JsonbPair *)palloc(sizeof(JsonbPair) * len);
+
+	for (i = 0, pair = jsbv->val.object.pairs; i < len; i++, pair++) {
+
+		jsonb_scalar_expr_to_jsbv(scm_car(x), &pair->key);
+
+		x = scm_cdr(x);
+
+		jsonb_expr_to_jsbv(scm_car(x), &pair->value);
+
+		x = scm_cdr(x);
+
+		pair->order = i;
+	}
+}
+
+void jsonb_raw_scalar_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
+{
+	jsbv->type = jbvArray;
+	jsbv->val.array.nElems = 1;
+	jsbv->val.array.elems = (JsonbValue *)palloc(sizeof(JsonbValue));
+	jsbv->val.array.rawScalar = true;
+	jsonb_scalar_expr_to_jsbv(expr, jsbv->val.array.elems);
+}
+
+void jsonb_scalar_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
+{
+	if (scm_is_string(expr)) {
+		size_t len;
+		char *c_str = scm_to_locale_stringn(expr, &len);
+
+		jsbv->type = jbvString;
+		jsbv->val.string.len = (int)len;
+		jsbv->val.string.val = pstrdup(c_str);
+		free(c_str);
+	}
+
+	else if (scm_is_number(expr) || is_decimal(expr)) {
+		jsbv->type = jbvNumeric;
+		jsbv->val.numeric = DatumGetNumeric(scm_to_datum_numeric(expr, OID_NOT_USED));
+	}
+
+	else if (expr == null_symbol) {
+		jsbv->type = jbvNull;
+	}
+
+	else if (expr == SCM_BOOL_T || expr == SCM_BOOL_F) {
+		jsbv->type = jbvBool;
+		jsbv->val.boolean = scm_to_bool(expr);
+	}
 }
 
 SCM datum_jsonpath_to_scm(Datum x, Oid type_oid)
@@ -4397,6 +4575,11 @@ bool is_int8(SCM x)
 	return scm_is_true(scm_call_1(is_int8_proc, x));
 }
 
+bool is_jsonb(SCM x)
+{
+	return scm_is_true(scm_call_1(is_jsonb_proc, x));
+}
+
 bool is_jsonpath(SCM x)
 {
 	return scm_is_true(scm_call_1(is_jsonpath_proc, x));
@@ -4996,183 +5179,3 @@ Oid unify_range_subtype_oid(Oid t1, Oid t2)
 
 	return unify_type_oid(t1, t2);
 }
-
-/* The following was taken from src/backend/utils/adt/jsonb.c of REL_14_9. */
-
-static size_t checkStringLen(size_t len);
-static void jsonb_in_object_start(void *pstate);
-static void jsonb_in_object_end(void *pstate);
-static void jsonb_in_array_start(void *pstate);
-static void jsonb_in_array_end(void *pstate);
-static void jsonb_in_object_field_start(void *pstate, char *fname, bool isnull);
-static void jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype);
-
-typedef struct JsonbInState
-{
-	JsonbParseState *parseState;
-	JsonbValue *res;
-} JsonbInState;
-
-Datum jsonb_from_cstring(char *json, int len)
-{
-	JsonLexContext *lex;
-	JsonbInState state;
-	JsonSemAction sem;
-
-	memset(&state, 0, sizeof(state));
-	memset(&sem, 0, sizeof(sem));
-	lex = makeJsonLexContextCstringLen(json, len, GetDatabaseEncoding(), true);
-
-	sem.semstate = (void *) &state;
-
-	sem.object_start = jsonb_in_object_start;
-	sem.array_start = jsonb_in_array_start;
-	sem.object_end = jsonb_in_object_end;
-	sem.array_end = jsonb_in_array_end;
-	sem.scalar = jsonb_in_scalar;
-	sem.object_field_start = jsonb_in_object_field_start;
-
-	pg_parse_json_or_ereport(lex, &sem);
-
-	/* after parsing, the item member has the composed jsonb structure */
-	PG_RETURN_POINTER(JsonbValueToJsonb(state.res));
-}
-
-static size_t checkStringLen(size_t len)
-{
-	if (len > JENTRY_OFFLENMASK)
-		ereport(
-			ERROR,
-			(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-			 errmsg("string too long to represent as jsonb string"),
-			 errdetail("Due to an implementation restriction, jsonb strings cannot exceed %d bytes.",
-			           JENTRY_OFFLENMASK)));
-
-	return len;
-}
-
-static void jsonb_in_object_start(void *pstate)
-{
-	JsonbInState *_state = (JsonbInState *) pstate;
-
-	_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_OBJECT, NULL);
-}
-
-static void jsonb_in_object_end(void *pstate)
-{
-	JsonbInState *_state = (JsonbInState *) pstate;
-
-	_state->res = pushJsonbValue(&_state->parseState, WJB_END_OBJECT, NULL);
-}
-
-static void jsonb_in_array_start(void *pstate)
-{
-	JsonbInState *_state = (JsonbInState *) pstate;
-
-	_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, NULL);
-}
-
-static void jsonb_in_array_end(void *pstate)
-{
-	JsonbInState *_state = (JsonbInState *) pstate;
-
-	_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
-}
-
-static void jsonb_in_object_field_start(void *pstate, char *fname, bool isnull)
-{
-	JsonbInState *_state = (JsonbInState *) pstate;
-	JsonbValue v;
-
-	Assert(fname != NULL);
-	v.type = jbvString;
-	v.val.string.len = checkStringLen(strlen(fname));
-	v.val.string.val = fname;
-
-	_state->res = pushJsonbValue(&_state->parseState, WJB_KEY, &v);
-}
-
-/*
- * For jsonb we always want the de-escaped value - that's what's in token
- */
-static void jsonb_in_scalar(void *pstate, char *token, JsonTokenType tokentype)
-{
-	JsonbInState *_state = (JsonbInState *) pstate;
-	JsonbValue v;
-	Datum  numd;
-
-	switch (tokentype)
-	{
-
-	case JSON_TOKEN_STRING:
-		Assert(token != NULL);
-		v.type = jbvString;
-		v.val.string.len = checkStringLen(strlen(token));
-		v.val.string.val = token;
-		break;
-	case JSON_TOKEN_NUMBER:
-
-		/*
-		 * No need to check size of numeric values, because maximum
-		 * numeric size is well below the JsonbValue restriction
-		 */
-		Assert(token != NULL);
-		v.type = jbvNumeric;
-
-		numd = DirectFunctionCall3(
-			numeric_in,
-			CStringGetDatum(token),
-			ObjectIdGetDatum(InvalidOid),
-			Int32GetDatum(-1));
-
-		v.val.numeric = DatumGetNumeric(numd);
-		break;
-	case JSON_TOKEN_TRUE:
-		v.type = jbvBool;
-		v.val.boolean = true;
-		break;
-	case JSON_TOKEN_FALSE:
-		v.type = jbvBool;
-		v.val.boolean = false;
-		break;
-	case JSON_TOKEN_NULL:
-		v.type = jbvNull;
-		break;
-	default:
-		/* should not be possible */
-		elog(ERROR, "invalid json token type");
-		break;
-	}
-
-	if (_state->parseState == NULL)
-	{
-		/* single scalar */
-		JsonbValue va;
-
-		va.type = jbvArray;
-		va.val.array.rawScalar = true;
-		va.val.array.nElems = 1;
-
-		_state->res = pushJsonbValue(&_state->parseState, WJB_BEGIN_ARRAY, &va);
-		_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
-		_state->res = pushJsonbValue(&_state->parseState, WJB_END_ARRAY, NULL);
-	}
-	else
-	{
-		JsonbValue *o = &_state->parseState->contVal;
-
-		switch (o->type)
-		{
-		case jbvArray:
-			_state->res = pushJsonbValue(&_state->parseState, WJB_ELEM, &v);
-			break;
-		case jbvObject:
-			_state->res = pushJsonbValue(&_state->parseState, WJB_VALUE, &v);
-			break;
-		default:
-			elog(ERROR, "unexpected parent of nested structure");
-		}
-	}
-}
-
-/* End quoted code */

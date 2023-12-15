@@ -25,12 +25,6 @@ of database functions using Guile Scheme.
 
 The scope of the 1.0 release is detailed below.
 
-The 0.9.x versions will improve support for jsonb, providing
-procedures that map to/from JSON according to the following: objects
-map to alists with string keys, arrays map to vectors, `true` maps to
-`#t`, `false` maps to `#f`, `null` maps to `'null`, strings map to
-strings, and numbers map to numbers.
-
 The 0.11.x versions will add support for cursors and iterative query
 result handling.
 

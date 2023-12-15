@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2023-12-15
+
+This release reworks jsonb support so that jsonb is represented in
+Scheme such that objects map to alists with string keys, arrays map to
+vectors, `true` maps to `#t`, `false` maps to `#f`, `null` maps to
+`'null`, strings map to strings, and numbers map to numbers.
+
 ## [0.8.0] - 2023-12-12
 
 This release adds support for multirange types and completes support

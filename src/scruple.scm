@@ -432,10 +432,15 @@
   (upper range-upper)
   (flags range-flags))
 
-(define-record-type mulitrange
+(define-record-type multirange
   (make-multirange ranges)
   multirange?
   (ranges multirange-ranges))
+
+(define-record-type jsonb
+  (make-jsonb expr)
+  jsonb?
+  (expr jsonb-expr))
 
 (define (int2-compatible? x)
   (and (integer? x)
