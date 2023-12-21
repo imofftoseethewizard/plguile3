@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(208);
+select plan(209);
 
 --------------------------------------------------------------------------------
 --
@@ -1128,5 +1128,18 @@ select is(f_execute_with_args_posint(), 14::posint, 'execute: with args posint')
 
 select is(f_execute_with_args_boolrange(), '[false, true]'::boolrange, 'execute: with args boolrange');
 select is(f_execute_with_args_int4multirange(), '{[3,7), [8,9)}'::int4multirange, 'execute: with args int4multirange');
+
+create table things (id int, name text);
+insert into things values (1, 'foo'), (2, 'bar');
+
+create function f_execute_with_receiver_simple() returns int as $$
+(length (execute-with-receiver (lambda (id name)
+                                 (if (= id 2)
+                                     (stop-command-execution)
+                                     name))
+                               "select * from things order by id"))
+$$ language scruple;
+
+select is(f_execute_with_receiver_simple(), 1, 'execute_with_receive: simple');
 
 rollback;

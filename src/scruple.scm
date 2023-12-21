@@ -9,6 +9,10 @@
                   #:optional (args '()) (read-only #t) (count 0))
   (%execute command args read-only count))
 
+(define* (execute-with-receiver receiver command
+                                #:optional (args '()) (read-only #t) (count 0))
+  (%execute-with-receiver receiver command args read-only count))
+
 (define-record-type boxed-datum
   ; the type is an Oid, the value is a Datum.
   (make-boxed-datum type value)

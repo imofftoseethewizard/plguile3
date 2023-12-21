@@ -7,7 +7,7 @@ language.
 
 Demoable. Scruple supports creating scheme functions which can accept
 and return all built-in Postgres types. It also supports executing
-queries from scheme functions. Current stable(ish) release is 0.8.0,
+queries from scheme functions. Current stable(ish) release is 0.10.0,
 though be warned that anything off of the knife edge of the happy path
 is likely to cause a crash.
 
@@ -47,6 +47,7 @@ Version 0.22.0 will be the pre-1.0 beta release.
 
 The 0.22.x versions will include
 
+- an extensive test campaign covering concurrency, memory correctness, fuzzing
 - documentation and examples
 - support for Postgres 12, 13, 15, and 16
 - packaging for pgxn, deb, rpm, and apk.

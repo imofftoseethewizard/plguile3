@@ -19,6 +19,7 @@
 #include <executor/tuptable.h>
 #include <lib/stringinfo.h>
 #include <mb/pg_wchar.h>
+#include <tcop/dest.h>
 #include <tsearch/ts_type.h>
 #include <utils/array.h>
 #include <utils/builtins.h>
@@ -86,6 +87,13 @@ typedef struct TypeConvCacheEntry {
 	ToScmFunc to_scm;   // Function pointer to convert Datum to SCM
 	ToDatumFunc to_datum; // Function pointer to convert SCM to Datum
 } TypeConvCacheEntry;
+
+typedef struct Receiver {
+	DestReceiver dest;
+	SCM proc;
+	SCM result;
+	SCM tail;
+} Receiver;
 
 static SCM make_boxed_datum(Oid type_oid, Datum x);
 
@@ -274,6 +282,12 @@ static void write_jsp_uint32(StringInfo buf, SCM expr);
 static SCM range_flags_to_scm(char flags);
 static SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid);
 static char scm_range_flags_to_char(SCM range);
+static SCM stop_command_execution(void);
+static SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read_only, SCM count);
+static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
+static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
+static void dest_shutdown(DestReceiver *self);
+static void dest_destroy(DestReceiver *self);
 
 static Oid date_oid;
 static Oid float4_oid;
@@ -466,12 +480,15 @@ static SCM null_symbol;
 
 static SCM jsp_op_types_hash;
 
+static SCM stop_marker;
+
 static HTAB *func_cache;
 static HTAB *range_cache;
 static HTAB *type_cache;
 
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count);
+static SCM spi_execute_with_receiver(SCM receiver, SCM command, SCM args, SCM read_only, SCM count);
 
 void _PG_init(void)
 {
@@ -843,6 +860,13 @@ void _PG_init(void)
 
 	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
 	scm_c_define_gsubr("%execute", 4, 0, 0, (SCM (*)()) spi_execute);
+	scm_c_define_gsubr("%execute-with-receiver", 5, 0, 0, (SCM (*)()) spi_execute_with_receiver);
+	scm_c_define_gsubr("stop-command-execution", 0, 0, 0, stop_command_execution);
+
+	// unique object used to signal desired end of processing
+	// during execute-with-receiver
+	stop_marker = scm_cons(SCM_EOL, SCM_EOL);
+	scm_gc_protect_object(stop_marker);
 }
 
 /* Error handler function */
@@ -968,7 +992,7 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 
 	elog(NOTICE, "scruple_call: calling scheme");
 
-	scm_result = scm_apply(proc, arg_list, SCM_EOL);
+	scm_result = scm_apply_0(proc, arg_list);
 
 	elog(NOTICE, "scruple_call: converting result");
 
@@ -4770,7 +4794,7 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 
 			arg_types[i] = type_oid;
 			arg_values[i] = scm_to_datum(arg, type_oid);
-			arg_nulls[i] = 1;
+			// arg_nulls[i] = 1; set to 'n' for null
 			rest = scm_cdr(rest);
 		}
 
@@ -4848,6 +4872,145 @@ SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
 	elog(NOTICE, "spi_execute: done");
 
 	return scm_values(scm_list_2(table, rows_processed));
+}
+
+SCM stop_command_execution()
+{
+	return stop_marker;
+}
+
+SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read_only, SCM count)
+{
+	Receiver dest = {
+		{ dest_receive, dest_startup, dest_shutdown, dest_destroy, DestNone },
+		receiver_proc,
+		SCM_EOL,
+		SCM_EOL,
+	};
+
+	ParamListInfo param_list;
+	ParamExternData *param_ptr;
+
+//	int nargs = scm_to_int(scm_length(args));
+	int nargs;
+	Oid *arg_types = NULL;
+
+	SPIPlanPtr plan;
+	SPIExecuteOptions options;
+
+	if (!scm_is_string(command)) {
+		// TODO
+	}
+
+	if (!scm_is_bool(read_only)) {
+		// TODO
+	}
+
+	if (!scm_is_exact(count) || scm_to_bool(scm_negative_p(count))) {
+		// TODO
+	}
+
+	SPI_connect();
+
+	elog(NOTICE, "spi_execute_with_receiver: connected");
+
+	nargs = scm_to_int(scm_length(args));
+
+	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
+	param_list->numParams = nargs;
+	param_ptr = (ParamExternData *)&param_list->params;
+
+	if (nargs) {
+
+		SCM rest = args;
+
+		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
+
+		elog(NOTICE, "spi_execute_with_receiver: preparing arguments");
+
+		for (int i = 0; i < nargs; i++) {
+			SCM arg = scm_car(rest);
+			Oid type_oid = infer_scm_type_oid(arg);
+
+			if (type_oid == InvalidOid)
+				elog(ERROR, "spi_execute_with_receiver: unable to infer result type");
+
+			arg_types[i] = type_oid;
+			param_ptr->value = scm_to_datum(arg, type_oid);
+			param_ptr->isnull = 0; // set to 'n' for null
+			rest = scm_cdr(rest);
+			param_ptr++;
+		}
+
+		elog(NOTICE, "spi_execute_with_receiver: arguments ready");
+
+	}
+
+	elog(NOTICE, "spi_execute_with_receiver: arguments ready");
+
+	plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
+
+	options.allow_nonatomic = true;
+	options.tcount          = scm_to_long(count);
+	options.dest            = (DestReceiver *)&dest;
+	options.owner           = NULL;
+	options.params          = param_list;
+	options.read_only       = scm_to_bool(read_only);
+
+	dest.result = dest.tail = scm_cons(SCM_EOL, SCM_EOL);
+
+	SPI_execute_plan_extended(plan, &options);
+
+	return scm_cdr(dest.result);
+}
+
+void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
+{
+}
+
+bool dest_receive(TupleTableSlot *slot, DestReceiver *self)
+{
+	Receiver *receiver = (Receiver *)self;
+	SCM proc = receiver->proc;
+	SCM args = SCM_EOL;
+	FormData_pg_attribute *attrs = slot->tts_tupleDescriptor->attrs;
+	SCM result, tail;
+
+	elog(NOTICE, "dest_receive: begin");
+
+	slot_getallattrs(slot);
+
+	for (int i = slot->tts_nvalid-1; i >= 0; i--) {
+
+		Datum datum = slot->tts_values[i];
+		bool is_null = slot->tts_isnull[i];
+		Oid type_oid = attrs[i].atttypid;
+
+		args = scm_cons(is_null ? SCM_EOL : datum_to_scm(datum, type_oid), args);
+	}
+
+	elog(NOTICE, "dest_receive: prepared: %s", scm_to_string(args));
+
+	result = scm_apply_0(proc, args);
+
+	elog(NOTICE, "dest_receive: done");
+
+	if (result == stop_marker)
+		return false;
+
+	tail = scm_cons(result, SCM_EOL);
+	scm_set_cdr_x(receiver->tail, tail);
+	receiver->tail = tail;
+
+	return true;
+}
+
+void dest_shutdown(DestReceiver *self)
+{
+}
+
+void dest_destroy(DestReceiver *self)
+{
 }
 
 Oid infer_scm_type_oid(SCM x)
