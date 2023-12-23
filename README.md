@@ -7,7 +7,7 @@ language.
 
 Demoable. Scruple supports creating scheme functions which can accept
 and return all built-in Postgres types. It also supports executing
-queries from scheme functions. Current stable(ish) release is 0.10.0,
+queries from scheme functions. Current stable(ish) release is 0.12.0,
 though be warned that anything off of the knife edge of the happy path
 is likely to cause a crash.
 
@@ -25,9 +25,6 @@ of database functions using Guile Scheme.
 
 The scope of the 1.0 release is detailed below.
 
-The 0.11.x versions will add support for cursors and iterative query
-result handling.
-
 The 0.13.x versions will add support for triggers.
 
 The 0.15.x versions will add support for inline calls, i.e. "do"
@@ -37,20 +34,27 @@ The 0.17.x versions will provide function isolation, and initialization
 and configuration settings.
 
 The 0.19.x versions will normalize error messages and properly trap
-and report errors from Guile.
+and report errors from Guile. Testing will be expanded from just the
+happy path to include corner, edge, and adversarial cases.
 
-At version 0.20.0 the extension will be functionally complete.
+At version 0.20.0 the extension will be functionally complete. This
+will be the alpha release.
 
 The 0.21.x versions will refine and refactor scruple.scm.
 
-Version 0.22.0 will be the pre-1.0 beta release.
+The 0.23.x versions will include an extensive test campaign covering
+load, concurrency, memory correctness, fuzzing, etc.
 
-The 0.22.x versions will include
+Version 0.24.0 will be the pre-1.0 beta release.
 
-- an extensive test campaign covering concurrency, memory correctness, fuzzing
+The 0.24.x versions will include
+
 - documentation and examples
 - support for Postgres 12, 13, 15, and 16
 - packaging for pgxn, deb, rpm, and apk.
+
+The 0.25.x releases will include extensions and usability updates
+after use in at least one large project.
 
 Post 1.0 improvements:
 

@@ -6,12 +6,51 @@
  (rnrs bytevectors))
 
 (define* (execute command
-                  #:optional (args '()) (read-only #t) (count 0))
-  (%execute command args read-only count))
+                  #:optional (args '())
+                  #:key (count 0) (read-only #t) receiver)
+  (if receiver
+      (%execute-with-receiver receiver command args count read-only)
+      (%execute command args count read-only)))
 
-(define* (execute-with-receiver receiver command
-                                #:optional (args '()) (read-only #t) (count 0))
-  (%execute-with-receiver receiver command args read-only count))
+(define* (cursor-open command
+                      #:optional (args '())
+                      #:key (hold #f) (name #f) (read-only #t) (scroll '()))
+  (%cursor-open command args count hold name read-only scroll))
+
+(define* (fetch cursor #:optional direction count)
+  (if count
+      (if (memq direction '(all first last next prior))
+          (raise-exception `(fetch-direction-takes-no-count ,direction))
+          (%fetch cursor direction count))
+      (case direction
+        ((absolute relative)
+         (raise-exception `(fetch-direction-requires-count ,direction)))
+
+        ((all)
+         (%fetch cursor 'forward 'all))
+
+        ((backward)
+         (%fetch cursor 'backward 1))
+
+        ((first)
+         (%fetch cursor 'absolute 1))
+
+        ((forward)
+         (%fetch cursor 'forward 1))
+
+        ((last)
+         (%fetch cursor 'absolute -1))
+
+        ((#f next)
+         (%fetch cursor 'forward 1))
+
+        ((prior)
+         (%fetch cursor 'backward 1))
+
+        (else
+         (if (number? direction)
+             (%fetch cursor 'forward direction)
+             (raise-exception `(fetch-unknown-direction ,direction)))))))
 
 (define-record-type boxed-datum
   ; the type is an Oid, the value is a Datum.
@@ -445,6 +484,11 @@
   (make-jsonb expr)
   jsonb?
   (expr jsonb-expr))
+
+(define-record-type cursor
+  (make-cursor name)
+  cursor?
+  (name cursor-name))
 
 (define (int2-compatible? x)
   (and (integer? x)

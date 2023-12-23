@@ -185,6 +185,7 @@ static bool is_bit_string(SCM x);
 static bool is_box(SCM x);
 static bool is_boxed_datum(SCM x);
 static bool is_circle(SCM x);
+static bool is_cursor(SCM x);
 static bool is_date(SCM x);
 static bool is_decimal(SCM x);
 static bool is_valid_decimal(SCM x);
@@ -288,6 +289,11 @@ static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
+static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM read_only, SCM scroll);
+static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
+static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
+static FetchDirection scm_to_fetch_direction(SCM direction);
+static long scm_to_fetch_count(SCM count);
 
 static Oid date_oid;
 static Oid float4_oid;
@@ -308,6 +314,7 @@ static SCM boxed_datum_type_proc;
 static SCM boxed_datum_value_proc;
 static SCM circle_center_proc;
 static SCM circle_radius_proc;
+static SCM cursor_name_proc;
 static SCM date_day_proc;
 static SCM date_hour_proc;
 static SCM date_minute_proc;
@@ -327,6 +334,7 @@ static SCM is_bit_string_proc;
 static SCM is_box_proc;
 static SCM is_boxed_datum_proc;
 static SCM is_circle_proc;
+static SCM is_cursor_proc;
 static SCM is_date_proc;
 static SCM is_decimal_proc;
 static SCM is_inet_proc;
@@ -364,6 +372,7 @@ static SCM make_bit_string_proc;
 static SCM make_box_proc;
 static SCM make_boxed_datum_proc;
 static SCM make_circle_proc;
+static SCM make_cursor_proc;
 static SCM make_date_proc;
 static SCM make_decimal_proc;
 static SCM make_inet_proc;
@@ -477,6 +486,13 @@ static SCM wspace_symbol;
 
 // symbols for jsonb
 static SCM null_symbol;
+
+// symbols for cursors
+static SCM absolute_symbol;
+static SCM all_symbol;
+static SCM backward_symbol;
+static SCM forward_symbol;
+static SCM relative_symbol;
 
 static SCM jsp_op_types_hash;
 
@@ -650,6 +666,7 @@ void _PG_init(void)
 	boxed_datum_value_proc      = eval_scheme("boxed-datum-value");
 	circle_center_proc          = eval_scheme("circle-center");
 	circle_radius_proc          = eval_scheme("circle-radius");
+	cursor_name_proc            = eval_scheme("cursor-name");
 	date_day_proc               = eval_scheme("date-day");
 	date_hour_proc              = eval_scheme("date-hour");
 	date_minute_proc            = eval_scheme("date-minute");
@@ -667,6 +684,7 @@ void _PG_init(void)
 	is_box_proc                 = eval_scheme("box?");
 	is_boxed_datum_proc         = eval_scheme("boxed-datum?");
 	is_circle_proc              = eval_scheme("circle?");
+	is_cursor_proc              = eval_scheme("cursor?");
 	is_date_proc                = eval_scheme("date?");
 	is_decimal_proc             = eval_scheme("decimal?");
 	is_inet_proc                = eval_scheme("inet?");
@@ -701,6 +719,7 @@ void _PG_init(void)
 	make_box_proc               = eval_scheme("make-box");
 	make_boxed_datum_proc       = eval_scheme("make-boxed-datum");
 	make_circle_proc            = eval_scheme("make-circle");
+	make_cursor_proc            = eval_scheme("make-cursor");
 	make_date_proc              = eval_scheme("make-date");
 	make_decimal_proc           = eval_scheme("make-decimal");
 	make_inet_proc              = eval_scheme("make-inet");
@@ -817,6 +836,12 @@ void _PG_init(void)
 
 	null_symbol           = scm_from_utf8_symbol("null");
 
+	absolute_symbol = scm_from_utf8_symbol("absolute");
+	all_symbol = scm_from_utf8_symbol("all");
+	backward_symbol = scm_from_utf8_symbol("backward");
+	forward_symbol = scm_from_utf8_symbol("forward");
+	relative_symbol = scm_from_utf8_symbol("relative");
+
 	jsp_op_types_hash = scm_c_make_hash_table(39); // will have 39 symbols in it
 
 	scm_hash_set_x(jsp_op_types_hash, abs_symbol,              scm_from_int(jpiAbs));
@@ -858,10 +883,13 @@ void _PG_init(void)
 	scm_hash_set_x(jsp_op_types_hash, type_symbol,             scm_from_int(jpiType));
 	scm_hash_set_x(jsp_op_types_hash, var_symbol,              scm_from_int(jpiVariable));
 
-	scm_c_define_gsubr("unbox-datum", 1, 0, 0, (SCM (*)()) unbox_datum);
-	scm_c_define_gsubr("%execute", 4, 0, 0, (SCM (*)()) spi_execute);
+	scm_c_define_gsubr("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
+	scm_c_define_gsubr("%execute",               4, 0, 0, (SCM (*)()) spi_execute);
 	scm_c_define_gsubr("%execute-with-receiver", 5, 0, 0, (SCM (*)()) spi_execute_with_receiver);
-	scm_c_define_gsubr("stop-command-execution", 0, 0, 0, stop_command_execution);
+	scm_c_define_gsubr("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
+	scm_c_define_gsubr("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
+	scm_c_define_gsubr("%fetch",                 3, 0, 0, (SCM (*)()) spi_cursor_fetch);
+	scm_c_define_gsubr("%move",                  3, 0, 0, (SCM (*)()) spi_cursor_move);
 
 	// unique object used to signal desired end of processing
 	// during execute-with-receiver
@@ -4569,6 +4597,11 @@ bool is_circle(SCM x)
 	return scm_is_true(scm_call_1(is_circle_proc, x));
 }
 
+bool is_cursor(SCM x)
+{
+	return scm_is_true(scm_call_1(is_cursor_proc, x));
+}
+
 bool is_date(SCM x)
 {
 	return scm_is_true(scm_call_1(is_date_proc, x));
@@ -4748,7 +4781,7 @@ void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datu
 // SPI Integration
 //
 
-SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count)
+SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 {
 	int ret;
 	SCM rows_processed;
@@ -4879,7 +4912,7 @@ SCM stop_command_execution()
 	return stop_marker;
 }
 
-SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read_only, SCM count)
+SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM count, SCM read_only)
 {
 	Receiver dest = {
 		{ dest_receive, dest_startup, dest_shutdown, dest_destroy, DestNone },
@@ -4891,12 +4924,13 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read
 	ParamListInfo param_list;
 	ParamExternData *param_ptr;
 
-//	int nargs = scm_to_int(scm_length(args));
-	int nargs;
+	int nargs = scm_to_int(scm_length(args));
 	Oid *arg_types = NULL;
 
 	SPIPlanPtr plan;
-	SPIExecuteOptions options;
+	SPIExecuteOptions options = {0};
+
+	// TODO check receiver_proc is callable
 
 	if (!scm_is_string(command)) {
 		// TODO
@@ -4910,11 +4944,7 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read
 		// TODO
 	}
 
-	SPI_connect();
-
 	elog(NOTICE, "spi_execute_with_receiver: connected");
-
-	nargs = scm_to_int(scm_length(args));
 
 	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
 	param_list->numParams = nargs;
@@ -4943,12 +4973,7 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read
 		}
 
 		elog(NOTICE, "spi_execute_with_receiver: arguments ready");
-
 	}
-
-	elog(NOTICE, "spi_execute_with_receiver: arguments ready");
-
-	plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
 
 	options.allow_nonatomic = true;
 	options.tcount          = scm_to_long(count);
@@ -4959,7 +4984,17 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read
 
 	dest.result = dest.tail = scm_cons(SCM_EOL, SCM_EOL);
 
+	elog(NOTICE, "spi_execute_with_receiver: arguments ready");
+
+	SPI_connect();
+
+	plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
+
 	SPI_execute_plan_extended(plan, &options);
+
+	SPI_finish();
+
+	elog(NOTICE, "spi_execute_with_receiver: done");
 
 	return scm_cdr(dest.result);
 }
@@ -5011,6 +5046,194 @@ void dest_shutdown(DestReceiver *self)
 
 void dest_destroy(DestReceiver *self)
 {
+}
+
+SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM read_only, SCM scroll)
+{
+	Portal portal;
+	ParamListInfo param_list;
+	SPIParseOpenOptions options = {0};
+
+	ParamExternData *param_ptr;
+
+	int nargs = scm_to_int(scm_length(args));
+	Oid *arg_types = NULL;
+
+	char *name_cstr;
+	SCM cursor;
+
+	elog(NOTICE, "spi_cursor_open");
+
+	if (!scm_is_string(command)) {
+		// TODO
+	}
+
+	if (!scm_is_bool(read_only)) {
+		// TODO
+	}
+
+	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
+	param_list->numParams = nargs;
+	param_ptr = (ParamExternData *)&param_list->params;
+
+	if (nargs) {
+
+		SCM rest = args;
+
+		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
+
+		elog(NOTICE, "spi_cursor_open: preparing arguments");
+
+		for (int i = 0; i < nargs; i++) {
+			SCM arg = scm_car(rest);
+			Oid type_oid = infer_scm_type_oid(arg);
+
+			if (type_oid == InvalidOid)
+				elog(ERROR, "spi_cursor_open: unable to infer result type");
+
+			arg_types[i] = type_oid;
+			param_ptr->value = scm_to_datum(arg, type_oid);
+			param_ptr->isnull = 0; // set to 'n' for null
+			rest = scm_cdr(rest);
+			param_ptr++;
+		}
+
+		elog(NOTICE, "spi_cursor_open: arguments ready");
+	}
+
+	options.params        = param_list;
+	options.read_only     = scm_to_bool(read_only);
+	options.cursorOptions = CURSOR_OPT_BINARY;
+
+	SPI_connect();
+
+	name_cstr = name == SCM_BOOL_F ? NULL : scm_to_locale_string(name);
+
+	portal = SPI_cursor_parse_open(name_cstr, scm_to_locale_string(command), &options);
+
+	if (name_cstr)
+		free(name_cstr);
+
+	cursor = scm_call_1(make_cursor_proc, scm_from_locale_string(portal->name));
+
+	SPI_finish();
+
+	elog(NOTICE, "spi_cursor_open: done: %s", portal->name);
+
+	return cursor;
+}
+
+SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
+{
+	const char *name;
+	Portal portal;
+
+	TupleDesc tuple_desc;
+	SCM attr_names, attr_names_hash, records, type_names;
+
+	SPI_connect();
+
+	if (!is_cursor(cursor))
+		elog(ERROR, "TODO");
+
+	name = scm_to_locale_string(scm_call_1(cursor_name_proc, cursor));
+
+	elog(NOTICE, "spi_cursor_fetch: finding cursor named %s", name);
+
+	portal = SPI_cursor_find(name);
+
+	if (portal == NULL) {
+		elog(ERROR, "spi_cursor_fetch: no such cursor: %s", name);
+	}
+
+	elog(NOTICE, "spi_cursor_fetch: found");
+
+	SPI_scroll_cursor_fetch(portal, scm_to_fetch_direction(direction), scm_to_fetch_count(count));
+
+	tuple_desc = SPI_tuptable->tupdesc;
+
+	attr_names = SCM_EOL;
+	type_names = SCM_EOL;
+	attr_names_hash = scm_c_make_hash_table(tuple_desc->natts);
+
+	for (int col = tuple_desc->natts-1; col >= 0; col--) {
+		Oid att_type_oid = tuple_desc->attrs[col].atttypid;
+		SCM symbol = scm_from_locale_symbol(NameStr(tuple_desc->attrs[col].attname));
+		attr_names = scm_cons(symbol, attr_names);
+		type_names = scm_cons(type_desc_expr(att_type_oid), type_names);
+		scm_hash_set_x(attr_names_hash, symbol, scm_from_int(col));
+	}
+
+	records = SCM_EOL;
+
+	for (long row = SPI_tuptable->numvals-1; row >= 0 ; row--) {
+
+		HeapTuple tuple = SPI_tuptable->vals[row];
+		SCM attrs = scm_c_make_vector(tuple_desc->natts, SCM_EOL);
+		SCM record;
+
+		for (int col = 0; col < tuple_desc->natts; col++) {
+
+			bool is_null;
+			Datum datum = SPI_getbinval(tuple, tuple_desc, col+1, &is_null);
+			Oid type_oid = tuple_desc->attrs[col].atttypid;
+
+			if (!is_null)
+				scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
+		}
+
+		record = scm_call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
+		records = scm_cons(record, records);
+	}
+
+	SPI_finish();
+
+	return records;
+}
+
+SCM spi_cursor_move(SCM cursor, SCM direction, SCM count)
+{
+	const char *name = (const char *)scm_foreign_object_ref(cursor, 0);
+	Portal portal;
+
+	SPI_connect();
+
+	portal = SPI_cursor_find(name);
+
+	// TODO handle NULL
+
+	SPI_scroll_cursor_move(portal, scm_to_fetch_direction(direction), scm_to_fetch_count(count));
+
+	SPI_finish();
+
+	return SCM_EOL;
+}
+
+FetchDirection scm_to_fetch_direction(SCM direction)
+{
+	if (direction == forward_symbol)
+		return FETCH_FORWARD;
+
+	if (direction == backward_symbol)
+		return FETCH_BACKWARD;
+
+	if (direction == absolute_symbol)
+		return FETCH_ABSOLUTE;
+
+	if (direction == relative_symbol)
+		return FETCH_RELATIVE;
+
+	elog(ERROR, "scm_to_fetch_direction: unknown direction: %s", scm_to_string(direction));
+	// unreachable
+	return FETCH_FORWARD;
+}
+
+long scm_to_fetch_count(SCM count)
+{
+	if (count == all_symbol)
+		return FETCH_ALL;
+
+	return scm_to_long(count);
 }
 
 Oid infer_scm_type_oid(SCM x)

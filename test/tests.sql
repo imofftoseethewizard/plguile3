@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(209);
+select plan(210);
 
 --------------------------------------------------------------------------------
 --
@@ -1133,13 +1133,20 @@ create table things (id int, name text);
 insert into things values (1, 'foo'), (2, 'bar');
 
 create function f_execute_with_receiver_simple() returns int as $$
-(length (execute-with-receiver (lambda (id name)
-                                 (if (= id 2)
-                                     (stop-command-execution)
-                                     name))
-                               "select * from things order by id"))
+(length (execute "select * from things order by id"
+                 #:receiver (lambda (id name)
+                              (if (= id 2)
+                                  (stop-command-execution)
+                                  name))))
 $$ language scruple;
 
 select is(f_execute_with_receiver_simple(), 1, 'execute_with_receive: simple');
+
+create function f_cursor_simple() returns text as $$
+(let ((c (cursor-open "select * from things order by id")))
+  (record-ref (car (fetch c)) 'name))) ;; '
+$$ language scruple;
+
+select is(f_cursor_simple(), 'foo', 'cursor-open: simple');
 
 rollback;
