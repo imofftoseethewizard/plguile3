@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(210);
+select plan(211);
 
 --------------------------------------------------------------------------------
 --
@@ -1144,9 +1144,22 @@ select is(f_execute_with_receiver_simple(), 1, 'execute_with_receive: simple');
 
 create function f_cursor_simple() returns text as $$
 (let ((c (cursor-open "select * from things order by id")))
-  (record-ref (car (fetch c)) 'name))) ;; '
+  (record-ref (car (fetch c)) 'name)) ;; '
 $$ language scruple;
 
 select is(f_cursor_simple(), 'foo', 'cursor-open: simple');
+
+create function f_tr_new() returns trigger as 'new' language scruple;
+create trigger tr_things_before_insert before insert on things
+  for each row execute function f_tr_new();
+
+create function insert_thing(id int, name text) returns int as $$
+begin
+  insert into things values (id, name);
+  return id;
+end
+$$ language plpgsql;
+
+select is(insert_thing(4, 'more'), 4, 'simple trigger test');
 
 rollback;

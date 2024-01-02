@@ -217,12 +217,19 @@ static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc 
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static Datum scruple_call_trigger(FunctionCallInfo fcinfo);
+static Datum scruple_call_ordinary(FunctionCallInfo fcinfo);
+static SCM find_or_compile_proc(Oid func_oid);
+static SCM prepare_trigger_arguments(TriggerData *trigger_data);
 static SCM scruple_compile_func(Oid func_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
 static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static SCM heap_tuple_to_scm(HeapTuple heap_tuple, TupleDesc tuple_desc);
+static HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc);
+static SCM datum_heap_tuple_to_scm(Datum x, TupleDesc tuple_desc);
 static Oid infer_scm_type_oid(SCM x);
 static Oid infer_array_type_oid(SCM x);
 static Oid infer_range_type_oid(SCM x);
@@ -237,6 +244,7 @@ static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
 static bool is_record(SCM x);
 static bool is_table(SCM x);
 static bool is_set_returning(HeapTuple proc_tuple);
+static bool is_trigger_handler(HeapTuple proc_tuple);
 static SCM type_desc_expr(Oid type_oid);
 static SCM jsonb_to_scm_expr(Jsonb *jsb);
 static SCM jsb_scalar_to_scm(JsonbValue *jsb);
@@ -426,6 +434,16 @@ static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
 static SCM validate_jsonpath_proc;
 static SCM validate_tsquery_proc;
+
+// Symbols for triggers
+static SCM after_symbol;
+static SCM before_symbol;
+static SCM delete_symbol;
+static SCM insert_symbol;
+static SCM row_symbol;
+static SCM statement_symbol;
+static SCM truncate_symbol;
+static SCM update_symbol;
 
 // Symbols for range type flags
 static SCM empty_symbol;
@@ -780,6 +798,15 @@ void _PG_init(void)
 	is_int8_proc            = scm_variable_ref(scm_c_lookup("int8-compatible?"));
 	string_to_decimal_proc  = scm_variable_ref(scm_c_lookup("string->decimal"));
 
+	after_symbol     = scm_from_utf8_symbol("after");
+	before_symbol    = scm_from_utf8_symbol("before");
+	delete_symbol    = scm_from_utf8_symbol("delete");
+	insert_symbol    = scm_from_utf8_symbol("insert");
+	row_symbol       = scm_from_utf8_symbol("row");
+	statement_symbol = scm_from_utf8_symbol("statement");
+	truncate_symbol  = scm_from_utf8_symbol("truncate");
+	update_symbol    = scm_from_utf8_symbol("update");
+
 	empty_symbol           = scm_from_utf8_symbol("empty");
 	lower_inclusive_symbol = scm_from_utf8_symbol("lower-inclusive");
 	lower_infinite_symbol  = scm_from_utf8_symbol("lower-infinite");
@@ -958,23 +985,77 @@ void _PG_fini(void)
 
 Datum scruple_call(PG_FUNCTION_ARGS)
 {
-	Oid func_oid = fcinfo->flinfo->fn_oid;
-	HeapTuple proc_tuple;
+	return CALLED_AS_TRIGGER(fcinfo)
+		? scruple_call_trigger(fcinfo)
+		: scruple_call_ordinary(fcinfo);
+}
+
+Datum scruple_call_trigger(FunctionCallInfo fcinfo)
+{
 	SCM proc;
 
-	FuncCacheEntry entry;
-
-	bool found;
-	FuncCacheEntry *hash_entry;
+	TriggerData	*trigger_data = (TriggerData *)fcinfo->context;
+	TriggerEvent event = trigger_data->tg_event;
 
 	SCM arg_list = SCM_EOL;
-
-	/* bool nonatomic; */
+	SCM new, old;
 
 	SCM scm_result;
 	Datum result;
 
-	elog(NOTICE, "scruple_call: begin");
+	elog(NOTICE, "scruple_call_trigger: begin");
+
+	proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
+
+	elog(NOTICE, "scruple_call_trigger: preparing arguments");
+
+	arg_list = prepare_trigger_arguments(trigger_data);
+	new = scm_car(arg_list);
+	old = scm_cadr(arg_list);
+
+	elog(NOTICE, "scruple_call_trigger: calling scheme: args: %s", scm_to_string(arg_list));
+
+	scm_result = scm_apply_0(proc, arg_list);
+
+	elog(NOTICE, "scruple_call_trigger: converting result");
+
+	if (scm_result == SCM_BOOL_F || !TRIGGER_FIRED_FOR_ROW(event)) {
+		elog(NOTICE, "scruple_call_trigger: returned false or not row-based");
+
+		result = PointerGetDatum(NULL);
+
+	} else if (scm_result == new) {
+		elog(NOTICE, "scruple_call_trigger: returned new");
+		result = TRIGGER_FIRED_BY_UPDATE(event)
+			? PointerGetDatum(trigger_data->tg_newtuple)
+			: PointerGetDatum(trigger_data->tg_trigtuple);
+
+	} else if (scm_result == old) {
+		elog(NOTICE, "scruple_call_trigger: returned old");
+		result = PointerGetDatum(trigger_data->tg_trigtuple);
+
+	} else {
+		TupleDesc tuple_desc = TRIGGER_FIRED_BY_UPDATE(event)
+			? trigger_data->tg_newslot->tts_tupleDescriptor
+			: trigger_data->tg_trigslot->tts_tupleDescriptor;
+
+		TupleDesc tuple_desc_copy = (TupleDesc)MemoryContextAllocZero(TopTransactionContext, TupleDescSize(tuple_desc));
+		TupleDescCopy(tuple_desc_copy, tuple_desc);
+
+		elog(NOTICE, "scruple_call_trigger: returned modified");
+		result = PointerGetDatum(scm_record_to_heap_tuple(scm_result, tuple_desc_copy));
+	}
+	elog(NOTICE, "scruple_call_trigger: done");
+
+	return result;
+}
+
+SCM find_or_compile_proc(Oid func_oid)
+{
+	FuncCacheEntry entry;
+
+	bool found;
+	FuncCacheEntry *hash_entry;
 
 	// Find compiled code for function in the cache.
 	entry.func_oid = func_oid;
@@ -983,24 +1064,131 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 	hash_entry =
 		(FuncCacheEntry *)hash_search(func_cache, (void *)&entry.func_oid, HASH_ENTER, &found);
 
-	if (found) {
-		proc = hash_entry->scm_proc;
+	if (found)
+		return hash_entry->scm_proc;
+
+	// Not found, compile and store in cache
+	entry.scm_proc = scruple_compile_func(func_oid);
+	scm_gc_protect_object(entry.scm_proc);
+	memcpy(hash_entry, &entry, sizeof(entry));
+
+	return entry.scm_proc;
+}
+
+SCM prepare_trigger_arguments(TriggerData *trigger_data)
+{
+	Relation rel = trigger_data->tg_relation;
+	TriggerEvent event = trigger_data->tg_event;
+	TupleDesc tuple_desc = CreateTupleDescCopy(trigger_data->tg_trigslot->tts_tupleDescriptor);
+	TupleDesc new_tuple_desc = TRIGGER_FIRED_BY_UPDATE(event) ? CreateTupleDescCopy(trigger_data->tg_newslot->tts_tupleDescriptor) : NULL;
+
+	SCM new = SCM_EOL;
+	SCM old = SCM_EOL;
+	SCM tg_name = scm_from_locale_string(trigger_data->tg_trigger->tgname);
+	SCM tg_when = TRIGGER_FIRED_BEFORE(event) ? before_symbol : after_symbol;
+	SCM tg_level = TRIGGER_FIRED_FOR_ROW(event) ? row_symbol : statement_symbol;
+	SCM tg_op = SCM_EOL;
+	SCM tg_relid = scm_from_int(RelationGetRelid(rel));
+	SCM tg_relname = scm_from_locale_string(RelationGetRelationName(rel));
+	SCM tg_table_name = scm_from_locale_string(RelationGetRelationName(rel));
+	SCM tg_table_schema = scm_from_locale_string(get_namespace_name(RelationGetNamespace(rel)));
+	SCM tg_argv = scm_c_make_vector(trigger_data->tg_trigger->tgnargs, SCM_BOOL_F);
+
+	SCM result;
+
+	for (int i = 0; i < trigger_data->tg_trigger->tgnargs; i++)
+		scm_c_vector_set_x(
+			tg_argv, i, scm_from_locale_string(trigger_data->tg_trigger->tgargs[i]));
+
+	tg_op =
+		TRIGGER_FIRED_BY_INSERT(event)     ? insert_symbol
+		: TRIGGER_FIRED_BY_DELETE(event)   ? delete_symbol
+		: TRIGGER_FIRED_BY_UPDATE(event)   ? update_symbol
+		: TRIGGER_FIRED_BY_TRUNCATE(event) ? truncate_symbol
+		: SCM_BOOL_F;
+
+	if (TRIGGER_FIRED_BY_INSERT(event))
+		new = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+
+	else if (TRIGGER_FIRED_BY_DELETE(event))
+		old = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+
+	else if (TRIGGER_FIRED_BY_UPDATE(event)) {
+		new = heap_tuple_to_scm(trigger_data->tg_newtuple, new_tuple_desc);
+		old = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
 	}
-	else {
-		// Not found, compile and store in cache
-		proc = entry.scm_proc = scruple_compile_func(func_oid);
-		scm_gc_protect_object(entry.scm_proc);
-		memcpy(hash_entry, &entry, sizeof(entry));
+
+	// scm_list_n crashed with an equivalent usage
+	result = scm_cons(tg_argv, SCM_EOL);
+	result = scm_cons(tg_table_schema, result);
+	result = scm_cons(tg_table_name, result);
+	result = scm_cons(tg_relname, result);
+	result = scm_cons(tg_relid, result);
+	result = scm_cons(tg_op, result);
+	result = scm_cons(tg_level, result);
+	result = scm_cons(tg_when, result);
+	result = scm_cons(tg_name, result);
+	result = scm_cons(old, result);
+	result = scm_cons(new, result);
+
+	return result;
+}
+
+SCM heap_tuple_to_scm(HeapTuple heap_tuple, TupleDesc tuple_desc)
+{
+	return datum_heap_tuple_to_scm(HeapTupleGetDatum(heap_tuple), tuple_desc);
+}
+
+HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
+{
+	HeapTuple result;
+
+	Datum *ret_values;
+	bool *ret_is_null;
+
+	SCM attrs = scm_call_1(record_attrs_proc, x);
+
+	ret_values = (Datum *) palloc0(sizeof(Datum) * tuple_desc->natts);
+	ret_is_null = (bool *) palloc0(sizeof(bool) * tuple_desc->natts);
+
+	for (int i = 0; i < tuple_desc->natts; ++i) {
+
+		Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
+		SCM v = scm_c_vector_ref(attrs, i);
+
+		// TODO: handle attr->atttypmod
+		elog(NOTICE, "scm_record_to_datum_heap_tuple: slot %d, attr->atttypid: %d", i, attr->atttypid);
+		if (v == SCM_EOL)
+			ret_is_null[i] = true;
+		else
+			ret_values[i] = scm_to_datum(v, attr->atttypid);
 	}
 
-	// Fetch tuple from pg_proc for the given function Oid
-	proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
+	result = heap_form_tuple(tuple_desc, ret_values, ret_is_null);
 
-	if (!HeapTupleIsValid(proc_tuple))
-		elog(ERROR, "scruple_call: failed to fetch function details.");
+	pfree(ret_values);
+	pfree(ret_is_null);
 
-	// Loop through all arguments, convert them to SCM and add them to
-	// the list.
+	return result;
+}
+
+Datum scruple_call_ordinary(FunctionCallInfo fcinfo)
+{
+	Oid func_oid = fcinfo->flinfo->fn_oid;
+	SCM proc;
+
+	SCM arg_list = SCM_EOL;
+
+	SCM scm_result;
+	HeapTuple proc_tuple;
+	Datum result;
+
+	elog(NOTICE, "scruple_call_ordinary: begin");
+
+	proc = find_or_compile_proc(func_oid);
+
+	elog(NOTICE, "scruple_call_ordinary: preparing arguments");
+
 	for (int i = PG_NARGS()-1; i >= 0; i--) {
 
 		Datum arg = PG_GETARG_DATUM(i);
@@ -1011,29 +1199,21 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 		arg_list = scm_cons(scm_arg, arg_list);
 	}
 
-	/* nonatomic = fcinfo->context && */
-	/* 	IsA(fcinfo->context, CallContext) && */
-	/* 	!castNode(CallContext, fcinfo->context)->atomic; */
-
-	/* if (SPI_connect_ext(nonatomic ? SPI_OPT_NONATOMIC : 0) != SPI_OK_CONNECT) */
-	/* elog(ERROR, "could not connect to SPI manager"); */
-
 	elog(NOTICE, "scruple_call: calling scheme");
 
 	scm_result = scm_apply_0(proc, arg_list);
 
 	elog(NOTICE, "scruple_call: converting result");
 
-	result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
+	proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
-	/* if (SPI_finish() != SPI_OK_FINISH) */
-	/* elog(ERROR, "SPI_finish() failed"); */
+	result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
 
 	ReleaseSysCache(proc_tuple);
 
 	elog(NOTICE, "scruple_call: done");
 
-	PG_RETURN_DATUM(result);
+	return result;
 }
 
 Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo)
@@ -1101,6 +1281,14 @@ bool is_set_returning(HeapTuple proc_tuple)
 
 	proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
 	return proc->proretset;
+}
+
+bool is_trigger_handler(HeapTuple proc_tuple)
+{
+	Form_pg_proc proc;
+
+	proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
+	return proc->prorettype == TRIGGEROID;
 }
 
 Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc)
@@ -1457,39 +1645,44 @@ SCM scruple_compile_func(Oid func_oid)
 		ereport(ERROR, (errmsg("scruple_compile: func with oid %d has null name", func_oid)));
 	}
 
-	argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
+	if (is_trigger_handler(proc_tuple))
+		appendStringInfo(&buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
 
-	if (!is_null) {
-		argnames_array = DatumGetArrayTypeP(argnames_datum);
-		num_args = ARR_DIMS(argnames_array)[0];
+	else {
+		argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
 
-		argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
+		if (!is_null) {
+			argnames_array = DatumGetArrayTypeP(argnames_datum);
+			num_args = ARR_DIMS(argnames_array)[0];
 
-		if (is_null) {
-			argmodes = NULL;
-		}
-		else {
-			argmodes_array = DatumGetArrayTypeP(argmodes_datum);
-			argmodes = (char *) ARR_DATA_PTR(argmodes_array);
-			num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
+			argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
 
-			if (num_modes != num_args) {
-				elog(ERROR, "scruple_compile: num arg modes %d and num args %d differ", num_modes, num_args);
+			if (is_null) {
+				argmodes = NULL;
 			}
-		}
+			else {
+				argmodes_array = DatumGetArrayTypeP(argmodes_datum);
+				argmodes = (char *) ARR_DATA_PTR(argmodes_array);
+				num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
 
-		elog(NOTICE, "scruple_compile: num args: %d", num_args);
-		for (i = 1; i <= num_args; i++) {
-			if (argmodes == NULL || argmodes[i-1] != 'o') {
-				Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
-				if (!is_null) {
-					char *name = TextDatumGetCString(name_datum);
-					elog(NOTICE, "scruple_compile: parameter name: %s", name);
-					// TODO check that the parameter name is a proper scheme identifier
-					appendStringInfo(&buf, " %s", name);
+				if (num_modes != num_args) {
+					elog(ERROR, "scruple_compile: num arg modes %d and num args %d differ", num_modes, num_args);
 				}
-				else {
-					elog(NOTICE, "scruple_compile: %d: name_datum is null", i);
+			}
+
+			elog(NOTICE, "scruple_compile: num args: %d", num_args);
+			for (i = 1; i <= num_args; i++) {
+				if (argmodes == NULL || argmodes[i-1] != 'o') {
+					Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
+					if (!is_null) {
+						char *name = TextDatumGetCString(name_datum);
+						elog(NOTICE, "scruple_compile: parameter name: %s", name);
+						// TODO check that the parameter name is a proper scheme identifier
+						appendStringInfo(&buf, " %s", name);
+					}
+					else {
+						elog(NOTICE, "scruple_compile: %d: name_datum is null", i);
+					}
 				}
 			}
 		}
@@ -1842,11 +2035,18 @@ Datum scm_to_datum_array(SCM elements, Oid element_type_oid)
 
 SCM datum_composite_to_scm(Datum x, Oid ignored)
 {
-	SCM attr_names, attr_names_hash, type_names, values;
-
 	HeapTupleHeader rec = DatumGetHeapTupleHeader(x);
 	Oid type_oid = HeapTupleHeaderGetTypeId(rec);
 	TupleDesc tuple_desc = lookup_rowtype_tupdesc(type_oid, HeapTupleHeaderGetTypMod(rec));
+
+	return datum_heap_tuple_to_scm(x, tuple_desc);
+}
+
+SCM datum_heap_tuple_to_scm(Datum x, TupleDesc tuple_desc)
+{
+	SCM attr_names, attr_names_hash, type_names, values;
+
+	HeapTupleHeader rec = DatumGetHeapTupleHeader(x);
 
 	int natts = tuple_desc->natts;
 	Datum *attrs = palloc(natts * sizeof(Datum));
