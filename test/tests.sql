@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(211);
+select plan(212);
 
 --------------------------------------------------------------------------------
 --
@@ -1154,12 +1154,24 @@ create trigger tr_things_before_insert before insert on things
   for each row execute function f_tr_new();
 
 create function insert_thing(id int, name text) returns int as $$
+declare _result int;
 begin
-  insert into things values (id, name);
-  return id;
+  insert into things values (id, name) returning things.id into _result;
+  return _result;
 end
 $$ language plpgsql;
 
 select is(insert_thing(4, 'more'), 4, 'simple trigger test');
+
+create function f_tr_modify_id() returns trigger as $$
+(record-set! new 'id (+ 1 (record-ref new 'id)))
+new
+$$ language scruple;
+
+drop trigger tr_things_before_insert on things;
+create trigger tr_things_before_insert before insert on things
+  for each row execute function f_tr_modify_id();
+
+select is(insert_thing(5, 'again'), 6, 'modifying before trigger test');
 
 rollback;

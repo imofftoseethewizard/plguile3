@@ -91,6 +91,12 @@
                (attr-name->number r k))))
     (vector-ref (record-attrs r) i)))
 
+(define (record-set! r k x)
+  (let ((i (if (number? k)
+               k
+               (attr-name->number r k))))
+    (vector-set! (record-attrs r) i x)))
+
 (define (table-row t row)
   (list-ref (table-rows t) row))
 

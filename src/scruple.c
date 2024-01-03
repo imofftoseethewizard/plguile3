@@ -992,62 +992,25 @@ Datum scruple_call(PG_FUNCTION_ARGS)
 
 Datum scruple_call_trigger(FunctionCallInfo fcinfo)
 {
-	SCM proc;
-
 	TriggerData	*trigger_data = (TriggerData *)fcinfo->context;
 	TriggerEvent event = trigger_data->tg_event;
 
-	SCM arg_list = SCM_EOL;
-	SCM new, old;
+	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
 
-	SCM scm_result;
-	Datum result;
+	SCM arg_list = prepare_trigger_arguments(trigger_data);
 
-	elog(NOTICE, "scruple_call_trigger: begin");
+	SCM scm_result = scm_apply_0(proc, arg_list);
 
-	proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
+	if (scm_result != SCM_BOOL_F && TRIGGER_FIRED_FOR_ROW(event)) {
 
-	elog(NOTICE, "scruple_call_trigger: preparing arguments");
-
-	arg_list = prepare_trigger_arguments(trigger_data);
-	new = scm_car(arg_list);
-	old = scm_cadr(arg_list);
-
-	elog(NOTICE, "scruple_call_trigger: calling scheme: args: %s", scm_to_string(arg_list));
-
-	scm_result = scm_apply_0(proc, arg_list);
-
-	elog(NOTICE, "scruple_call_trigger: converting result");
-
-	if (scm_result == SCM_BOOL_F || !TRIGGER_FIRED_FOR_ROW(event)) {
-		elog(NOTICE, "scruple_call_trigger: returned false or not row-based");
-
-		result = PointerGetDatum(NULL);
-
-	} else if (scm_result == new) {
-		elog(NOTICE, "scruple_call_trigger: returned new");
-		result = TRIGGER_FIRED_BY_UPDATE(event)
-			? PointerGetDatum(trigger_data->tg_newtuple)
-			: PointerGetDatum(trigger_data->tg_trigtuple);
-
-	} else if (scm_result == old) {
-		elog(NOTICE, "scruple_call_trigger: returned old");
-		result = PointerGetDatum(trigger_data->tg_trigtuple);
-
-	} else {
 		TupleDesc tuple_desc = TRIGGER_FIRED_BY_UPDATE(event)
 			? trigger_data->tg_newslot->tts_tupleDescriptor
 			: trigger_data->tg_trigslot->tts_tupleDescriptor;
 
-		TupleDesc tuple_desc_copy = (TupleDesc)MemoryContextAllocZero(TopTransactionContext, TupleDescSize(tuple_desc));
-		TupleDescCopy(tuple_desc_copy, tuple_desc);
-
-		elog(NOTICE, "scruple_call_trigger: returned modified");
-		result = PointerGetDatum(scm_record_to_heap_tuple(scm_result, tuple_desc_copy));
+		return PointerGetDatum(scm_record_to_heap_tuple(scm_result, tuple_desc));
 	}
-	elog(NOTICE, "scruple_call_trigger: done");
 
-	return result;
+	return PointerGetDatum(NULL);
 }
 
 SCM find_or_compile_proc(Oid func_oid)

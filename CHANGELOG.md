@@ -5,68 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2024-01-03
+
+This version adds another trigger test and simplifies the calling
+code.
+
 ## [0.13.0] - 2024-01-02
 
-This release adds roughed-in support for triggers.
+This version adds roughed-in support for triggers.
 
 ## [0.12.0] - 2023-12-23
 
-This release adds supports for cursors.
+This version adds supports for cursors.
 
 ## [0.11.0] - 2023-12-21
 
-This release adds support for iterative command result handling via
+This version adds support for iterative command result handling via
 `execute-with-receiver`.
 
 ## [0.10.0] - 2023-12-15
 
-This release reworks jsonb support so that jsonb is represented in
+This version reworks jsonb support so that jsonb is represented in
 Scheme such that objects map to alists with string keys, arrays map to
 vectors, `true` maps to `#t`, `false` maps to `#f`, `null` maps to
 `'null`, strings map to strings, and numbers map to numbers.
 
 ## [0.8.0] - 2023-12-12
 
-This release adds support for multirange types and completes support
+This version adds support for multirange types and completes support
 for all Postgres types (up to the rewrite of JSONB handling in
 versions 0.9.x).
 
 ## [0.7.6] - 2023-12-10
 
-This release adds support for range types and stubs some of the support for
+This version adds support for range types and stubs some of the support for
 multirange types. ChatGPT was helpful in writing `find_range_type_oid`.
 
 ## [0.7.5] - 2023-12-09
 
-This release adds support for domain types.
+This version adds support for domain types.
 
 ## [0.7.4] - 2023-12-08
 
-This release completes support for jsonpath.
+This version completes support for jsonpath.
 
 ## [0.7.3] - 2023-11-24
 
-This release includes partial support for jsonpath. Values are loaded
+This version includes partial support for jsonpath. Values are loaded
 into scheme from Postgres. The reverse direction is not done yet.
 
 ## [0.7.2] - 2023-11-20
 
-This release adds support for tsquery translation to and from scheme.
+This version adds support for tsquery translation to and from scheme.
 
 ## [0.7.1] - 2023-11-19
 
-This release adds support for tsvector translation to and from scheme.
+This version adds support for tsvector translation to and from scheme.
 It also includes better error handling for evaluating scheme strings,
 and for calling scheme procedures which accept 1 argument.
 
 ## [0.7.0] - 2023-11-12
 
-This release adds scheme structures to support representation of
+This version adds scheme structures to support representation of
 tsvector and tsquery values.
 
 ## [0.6.0] - 2023-11-12
 
-This release provides basic support for SPI, enabling execution of
+This version provides basic support for SPI, enabling execution of
 parameterized queries and translation of values from Postgres to
 Scheme and back.
 
@@ -173,7 +178,7 @@ wrapped in `unbox-datum` expressions.
 
 ## [0.5.0] - 2023-10-08
 
-This release lays some of the groundwork for integrating with the
+This version lays some of the groundwork for integrating with the
 Server Programming Interface. In particular, instead of eagerly
 converting Datum values to SCM values, they are now wrapped by a
 record type, `boxed-datum`, to be converted as needed within Scheme
@@ -181,7 +186,7 @@ code. This, of course, breaks many tests.
 
 ## [0.4.0] - 2023-09-20
 
-This release includes more tests of the conversion of values between
+This version includes more tests of the conversion of values between
 Postgres and Guile. There are still code paths which will cause a
 crash and connection reset due to an unexpected value type returned by
 the scheme code, but rather than handling these explicitly in C, a
@@ -192,18 +197,18 @@ invalid fields.
 
 ## [0.3.4] - 2023-09-17
 
-This release includes support for `timetz` and `jsonb` types.
+This version includes support for `timetz` and `jsonb` types.
 
 ## [0.3.3] - 2023-09-16
 
-This release includes support for most of the rest of the built-in
+This version includes support for most of the rest of the built-in
 scalar types. Notably `timetz` and `jsonb` are still in progress.
 
 This so far is about 50 hours of work.
 
 ## [0.3.2] - 2023-09-10
 
-This release includes support for `bytea`, `timestamptz`, `timestamp`,
+This version includes support for `bytea`, `timestamptz`, `timestamp`,
 `time`, `date`, and `interval`.
 
 ChatGPT has been generally helpful in roughly sketching solutions,
@@ -216,7 +221,7 @@ This is so far about 35 hours of work.
 
 ## [0.3.1] - 2023-09-09
 
-This release includes support for `char(n)`, `varchar(n)` and `text`
+This version includes support for `char(n)`, `varchar(n)` and `text`
 types.
 
 I spent some time working on the `numeric` type, and created an srfi-9
@@ -230,7 +235,7 @@ This is so far about 26 hours of work.
 
 ## [0.3.0] - 2023-09-09
 
-This release introduces a file to hold auxiliary scheme code used in
+This version introduces a file to hold auxiliary scheme code used in
 type conversions -- `src/scruple.scm` -- and the tooling to build that
 into `scruple.so` as a static string.  It also includes support for
 floating point types `float4` / `real` and `float8` / `double
@@ -246,7 +251,7 @@ This is so far about 24 hours of work.
 
 ## [0.2.0] - 2023-09-09
 
-This release includes a modest test suite that covers the function
+This version includes a modest test suite that covers the function
 call protocol. The increment in the minor version signifies a stable
 point, here regarding only the mechanincs of defining and calling
 Guile functions from Postgres. Although the changelog format doesn't
@@ -258,7 +263,7 @@ This is so far about 22 hours of work.
 
 ## [0.1.2] - 2023-09-05
 
-This release includes docker-based local test tooling. To set up
+This version includes docker-based local test tooling. To set up
 
     test/build-container-image
 
@@ -284,7 +289,7 @@ completely rewritten.  While ChatGPT helped me write the initial
 version, it was needlessly long and did not take advantage of the
 features of `funcapi.h`.
 
-Also included in this release is a partial implementation of some test
+Also included in this version is a partial implementation of some test
 tooling.  It is based on the `pgxn/pgxn-tools` dockerfile, but
 extended to include the build dependencies for guile and pgtap.  Yet
 to be done is the integration with `pg-start` to install pgtap, and
@@ -294,8 +299,8 @@ This is so far about 18 hours of work.
 
 ## [0.1.0] - 2023-09-02
 
-This release includes a minor version update to mark the completion of
-the call handler interaction protocol between Postgres and Guile.
+This version includes a minor version increment to mark the completion
+of the call handler interaction protocol between Postgres and Guile.
 While it does not yet handle all types, it handles everything you can
 do with types in the context of `CREATE FUNCTION`: it properly handles
 all combinations of in, out, in/out, parameters and returns an
