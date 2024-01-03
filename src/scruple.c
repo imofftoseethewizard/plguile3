@@ -219,6 +219,7 @@ static Datum scm_to_datum(SCM scm, Oid type_oid);
 static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo);
 static Datum scruple_call_trigger(FunctionCallInfo fcinfo);
 static Datum scruple_call_ordinary(FunctionCallInfo fcinfo);
+static SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo);
 static SCM find_or_compile_proc(Oid func_oid);
 static SCM prepare_trigger_arguments(TriggerData *trigger_data);
 static SCM scruple_compile_func(Oid func_oid);
@@ -1120,7 +1121,6 @@ HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
 		SCM v = scm_c_vector_ref(attrs, i);
 
 		// TODO: handle attr->atttypmod
-		elog(NOTICE, "scm_record_to_datum_heap_tuple: slot %d, attr->atttypid: %d", i, attr->atttypid);
 		if (v == SCM_EOL)
 			ret_is_null[i] = true;
 		else
@@ -1138,19 +1138,25 @@ HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
 Datum scruple_call_ordinary(FunctionCallInfo fcinfo)
 {
 	Oid func_oid = fcinfo->flinfo->fn_oid;
-	SCM proc;
 
+	SCM proc = find_or_compile_proc(func_oid);
+
+	SCM arg_list = prepare_ordinary_arguments(fcinfo);
+
+	SCM scm_result = scm_apply_0(proc, arg_list);
+
+	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
+
+	Datum result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
+
+	ReleaseSysCache(proc_tuple);
+
+	return result;
+}
+
+SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo)
+{
 	SCM arg_list = SCM_EOL;
-
-	SCM scm_result;
-	HeapTuple proc_tuple;
-	Datum result;
-
-	elog(NOTICE, "scruple_call_ordinary: begin");
-
-	proc = find_or_compile_proc(func_oid);
-
-	elog(NOTICE, "scruple_call_ordinary: preparing arguments");
 
 	for (int i = PG_NARGS()-1; i >= 0; i--) {
 
@@ -1162,21 +1168,7 @@ Datum scruple_call_ordinary(FunctionCallInfo fcinfo)
 		arg_list = scm_cons(scm_arg, arg_list);
 	}
 
-	elog(NOTICE, "scruple_call: calling scheme");
-
-	scm_result = scm_apply_0(proc, arg_list);
-
-	elog(NOTICE, "scruple_call: converting result");
-
-	proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
-
-	result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
-
-	ReleaseSysCache(proc_tuple);
-
-	elog(NOTICE, "scruple_call: done");
-
-	return result;
+	return arg_list;
 }
 
 Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo)
@@ -1186,8 +1178,6 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 	TupleDesc tuple_desc;
 
 	typefunc_class = get_call_result_type(fcinfo, &rettype_oid, &tuple_desc);
-
-	elog(NOTICE, "convert_result_to_datum: return type oid: %d", rettype_oid);
 
 	if (is_set_returning(proc_tuple)) {
 
@@ -1275,7 +1265,6 @@ Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc)
 		SCM v = scm_c_value_ref(result, i);
 
 		// TODO: handle attr->atttypmod
-		elog(NOTICE, "scm_to_datum: slot %d, attr->atttypid: %d", i, attr->atttypid);
 		if (v == SCM_EOL)
 			ret_is_null[i] = true;
 		else
@@ -1585,8 +1574,6 @@ SCM scruple_compile_func(Oid func_oid)
 	StringInfoData buf;
 	SCM scm_proc;
 
-	elog(NOTICE, "scruple_compile: begin");
-
 	proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
 	if (!HeapTupleIsValid(proc_tuple))
@@ -1600,8 +1587,6 @@ SCM scruple_compile_func(Oid func_oid)
 	if (!is_null) {
 		proc_name = NameStr(proc_struct->proname);
 		// TODO check that the function name is a proper scheme identifier
-		elog(NOTICE, "scruple_compile: function name: %s", proc_name);
-
 		appendStringInfo(&buf, "(define (%s", proc_name);
 	}
 	else {
@@ -1633,13 +1618,11 @@ SCM scruple_compile_func(Oid func_oid)
 				}
 			}
 
-			elog(NOTICE, "scruple_compile: num args: %d", num_args);
 			for (i = 1; i <= num_args; i++) {
 				if (argmodes == NULL || argmodes[i-1] != 'o') {
 					Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
 					if (!is_null) {
 						char *name = TextDatumGetCString(name_datum);
-						elog(NOTICE, "scruple_compile: parameter name: %s", name);
 						// TODO check that the parameter name is a proper scheme identifier
 						appendStringInfo(&buf, " %s", name);
 					}
@@ -1660,12 +1643,8 @@ SCM scruple_compile_func(Oid func_oid)
 
 	appendStringInfo(&buf, ")\n%s)", prosrc);
 
-	elog(NOTICE, "scruple_compile: compiling source:\n%s", buf.data);
-
 	eval_scheme(buf.data);
 	scm_proc = scm_variable_ref(scm_c_lookup(proc_name));
-
-	elog(NOTICE, "scruple_compile: complete");
 
 	ReleaseSysCache(proc_tuple);
 
@@ -3446,8 +3425,6 @@ Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
 	StringInfoData buf;
 	JsonPath *jsp;
 
-	elog(NOTICE, "scm_to_datum_jsonpath: expr: %s", scm_to_string(scm_call_1(jsonpath_expr_proc, x)));
-
 	// scm_call_1(validate_jsonpath_proc, x); //TODO
 
 	initStringInfo(&buf);
@@ -3462,8 +3439,6 @@ Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
 
 	if (scm_call_1(jsonpath_is_strict_proc, x) == SCM_BOOL_F)
 		jsp->header |= JSONPATH_LAX;
-
-	elog(NOTICE, "scm_to_datum_jsonpath: done");
 
 	return PointerGetDatum(jsp);
 }
@@ -4121,8 +4096,6 @@ void write_jsp_bool(StringInfo buf, SCM expr)
 
 int32 write_jsp_header(StringInfo buf, JsonPathItemType type)
 {
-	elog(NOTICE, "write_jsp_header: type: %d", type);
-
 	appendStringInfoChar(buf, (char)type);
 
 	/*
@@ -4432,7 +4405,6 @@ SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
 
     tsvector_scm = scm_call_1(make_tsvector_proc, tsvector_scm_list);
 
-    elog(NOTICE, "datum_tsvector_to_scm: %s", scm_to_string(tsvector_scm));
     return tsvector_scm;
 }
 
@@ -4686,8 +4658,6 @@ SCM datum_multirange_to_scm(Datum x, Oid type_oid)
 		SCM scm_range = datum_range_to_scm(RangeTypePGetDatum(ranges[i]), range_type_oid);
 		scm_ranges = scm_cons(scm_range, scm_ranges);
 	}
-
-	elog(NOTICE, "datum_multirange_to_scm: %s", scm_to_string(scm_call_1(make_multirange_proc, scm_ranges)));
 
 	return scm_call_1(make_multirange_proc, scm_ranges);
 }
@@ -4950,8 +4920,6 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 	SCM rows_processed;
 	SCM table;
 
-	elog(NOTICE, "spi_execute: begin");
-
 	if (!scm_is_string(command)) {
 		// TODO
 	}
@@ -4966,8 +4934,6 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 
 	SPI_connect();
 
-	elog(NOTICE, "spi_execute: connected");
-
 	if (args == SCM_EOL)
 		ret = SPI_execute(
 			scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
@@ -4978,8 +4944,6 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 		char *arg_nulls = (char *)palloc0(sizeof(char) * nargs);
 
 		SCM rest = args;
-
-		elog(NOTICE, "spi_execute: preparing arguments");
 
 		for (int i = 0; i < nargs; i++) {
 			SCM arg = scm_car(rest);
@@ -4994,14 +4958,10 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 			rest = scm_cdr(rest);
 		}
 
-		elog(NOTICE, "spi_execute: arguments ready");
-
 		ret = SPI_execute_with_args(
 			scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
 			scm_to_bool(read_only), scm_to_long(count));
 	}
-
-	elog(NOTICE, "spi_execute: processing result");
 
 	if (ret < 0) {
 		// TODO
@@ -5065,8 +5025,6 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 
 	SPI_finish();
 
-	elog(NOTICE, "spi_execute: done");
-
 	return scm_values(scm_list_2(table, rows_processed));
 }
 
@@ -5107,8 +5065,6 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 		// TODO
 	}
 
-	elog(NOTICE, "spi_execute_with_receiver: connected");
-
 	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
 	param_list->numParams = nargs;
 	param_ptr = (ParamExternData *)&param_list->params;
@@ -5118,8 +5074,6 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 		SCM rest = args;
 
 		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
-
-		elog(NOTICE, "spi_execute_with_receiver: preparing arguments");
 
 		for (int i = 0; i < nargs; i++) {
 			SCM arg = scm_car(rest);
@@ -5134,8 +5088,6 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 			rest = scm_cdr(rest);
 			param_ptr++;
 		}
-
-		elog(NOTICE, "spi_execute_with_receiver: arguments ready");
 	}
 
 	options.allow_nonatomic = true;
@@ -5147,8 +5099,6 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 
 	dest.result = dest.tail = scm_cons(SCM_EOL, SCM_EOL);
 
-	elog(NOTICE, "spi_execute_with_receiver: arguments ready");
-
 	SPI_connect();
 
 	plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
@@ -5156,8 +5106,6 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	SPI_execute_plan_extended(plan, &options);
 
 	SPI_finish();
-
-	elog(NOTICE, "spi_execute_with_receiver: done");
 
 	return scm_cdr(dest.result);
 }
@@ -5174,8 +5122,6 @@ bool dest_receive(TupleTableSlot *slot, DestReceiver *self)
 	FormData_pg_attribute *attrs = slot->tts_tupleDescriptor->attrs;
 	SCM result, tail;
 
-	elog(NOTICE, "dest_receive: begin");
-
 	slot_getallattrs(slot);
 
 	for (int i = slot->tts_nvalid-1; i >= 0; i--) {
@@ -5187,11 +5133,7 @@ bool dest_receive(TupleTableSlot *slot, DestReceiver *self)
 		args = scm_cons(is_null ? SCM_EOL : datum_to_scm(datum, type_oid), args);
 	}
 
-	elog(NOTICE, "dest_receive: prepared: %s", scm_to_string(args));
-
 	result = scm_apply_0(proc, args);
-
-	elog(NOTICE, "dest_receive: done");
 
 	if (result == stop_marker)
 		return false;
@@ -5225,8 +5167,6 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	char *name_cstr;
 	SCM cursor;
 
-	elog(NOTICE, "spi_cursor_open");
-
 	if (!scm_is_string(command)) {
 		// TODO
 	}
@@ -5245,8 +5185,6 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 
 		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
 
-		elog(NOTICE, "spi_cursor_open: preparing arguments");
-
 		for (int i = 0; i < nargs; i++) {
 			SCM arg = scm_car(rest);
 			Oid type_oid = infer_scm_type_oid(arg);
@@ -5260,8 +5198,6 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 			rest = scm_cdr(rest);
 			param_ptr++;
 		}
-
-		elog(NOTICE, "spi_cursor_open: arguments ready");
 	}
 
 	options.params        = param_list;
@@ -5281,8 +5217,6 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 
 	SPI_finish();
 
-	elog(NOTICE, "spi_cursor_open: done: %s", portal->name);
-
 	return cursor;
 }
 
@@ -5301,15 +5235,11 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 
 	name = scm_to_locale_string(scm_call_1(cursor_name_proc, cursor));
 
-	elog(NOTICE, "spi_cursor_fetch: finding cursor named %s", name);
-
 	portal = SPI_cursor_find(name);
 
 	if (portal == NULL) {
 		elog(ERROR, "spi_cursor_fetch: no such cursor: %s", name);
 	}
-
-	elog(NOTICE, "spi_cursor_fetch: found");
 
 	SPI_scroll_cursor_fetch(portal, scm_to_fetch_direction(direction), scm_to_fetch_count(count));
 
