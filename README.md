@@ -64,6 +64,9 @@ The 1.1.x versions will adapt Racket's SQL interface.
 The 1.3.x versions will add support for the foreign data wrapper
 interface.
 
+The ?.?.x versions will add support for parse tree representation
+in event trigger handlers.
+
 ## Requirements
 
 - PostgreSQL 14

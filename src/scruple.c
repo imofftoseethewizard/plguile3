@@ -15,6 +15,7 @@
 #include <catalog/pg_proc.h>
 #include <catalog/pg_range.h>
 #include <catalog/pg_type.h>
+#include <commands/event_trigger.h>
 #include <executor/spi.h>
 #include <executor/tuptable.h>
 #include <lib/stringinfo.h>
@@ -217,8 +218,10 @@ static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc 
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static Datum scruple_call_event_trigger(FunctionCallInfo fcinfo);
 static Datum scruple_call_trigger(FunctionCallInfo fcinfo);
 static Datum scruple_call_ordinary(FunctionCallInfo fcinfo);
+static SCM prepare_event_trigger_arguments(EventTriggerData *event_trigger_data);
 static SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo);
 static SCM find_or_compile_proc(Oid func_oid);
 static SCM prepare_trigger_arguments(TriggerData *trigger_data);
@@ -245,6 +248,7 @@ static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
 static bool is_record(SCM x);
 static bool is_table(SCM x);
 static bool is_set_returning(HeapTuple proc_tuple);
+static bool is_event_trigger_handler(HeapTuple proc_tuple);
 static bool is_trigger_handler(HeapTuple proc_tuple);
 static SCM type_desc_expr(Oid type_oid);
 static SCM jsonb_to_scm_expr(Jsonb *jsb);
@@ -986,9 +990,35 @@ void _PG_fini(void)
 
 Datum scruple_call(PG_FUNCTION_ARGS)
 {
-	return CALLED_AS_TRIGGER(fcinfo)
-		? scruple_call_trigger(fcinfo)
-		: scruple_call_ordinary(fcinfo);
+	if (CALLED_AS_TRIGGER(fcinfo))
+		return scruple_call_trigger(fcinfo);
+
+	if (CALLED_AS_EVENT_TRIGGER(fcinfo))
+		return scruple_call_event_trigger(fcinfo);
+
+	return scruple_call_ordinary(fcinfo);
+}
+
+Datum scruple_call_event_trigger(FunctionCallInfo fcinfo)
+{
+	EventTriggerData *event_trigger_data = (EventTriggerData *)fcinfo->context;
+
+	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
+
+	SCM arg_list = prepare_event_trigger_arguments(event_trigger_data);
+
+	scm_apply_0(proc, arg_list);
+
+	return PointerGetDatum(NULL);
+}
+
+SCM prepare_event_trigger_arguments(EventTriggerData *event_trigger_data)
+{
+	SCM event = scm_from_locale_string(event_trigger_data->event);
+	SCM parse_tree = SCM_EOL;
+	SCM tag = scm_from_locale_string(GetCommandTagName(event_trigger_data->tag));
+
+	return scm_list_3(event, parse_tree, tag);
 }
 
 Datum scruple_call_trigger(FunctionCallInfo fcinfo)
@@ -1242,6 +1272,14 @@ bool is_trigger_handler(HeapTuple proc_tuple)
 
 	proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
 	return proc->prorettype == TRIGGEROID;
+}
+
+bool is_event_trigger_handler(HeapTuple proc_tuple)
+{
+	Form_pg_proc proc;
+
+	proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
+	return proc->prorettype == EVENT_TRIGGEROID;
 }
 
 Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc)
@@ -1593,7 +1631,10 @@ SCM scruple_compile_func(Oid func_oid)
 		ereport(ERROR, (errmsg("scruple_compile: func with oid %d has null name", func_oid)));
 	}
 
-	if (is_trigger_handler(proc_tuple))
+	if (is_event_trigger_handler(proc_tuple))
+		appendStringInfo(&buf, " event parse-tree tag");
+
+	else if (is_trigger_handler(proc_tuple))
 		appendStringInfo(&buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
 
 	else {
