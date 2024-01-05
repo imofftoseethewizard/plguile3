@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(212);
+select plan(213);
 
 --------------------------------------------------------------------------------
 --
@@ -1173,5 +1173,17 @@ create trigger tr_things_before_insert before insert on things
   for each row execute function f_tr_modify_id();
 
 select is(insert_thing(5, 'again'), 6, 'modifying before trigger test');
+
+create table ddl_record (event text, tag text);
+
+create function f_e_tr() returns event_trigger as $$
+  (execute "insert into ddl_record values ('$1', '$2')" (list event tag))
+$$ volatile language scruple;
+
+create event trigger et_basic on ddl_command_start execute function f_e_tr();
+
+create table extra_stuff (id int, name text);
+
+select ok((select count(*) from ddl_record) = 1, 'basic event trigger test');
 
 rollback;

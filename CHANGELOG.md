@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2024-01-05
+
+This version adds a test for event triggers and changes the default of
+the `read-only` parameter to `#f` for the SPI integration functions
+available in scheme.
+
 ## [0.13.2] - 2024-01-04
 
 This version adds support for event trigger handlers. Untested.

@@ -25,9 +25,6 @@ of database functions using Guile Scheme.
 
 The scope of the 1.0 release is detailed below.
 
-The 0.13.x versions will add support for triggers and event triggers
-(DDL changes).
-
 The 0.15.x versions will add support for inline calls, i.e. "do"
 statements.
 

@@ -7,14 +7,14 @@
 
 (define* (execute command
                   #:optional (args '())
-                  #:key (count 0) (read-only #t) receiver)
+                  #:key (count 0) (read-only #f) receiver)
   (if receiver
       (%execute-with-receiver receiver command args count read-only)
       (%execute command args count read-only)))
 
 (define* (cursor-open command
                       #:optional (args '())
-                      #:key (hold #f) (name #f) (read-only #t) (scroll '()))
+                      #:key (hold #f) (name #f) (read-only #f) (scroll '()))
   (%cursor-open command args count hold name read-only scroll))
 
 (define* (fetch cursor #:optional direction count)
