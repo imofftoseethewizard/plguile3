@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(213);
+select plan(214);
 
 --------------------------------------------------------------------------------
 --
@@ -1185,5 +1185,13 @@ create event trigger et_basic on ddl_command_start execute function f_e_tr();
 create table extra_stuff (id int, name text);
 
 select ok((select count(*) from ddl_record) = 1, 'basic event trigger test');
+
+create table do_stuff (id int, label text);
+
+do $$
+  (execute "insert into do_stuff values (42, 'Don''t Panic.')")
+$$ language scruple;
+
+select ok((select count(*) from do_stuff) = 1, 'basic inline call test');
 
 rollback;

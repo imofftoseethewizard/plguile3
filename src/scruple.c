@@ -1557,9 +1557,12 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 
 Datum scruple_call_inline(PG_FUNCTION_ARGS)
 {
-	/* Handle an inline Guile statement */
-	elog(NOTICE, "scruple_call_inline: not implemented");
-	PG_RETURN_NULL();
+	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
+	char *source_text = codeblock->source_text;
+
+	eval_scheme(source_text);
+
+	return (Datum)0;
 }
 
 
