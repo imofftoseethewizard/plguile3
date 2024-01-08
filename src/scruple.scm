@@ -1,9 +1,36 @@
-(use-modules
- (srfi srfi-1)  ; fold-right
- (srfi srfi-9)  ; define-record-type
- (srfi srfi-11) ; let-values
- (srfi srfi-19) ; date, time, etc (used in scruple.c)
- (rnrs bytevectors))
+(define-module (scruple base)
+  #:use-module (ice-9 sandbox)
+  #:use-module (srfi srfi-1)  ; fold-right
+  #:use-module (srfi srfi-9)  ; define-record-type
+  #:use-module (srfi srfi-11) ; let-values
+  #:use-module (srfi srfi-19) ; date, time, etc (used in scruple.c)
+  #:export (decimal->string
+            make-decimal
+            record-ref
+            record-types
+            make-record
+            make-table
+            scalar
+            execute
+            %execute
+            make-point
+            make-line
+            make-lseg
+            make-box
+            make-path
+            make-polygon
+            make-inet
+            make-macaddr
+            make-macaddr8
+            make-tsvector
+            make-tslexeme
+            make-tsposition
+            make-tsquery
+            %execute-with-receiver
+            stop-command-execution
+            cursor-open
+            fetch
+            record-set!))
 
 (define* (execute command
                   #:optional (args '())
@@ -142,7 +169,13 @@
      ((zero? scale) (number->string digits))
      (else
       (let-values (((integer-part fractional-part) (floor/ digits (expt 10 scale))))
-        (format #f "~d.~v,'0d" integer-part scale fractional-part))))))
+        (string-join (list (number->string integer-part)
+                           "."
+                           (let ((f (number->string fractional-part)))
+                             (string-join (list (make-string (- scale (string-length f)) #\0)
+                                                f)
+                                          "")))
+                     ""))))))
 
 (define (valid-decimal? d)
   (and (decimal? d)
@@ -510,3 +543,127 @@
   (and (integer? x)
        (>= x -9223372036854775808)
        (<= x 9223372036854775807)))
+
+(define (apply-with-limits proc args time-limit allocation-limit)
+  (let ((thunk (lambda () (apply proc args))))
+    (call-with-time-and-allocation-limits time-limit
+                                          allocation-limit
+                                          thunk)))
+
+(define (untrusted-eval exp time-limit allocation-limit)
+  (eval-in-sandbox exp
+                   #:time-limit time-limit
+                   #:allocation-limit (round (inexact->exact allocation-limit))
+                   #:bindings trusted-bindings))
+
+(define bytevector-bindings
+  '(((guile)
+     string-utf8-length)
+    ((scheme base)
+     bytevector
+     bytevector-copy
+     bytevector-copy!
+     bytevector-append)
+    ((rnrs bytevectors)
+     make-bytevector
+     bytevector?
+     bytevector-length
+     bytevector=?
+     bytevector-fill!
+     bytevector-uint-ref
+     bytevector-sint-ref
+     bytevector-uint-set!
+     bytevector-sint-set!
+     bytevector-u8-ref
+     bytevector-s8-ref
+     bytevector-u16-ref
+     bytevector-s16-ref
+     bytevector-u32-ref
+     bytevector-s32-ref
+     bytevector-u64-ref
+     bytevector-s64-ref
+     bytevector-uint-ref
+     bytevector-sint-ref
+     bytevector-u8-set!
+     bytevector-s8-set!
+     bytevector-u16-set!
+     bytevector-s16-set!
+     bytevector-u32-set!
+     bytevector-s32-set!
+     bytevector-u64-set!
+     bytevector-s64-set!
+     bytevector-u16-native-ref
+     bytevector-s16-native-ref
+     bytevector-u32-native-ref
+     bytevector-s32-native-ref
+     bytevector-u64-native-ref
+     bytevector-s64-native-ref
+     bytevector-u16-native-set!
+     bytevector-s16-native-set!
+     bytevector-u32-native-set!
+     bytevector-s32-native-set!
+     bytevector-u64-native-set!
+     bytevector-s64-native-set!
+     bytevector->u8-list
+     u8-list->bytevector
+     bytevector->uint-list
+     bytevector->sint-list
+     uint-list->bytevector
+     sint-list->bytevector
+     bytevector-ieee-single-ref
+     bytevector-ieee-double-ref
+     bytevector-ieee-single-set!
+     bytevector-ieee-double-set!
+     bytevector-ieee-single-native-ref
+     bytevector-ieee-double-native-ref
+     bytevector-ieee-single-native-set!
+     bytevector-ieee-double-native-set!
+     string->utf8
+     string->utf16
+     string->utf32
+     utf8->string
+     utf16->string
+     utf32->string)))
+
+(define scruple-bindings
+  '(((guile)
+     )
+    ((srfi srfi-19) ;; todo
+     date->string
+     time-monotonic->date
+     make-date
+     make-time
+     time-monotonic)
+    ((scruple base)
+     %execute
+     decimal->string
+     make-decimal
+     record-ref
+     record-types
+     make-record
+     make-table
+     scalar
+     execute
+     make-point
+     make-line
+     make-lseg
+     make-box
+     make-path
+     make-polygon
+     make-inet
+     make-macaddr
+     make-macaddr8
+     make-tsvector
+     make-tslexeme
+     make-tsposition
+     make-tsquery
+     %execute-with-receiver
+     stop-command-execution
+     cursor-open
+     fetch
+     record-set!)))
+
+(define trusted-bindings
+  (append all-pure-and-impure-bindings
+          bytevector-bindings
+          scruple-bindings))

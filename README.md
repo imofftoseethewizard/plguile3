@@ -1,20 +1,18 @@
-# Guile Scheme PostgreSQL Language Extension (Scruple)
+# Scheme PostgreSQL Language Extension (Scruple)
 
 This project joins my favorite database to my favorite programming
 language.
 
 ## Status
 
-Demoable. Scruple supports creating scheme functions which can accept
-and return all built-in Postgres types. It also supports executing
-queries from scheme functions. Current stable(ish) release is 0.16.0,
-though be warned that anything off of the knife edge of the happy path
-is likely to cause a crash.
+Early alpha. Scruple is feature-complete. Current stable(ish) release
+is 0.16.0, though be warned that anything off of the knife edge of the
+happy path is likely to cause a crash.
 
 ## Overview
 
 This project provides a PostgreSQL extension that enables the creation
-of database functions using Guile Scheme.
+of database functions using Guile Scheme 3.0.
 
 ## Features
 

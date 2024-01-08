@@ -2,7 +2,7 @@ create extension if not exists scruple;
 
 begin;
 
-select plan(214);
+select plan(215);
 
 --------------------------------------------------------------------------------
 --
@@ -287,7 +287,7 @@ select throws_ok(
 --
 
 create function f_text_in(a text) returns int as '(string-length a)' language scruple;
-create function f_text_out(a int) returns text as '(format #f "~d" a)' language scruple;
+create function f_text_out(a int) returns text as '(number->string a)' language scruple;
 create function f_text_error(a int) returns text as 'a' language scruple;
 
 select is(f_text_in('Hello, World!'), 13, 'text: text input');
@@ -303,7 +303,7 @@ select throws_ok(
 --
 
 create function f_char_in(a char) returns int as '(string-length a)' language scruple;
-create function f_char_out(a int) returns char as '(format #f "~d" a)' language scruple;
+create function f_char_out(a int) returns char as '(number->string a)' language scruple;
 create function f_char_error(a int) returns char as 'a' language scruple;
 
 select is(f_char_in('Hello, World!'), 13, 'char: char input');
@@ -319,7 +319,7 @@ select throws_ok(
 --
 
 create function f_varchar_in(a varchar) returns int as '(string-length a)' language scruple;
-create function f_varchar_out(a int) returns varchar as '(format #f "~d" a)' language scruple;
+create function f_varchar_out(a int) returns varchar as '(number->string a)' language scruple;
 create function f_varchar_error(a int) returns varchar as 'a' language scruple;
 
 select is(f_varchar_in('Hello, World!'), 13, 'varchar: varchar input');
@@ -1193,5 +1193,7 @@ do $$
 $$ language scruple;
 
 select ok((select count(*) from do_stuff) = 1, 'basic inline call test');
+
+select ok((select current_setting('scruple.call_time_limit')) = '1', 'setting test');
 
 rollback;
