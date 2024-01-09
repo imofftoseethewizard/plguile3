@@ -652,13 +652,13 @@ void _PG_init(void)
 
 	scruple_base_module = scm_c_resolve_module("scruple base");
 
-	define_primitive("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
+	define_primitive("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               4, 0, 0, (SCM (*)()) spi_execute);
 	define_primitive("%execute-with-receiver", 5, 0, 0, (SCM (*)()) spi_execute_with_receiver);
-	define_primitive("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
-	define_primitive("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%fetch",                 3, 0, 0, (SCM (*)()) spi_cursor_fetch);
 	define_primitive("%move",                  3, 0, 0, (SCM (*)()) spi_cursor_move);
+	define_primitive("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
+	define_primitive("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
 
 	/* Define names in our scheme module for the type oids we work with. */
 
