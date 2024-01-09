@@ -4,33 +4,150 @@
   #:use-module (srfi srfi-9)  ; define-record-type
   #:use-module (srfi srfi-11) ; let-values
   #:use-module (srfi srfi-19) ; date, time, etc (used in scruple.c)
-  #:export (decimal->string
-            make-decimal
-            record-ref
-            record-types
-            make-record
-            make-table
-            scalar
-            execute
+  #:export (%cursor-open
             %execute
-            make-point
-            make-line
-            make-lseg
-            make-box
-            make-path
-            make-polygon
-            make-inet
-            make-macaddr
-            make-macaddr8
-            make-tsvector
-            make-tslexeme
-            make-tsposition
-            make-tsquery
             %execute-with-receiver
+            %fetch
+            %move
             stop-command-execution
+            unbox-datum
+
+            execute
             cursor-open
             fetch
-            record-set!))
+
+            make-boxed-datum
+            boxed-datum?
+            boxed-datum-type
+            boxed-datum-value
+
+            make-decimal
+            decimal?
+            decimal-digits
+            decimal-scale
+
+            decimal->inexact
+            decimal->string
+            string->decimal
+            valid-decimal?
+
+            make-record
+            record?
+            record-attr-names
+            record-attr-names-hash
+            record-types
+
+            attr-name->number
+            record-ref
+            record-set!
+
+            make-table
+            table?
+            table-attr-names
+            table-attr-names-hash
+            table-rows
+            table-types
+
+            table-row
+            table-length
+            table-width
+            scalar
+
+            make-point
+            point?
+            point-x
+            point-y
+
+            make-line
+            line?
+            line-a
+            line-b
+            line-c
+
+            make-lseg
+            lseg?
+            lseg-a
+            lseg-b
+
+            make-box
+            box?
+            box-a
+            box-b
+
+            make-path
+            path?
+            path-closed?
+            path-points
+
+            make-polygon
+            polygon?
+            polygon-boundbox
+            polygon-points
+
+            make-circle
+            circle?
+            circle-center
+            circle-radius
+
+            make-inet
+            inet?
+            inet-family
+            inet-bits
+            inet-address
+
+            make-macaddr
+            macaddr?
+            macaddr-data
+
+            make-macaddr8
+            macaddr8?
+            macaddr8-data
+
+            make-bit-string
+            bit-string?
+            bit-string-data
+            bit-string-length
+
+            make-tsposition
+            tsposition?
+            tsposition-index
+            tsposition-weight
+
+            make-tslexeme
+            tslexeme?
+            tslexeme-lexeme
+            tslexeme-positions
+
+            make-tsvector
+            tsvector?
+            tsvector-lexemes
+
+            make-tsquery
+            tsquery?
+            tsquery-ast
+
+            make-jsonpath
+            jsonpath?
+            jsonpath-strict?
+            jsonpath-expr
+
+            make-range
+            range?
+            range-lower
+            range-upper
+            range-flags
+
+            make-multirange
+            multirange?
+            multirange-ranges
+
+            make-jsonb
+            jsonb?
+            jsonb-expr
+
+            make-cursor
+            cursor?
+            cursor-name))
 
 (define* (execute command
                   #:optional (args '())
@@ -625,45 +742,236 @@
      utf16->string
      utf32->string)))
 
+(define srfi-19-bindings
+  '(((srfi srfi-19)
+     time-utc
+     time-tai
+     time-monotonic
+     time-duration
+     time?
+     make-time
+     time-type
+     time-nanosecond
+     time-second
+     set-time-type!
+     set-time-nanosecond!
+     set-time-second!
+     copy-time
+     current-time
+     time-resolution
+     time<=?
+     time<?
+     time=?
+     time>=?
+     time>?
+     time-difference
+     time-difference!
+     add-duration
+     add-duration!
+     subtract-duration
+     subtract-duration!
+     date?
+     make-date
+     date-nanosecond
+     date-second
+     date-minute
+     date-hour
+     date-day
+     date-month
+     date-year
+     date-zone-offset
+     date-year-day
+     date-week-day
+     date-week-number
+     current-date
+     current-julian-day
+     current-modified-julian-day
+     date->julian-day
+     date->modified-julian-day
+     date->time-monotonic
+     date->time-tai
+     date->time-utc
+     julian-day->date
+     julian-day->time-monotonic
+     julian-day->time-tai
+     julian-day->time-utc
+     modified-julian-day->date
+     modified-julian-day->time-monotonic
+     modified-julian-day->time-tai
+     modified-julian-day->time-utc
+     time-monotonic->date
+     time-monotonic->time-tai
+     time-monotonic->time-tai!
+     time-monotonic->time-utc
+     time-monotonic->time-utc!
+     time-tai->date
+     time-tai->julian-day
+     time-tai->modified-julian-day
+     time-tai->time-monotonic
+     time-tai->time-monotonic!
+     time-tai->time-utc
+     time-tai->time-utc!
+     time-utc->date
+     time-utc->julian-day
+     time-utc->modified-julian-day
+     time-utc->time-monotonic
+     time-utc->time-monotonic!
+     time-utc->time-tai
+     time-utc->time-tai!
+     date->string
+     string->date)))
+
 (define scruple-bindings
   '(((guile)
      )
-    ((srfi srfi-19) ;; todo
-     date->string
-     time-monotonic->date
-     make-date
-     make-time
-     time-monotonic)
     ((scruple base)
+     %cursor-open
      %execute
-     decimal->string
-     make-decimal
-     record-ref
-     record-types
-     make-record
-     make-table
-     scalar
-     execute
-     make-point
-     make-line
-     make-lseg
-     make-box
-     make-path
-     make-polygon
-     make-inet
-     make-macaddr
-     make-macaddr8
-     make-tsvector
-     make-tslexeme
-     make-tsposition
-     make-tsquery
      %execute-with-receiver
+     %fetch
+     %move
      stop-command-execution
+     unbox-datum
+
+     execute
      cursor-open
      fetch
-     record-set!)))
+
+     make-boxed-datum
+     boxed-datum?
+     boxed-datum-type
+     boxed-datum-value
+
+     make-decimal
+     decimal?
+     decimal-digits
+     decimal-scale
+
+     decimal->inexact
+     decimal->string
+     string->decimal
+     valid-decimal?
+
+     make-record
+     record?
+     record-attr-names
+     record-attr-names-hash
+     record-types
+
+     attr-name->number
+     record-ref
+     record-set!
+
+     make-table
+     table?
+     table-attr-names
+     table-attr-names-hash
+     table-rows
+     table-types
+
+     table-row
+     table-length
+     table-width
+     scalar
+
+     make-point
+     point?
+     point-x
+     point-y
+
+     make-line
+     line?
+     line-a
+     line-b
+     line-c
+
+     make-lseg
+     lseg?
+     lseg-a
+     lseg-b
+
+     make-box
+     box?
+     box-a
+     box-b
+
+     make-path
+     path?
+     path-closed?
+     path-points
+
+     make-polygon
+     polygon?
+     polygon-boundbox
+     polygon-points
+
+     make-circle
+     circle?
+     circle-center
+     circle-radius
+
+     make-inet
+     inet?
+     inet-family
+     inet-bits
+     inet-address
+
+     make-macaddr
+     macaddr?
+     macaddr-data
+
+     make-macaddr8
+     macaddr8?
+     macaddr8-data
+
+     make-bit-string
+     bit-string?
+     bit-string-data
+     bit-string-length
+
+     make-tsposition
+     tsposition?
+     tsposition-index
+     tsposition-weight
+
+     make-tslexeme
+     tslexeme?
+     tslexeme-lexeme
+     tslexeme-positions
+
+     make-tsvector
+     tsvector?
+     tsvector-lexemes
+
+     make-tsquery
+     tsquery?
+     tsquery-ast
+
+     make-jsonpath
+     jsonpath?
+     jsonpath-strict?
+     jsonpath-expr
+
+     make-range
+     range?
+     range-lower
+     range-upper
+     range-flags
+
+     make-multirange
+     multirange?
+     multirange-ranges
+
+     make-jsonb
+     jsonb?
+     jsonb-expr
+
+     make-cursor
+     cursor?
+     cursor-name)))
 
 (define trusted-bindings
   (append all-pure-and-impure-bindings
           bytevector-bindings
+          srfi-19-bindings
           scruple-bindings))
