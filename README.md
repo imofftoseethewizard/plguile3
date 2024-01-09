@@ -23,9 +23,6 @@ of database functions using Guile Scheme 3.0.
 
 The scope of the 1.0 release is detailed below.
 
-The 0.17.x versions will provide function isolation, and initialization
-and configuration settings.
-
 The 0.19.x versions will normalize error messages and properly trap
 and report errors from Guile. Testing will be expanded from just the
 happy path to include corner, edge, and adversarial cases.

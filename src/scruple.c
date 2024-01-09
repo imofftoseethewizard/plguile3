@@ -5249,7 +5249,7 @@ bool dest_receive(TupleTableSlot *slot, DestReceiver *self)
 		args = scm_cons(is_null ? SCM_EOL : datum_to_scm(datum, type_oid), args);
 	}
 
-	result = scm_apply_0(proc, args);
+	result = apply_with_limits(proc, args);
 
 	if (result == stop_marker)
 		return false;
