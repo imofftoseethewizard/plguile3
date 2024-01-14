@@ -149,6 +149,34 @@
             cursor?
             cursor-name))
 
+(define (flush-function-cache h ids)
+  (let ((new (make-hash-table)))
+    (hash-for-each
+     (if ids
+         (lambda (key value)
+           (hash-set! new key (if (member key ids)
+                                  (cons (car value) #f)
+                                  value)))
+         (lambda (key value)
+            (hash-set! new key (cons (car value) #f))))
+     h)
+    new))
+
+(define hash/role-id->func-oids (make-hash-table))
+
+(define (role->func-oids role-id)
+  (hash-ref hash/role-id->func-oids role-id '()))
+
+(define (role-add-func-oid! role-id func-oid)
+  (let ((func-oids (role->func-oids role-id)))
+    (unless (member func-oid func-oids)
+      (hash-set! hash/role-id->func-oids role-id (cons func-oid func-oids)))))
+
+(define (role-remove-func-oid! role-id func-oid)
+  (let ((func-oids (role->func-oids role-id)))
+    (when (member func-oid func-oids)
+      (hash-set! hash/role-id->func-oids role-id (delete func-oid func-oids)))))
+
 (define* (execute command
                   #:optional (args '())
                   #:key (count 0) (read-only #f) receiver)

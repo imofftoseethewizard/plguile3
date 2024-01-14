@@ -20,6 +20,7 @@
 #include <executor/tuptable.h>
 #include <lib/stringinfo.h>
 #include <mb/pg_wchar.h>
+#include <parser/parse_func.h>
 #include <tcop/dest.h>
 #include <tsearch/ts_type.h>
 #include <utils/array.h>
@@ -61,18 +62,15 @@ PG_MODULE_MAGIC;
 PGDLLEXPORT Datum scruple_call(PG_FUNCTION_ARGS);
 PGDLLEXPORT Datum scruple_call_inline(PG_FUNCTION_ARGS);
 PGDLLEXPORT Datum scruple_compile(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum scruple_flush_func_cache_for_role(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(scruple_call);
 PG_FUNCTION_INFO_V1(scruple_call_inline);
 PG_FUNCTION_INFO_V1(scruple_compile);
+PG_FUNCTION_INFO_V1(scruple_flush_func_cache_for_role);
 
 void _PG_init(void);
 void _PG_fini(void);
-
-typedef struct {
-	Oid func_oid;
-	SCM scm_proc;
-} FuncCacheEntry;
 
 typedef struct {
 	Oid subtype_oid;
@@ -209,6 +207,7 @@ static bool is_time(SCM x);
 static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
 
+static Oid find_func_oid_by_name(const char *name);
 static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
 static SCM untrusted_eval(SCM expr);
 static SCM scm_error_handler(void *data, SCM key, SCM args);
@@ -216,6 +215,8 @@ static SCM eval_string_executor(void *data);
 static SCM eval_scheme_string(const char *cstr, SCM module);
 static SCM call_scheme_1_inner(void *data);
 static SCM call_scheme_1(SCM func, SCM arg);
+static SCM call_scheme_2_inner(void *data);
+static SCM call_scheme_2(SCM func, SCM arg1, SCM arg2);
 static void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid multirange_type_oid);
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
@@ -228,9 +229,10 @@ static Datum scruple_call_trigger(FunctionCallInfo fcinfo);
 static Datum scruple_call_ordinary(FunctionCallInfo fcinfo);
 static SCM prepare_event_trigger_arguments(EventTriggerData *event_trigger_data);
 static SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo);
+static Oid get_func_owner(Oid func_oid);
 static SCM find_or_compile_proc(Oid func_oid);
 static SCM prepare_trigger_arguments(TriggerData *trigger_data);
-static SCM scruple_compile_func(Oid func_oid);
+static SCM scruple_compile_func(Oid func_oid, Oid owner_oid);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
@@ -347,6 +349,7 @@ static SCM decimal_scale_proc;
 static SCM decimal_to_inexact_proc;
 static SCM decimal_to_string_proc;
 static SCM untrusted_eval_proc;
+static SCM flush_function_cache_proc;
 static SCM inet_address_proc;
 static SCM inet_bits_proc;
 static SCM inet_family_proc;
@@ -429,6 +432,9 @@ static SCM record_attr_names_hash_proc;
 static SCM record_attr_names_proc;
 static SCM record_attrs_proc;
 static SCM record_types_proc;
+static SCM role_add_func_oid_proc;
+static SCM role_remove_func_oid_proc;
+static SCM role_to_func_oids_proc;
 static SCM scruple_bindings;
 static SCM string_to_decimal_proc;
 static SCM table_attr_names_hash_proc;
@@ -529,7 +535,7 @@ static SCM jsp_op_types_hash;
 
 static SCM stop_marker;
 
-static HTAB *func_cache;
+static SCM func_cache;
 static HTAB *range_cache;
 static HTAB *type_cache;
 
@@ -545,19 +551,14 @@ static const char *call_allocation_limit_str = "scruple.call_allocation_limit";
 
 static SCM scruple_base_module = SCM_UNDEFINED;
 
+static Oid get_role_forms_func_oid = InvalidOid;
+
 void _PG_init(void)
 {
-	HASHCTL func_info;
 	HASHCTL range_info;
 	HASHCTL type_info;
 
 	// TODO: check that `SHOW server_encoding` is 'UTF8'
-
-	/* Initialize hash tables */
-	memset(&func_info, 0, sizeof(func_info));
-	func_info.keysize = sizeof(Oid);
-	func_info.entrysize = sizeof(FuncCacheEntry);
-	func_cache = hash_create("Scruple Function Cache", 128, &func_info, HASH_ELEM | HASH_BLOBS);
 
 	memset(&range_info, 0, sizeof(range_info));
 	range_info.keysize = sizeof(Oid);
@@ -650,6 +651,9 @@ void _PG_init(void)
 	eval_scheme_string((const char *)src_scruple_scm, scm_current_module());
 	elog(NOTICE, "done");
 
+	func_cache = scm_c_make_hash_table(16);
+	scm_gc_protect_object(func_cache);
+
 	scruple_base_module = scm_c_resolve_module("scruple base");
 
 	define_primitive("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
@@ -729,6 +733,7 @@ void _PG_init(void)
 	decimal_digits_proc         = eval_scheme_string("decimal-digits", scruple_base_module);
 	decimal_scale_proc          = eval_scheme_string("decimal-scale", scruple_base_module);
 	untrusted_eval_proc         = eval_scheme_string("untrusted-eval", scruple_base_module);
+	flush_function_cache_proc   = eval_scheme_string("flush-function-cache", scruple_base_module);
 	inet_address_proc           = eval_scheme_string("inet-address", scruple_base_module);
 	inet_bits_proc              = eval_scheme_string("inet-bits", scruple_base_module);
 	inet_family_proc            = eval_scheme_string("inet-family", scruple_base_module);
@@ -808,6 +813,9 @@ void _PG_init(void)
 	record_attr_names_proc      = eval_scheme_string("record-attr-names", scruple_base_module);
 	record_attrs_proc           = eval_scheme_string("record-attrs", scruple_base_module);
 	record_types_proc           = eval_scheme_string("record-types", scruple_base_module);
+	role_add_func_oid_proc      = eval_scheme_string("role-add-func-oid!", scruple_base_module);
+	role_remove_func_oid_proc   = eval_scheme_string("role-remove-func-oid!", scruple_base_module);
+	role_to_func_oids_proc      = eval_scheme_string("role->func-oids", scruple_base_module);
 	scruple_bindings            = eval_scheme_string("all-pure-and-impure-bindings", scruple_base_module);
 	table_attr_names_hash_proc  = eval_scheme_string("table-attr-names-hash", scruple_base_module);
 	table_attr_names_proc       = eval_scheme_string("table-attr-names", scruple_base_module);
@@ -961,6 +969,14 @@ void _PG_init(void)
 			1e20, PGC_USERSET, 0, NULL, NULL, NULL);
 }
 
+Oid find_func_oid_by_name(const char *name) {
+    List *funcname_list = list_make1(makeString(pstrdup(name)));
+    Oid func_oid = LookupFuncName(funcname_list, -1, NULL, false);
+    list_free_deep(funcname_list);
+
+    return func_oid;
+}
+
 void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
 {
 	scm_c_module_define(scruple_base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
@@ -1014,24 +1030,44 @@ SCM call_scheme_1(SCM func, SCM arg1)
         NULL);
 }
 
+SCM call_scheme_2_inner(void *data)
+{
+    SCM *args = (SCM *)data;
+    return scm_call_2(args[0], args[1], args[2]);
+}
+
+SCM call_scheme_2(SCM func, SCM arg1, SCM arg2)
+{
+	SCM args[3] = {func, arg1, arg2};
+
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        call_scheme_2_inner,
+        args,
+        scm_error_handler,
+        NULL);
+}
+
 void _PG_fini(void)
 {
-	/* Clean up Guile interpreter */
-	HASH_SEQ_STATUS status;
-	FuncCacheEntry *entry;
-
-	hash_seq_init(&status, func_cache);
-
-	while ((entry = (FuncCacheEntry *) hash_seq_search(&status)) != NULL) {
-		scm_gc_unprotect_object(entry->scm_proc);
-	}
-
-	hash_seq_term(&status);
+	scm_gc_unprotect_object(func_cache);
 
 	/* Clean up hash tables */
-	hash_destroy(func_cache);
 	hash_destroy(range_cache);
 	hash_destroy(type_cache);
+}
+
+Datum scruple_flush_func_cache_for_role(PG_FUNCTION_ARGS)
+{
+	Oid role_oid = DatumGetObjectId(PG_GETARG_DATUM(0));
+	SCM func_oids = SCM_BOOL_F;
+
+	if (role_oid)
+		func_oids = scm_call_1(role_to_func_oids_proc, scm_from_int(role_oid));
+
+	func_cache = call_scheme_2(flush_function_cache_proc, func_cache, func_oids);
+
+	return (Datum)1;
 }
 
 Datum scruple_call(PG_FUNCTION_ARGS)
@@ -1125,27 +1161,34 @@ Datum scruple_call_trigger(FunctionCallInfo fcinfo)
 
 SCM find_or_compile_proc(Oid func_oid)
 {
-	FuncCacheEntry entry;
+	Oid owner_oid = get_func_owner(func_oid);
+	SCM func = scm_from_int(func_oid);
+	SCM owner = scm_from_int(owner_oid);
+	SCM entry = scm_hash_ref(func_cache, func, SCM_BOOL_F);
+	SCM proc;
 
-	bool found;
-	FuncCacheEntry *hash_entry;
+	if (entry != SCM_BOOL_F) {
 
-	// Find compiled code for function in the cache.
-	entry.func_oid = func_oid;
-	entry.scm_proc = SCM_EOL;
+		if (scm_car(entry) != owner) {
 
-	hash_entry =
-		(FuncCacheEntry *)hash_search(func_cache, (void *)&entry.func_oid, HASH_ENTER, &found);
+			scm_call_2(role_remove_func_oid_proc, scm_car(entry), func);
+			scm_call_2(role_add_func_oid_proc, owner, func);
 
-	if (found)
-		return hash_entry->scm_proc;
+			scm_set_car_x(entry, owner);
+			scm_set_cdr_x(entry, scruple_compile_func(func_oid, owner_oid));
+		}
+
+		if (scm_cdr(entry) != SCM_BOOL_F)
+			return scm_cdr(entry);
+	}
 
 	// Not found, compile and store in cache
-	entry.scm_proc = scruple_compile_func(func_oid);
-	scm_gc_protect_object(entry.scm_proc);
-	memcpy(hash_entry, &entry, sizeof(entry));
+	scm_call_2(role_add_func_oid_proc, owner, func);
 
-	return entry.scm_proc;
+	proc = scruple_compile_func(func_oid, owner_oid);
+	scm_hash_set_x(func_cache, func, scm_cons(owner, proc));
+
+	return proc;
 }
 
 SCM prepare_trigger_arguments(TriggerData *trigger_data)
@@ -1643,37 +1686,49 @@ Datum scruple_call_inline(PG_FUNCTION_ARGS)
 	return (Datum)0;
 }
 
+Oid get_func_owner(Oid func_oid)
+{
+	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
+	Form_pg_proc proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
+	Oid owner_oid = proc->proowner;
+
+	ReleaseSysCache(proc_tuple);
+
+	return owner_oid;
+}
 
 Datum scruple_compile(PG_FUNCTION_ARGS)
 {
 	Oid func_oid = PG_GETARG_OID(0);
+	Oid owner_oid = get_func_owner(func_oid);
 
-	FuncCacheEntry entry;
-	bool found;
-	FuncCacheEntry *hash_entry;
+	SCM func = scm_from_int(func_oid);
+	SCM owner = scm_from_int(owner_oid);
 
-	entry.func_oid = func_oid;
-	entry.scm_proc = scruple_compile_func(func_oid);
-	scm_gc_protect_object(entry.scm_proc);
+	SCM entry = scm_hash_ref(func_cache, func, SCM_BOOL_F);
+	SCM proc = scruple_compile_func(func_oid, owner_oid);
 
-	hash_entry =
-		(FuncCacheEntry *)hash_search(func_cache, (void *)&entry.func_oid, HASH_ENTER, &found);
+	get_role_forms_func_oid = find_func_oid_by_name("scruple_get_role_forms");
 
-	if (found) {
-		// Unprotect the previously compiled function and replace the
-		// existing compiled function with the new one.
-		scm_gc_unprotect_object(hash_entry->scm_proc);
-		hash_entry->scm_proc = entry.scm_proc;
+	if (entry != SCM_BOOL_F) {
+
+		if (scm_car(entry) != scm_from_int(owner_oid)) {
+			call_scheme_2(role_remove_func_oid_proc, scm_car(entry), func);
+			call_scheme_2(role_add_func_oid_proc, owner, func);
+		}
+
+		scm_set_car_x(entry, owner);
+		scm_set_cdr_x(entry, proc);
 	}
 	else {
-		// Save the compiled function in the hash table.
-		memcpy(hash_entry, &entry, sizeof(entry));
+		call_scheme_2(role_add_func_oid_proc, owner, func);
+		scm_hash_set_x(func_cache, func, scm_cons(owner, proc));
 	}
 
 	return (Datum) 1;
 }
 
-SCM scruple_compile_func(Oid func_oid)
+SCM scruple_compile_func(Oid func_oid, Oid owner_oid)
 {
 	HeapTuple proc_tuple;
 	Datum prosrc_datum;
