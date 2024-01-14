@@ -11,30 +11,30 @@ select lives_ok('create extension scruple', 'reinstall');
 -- Function call protocol tests
 --
 
-create function f_void() returns void as ' ''() ' language scruple;
+create function f_void() returns void as ' ''() ' language guile3;
 select lives_ok('select f_void()', 'protocol: void return does not raise');
 
-create function f_const() returns int as '1' language scruple;
+create function f_const() returns int as '1' language guile3;
 select is(f_const(), 1, 'protocol: no arguments scalar constant result');
 
-create function f_inc(a int) returns int as '(+ a 1)' language scruple;
+create function f_inc(a int) returns int as '(+ a 1)' language guile3;
 select is(f_inc(2), 3, 'protocol: increment int');
 
-create function f_inc_out(a int, b out int) returns int as '(+ a 1)' language scruple;
+create function f_inc_out(a int, b out int) returns int as '(+ a 1)' language guile3;
 select is(f_inc_out(4), 5, 'protocol: increment int out 1');
 
-create function f_sum(a int, b int) returns int as '(+ a b)' language scruple;
+create function f_sum(a int, b int) returns int as '(+ a b)' language guile3;
 select is(f_sum(6, 7), 13, 'protocol: sum of arguments');
 
-create function f_sum_default(a int, b int = 8) returns int as '(+ a b)' language scruple;
+create function f_sum_default(a int, b int = 8) returns int as '(+ a b)' language guile3;
 select is(f_sum_default(9), 17, 'protocol: sum of arguments using default');
 
 create function f_two_out(a int, b out int, c out int) returns record as
-'(values (+ a 1) (* a 2))' language scruple;
+'(values (+ a 1) (* a 2))' language guile3;
 select is(f_two_out(10), (11, 20), 'protocol: two outputs');
 
 create function f_double_in_out(a inout int, b inout int) returns record as
-'(values (- a b) (* a b))' language scruple;
+'(values (- a b) (* a b))' language guile3;
 select is(f_double_in_out(12, 13), (-1, 156), 'protocol: inout params');
 
 
@@ -44,10 +44,10 @@ select is(f_double_in_out(12, 13), (-1, 156), 'protocol: inout params');
 --
 
 create function f_small_sum(a smallint, b smallint) returns smallint as '(+ a b)'
-language scruple;
+language guile3;
 
 create function f_x_int2_string() returns smallint as '"not an integer"'
-language scruple;
+language guile3;
 
 select is(f_small_sum(1::smallint, 2::smallint), 3::smallint, 'int2: simple sum');
 select throws_ok(
@@ -71,7 +71,7 @@ select throws_ok(
 --
 
 create function f_x_int4_string() returns int4 as '"not an integer"'
-language scruple;
+language guile3;
 
 select throws_ok(
   'select f_sum(2147483647, 1)',
@@ -94,10 +94,10 @@ select throws_ok(
 --
 
 create function f_big_sum(a bigint, b bigint) returns bigint as '(+ a b)'
-language scruple;
+language guile3;
 
 create function f_x_int8_string() returns int8 as '"not an integer"'
-language scruple;
+language guile3;
 
 select is(f_big_sum(1::bigint, 2::bigint), 3::bigint, 'int8: simple sum');
 select throws_ok(
@@ -120,14 +120,14 @@ select throws_ok(
 -- Type real/float4
 --
 
-create function f_real(a real, b real) returns real as '(* a b)' language scruple;
-create function f_int_as_real() returns real as '1' language scruple;
-create function f_rational_as_real() returns real as '1/2' language scruple;
-create function f_x_text_as_real() returns real as '"not a number"' language scruple;
-create function f_decimal_as_real() returns real as '(make-decimal 31415 4)' language scruple;
-create function f_decimal_inf_as_real() returns real as '(make-decimal "Infinity" 0)' language scruple;
-create function f_decimal_neg_inf_as_real() returns real as '(make-decimal "-Infinity" 0)' language scruple;
-create function f_decimal_nan_as_real() returns real as '(make-decimal "NaN" 0)' language scruple;
+create function f_real(a real, b real) returns real as '(* a b)' language guile3;
+create function f_int_as_real() returns real as '1' language guile3;
+create function f_rational_as_real() returns real as '1/2' language guile3;
+create function f_x_text_as_real() returns real as '"not a number"' language guile3;
+create function f_decimal_as_real() returns real as '(make-decimal 31415 4)' language guile3;
+create function f_decimal_inf_as_real() returns real as '(make-decimal "Infinity" 0)' language guile3;
+create function f_decimal_neg_inf_as_real() returns real as '(make-decimal "-Infinity" 0)' language guile3;
+create function f_decimal_nan_as_real() returns real as '(make-decimal "NaN" 0)' language guile3;
 
 select is(f_real(2.0::real, 1.5::real), 3.0::real, 'float4: simple sum');
 select is(f_real(3.402823e38::real, 2.0::real), 'inf'::real, 'float4: inf overflow');
@@ -155,14 +155,14 @@ select is(f_decimal_nan_as_real(), 'nan'::real, 'float4: auto convert from decim
 --
 
 create function f_dp(a double precision, b double precision) returns double precision as
-'(* a b)' language scruple;
-create function f_int_as_dp() returns double precision as '1' language scruple;
-create function f_rational_as_dp() returns double precision as '1/2' language scruple;
-create function f_x_text_as_dp() returns double precision as '"not a number"' language scruple;
-create function f_decimal_as_dp() returns double precision as '(make-decimal 31415 4)' language scruple;
-create function f_decimal_inf_as_dp() returns double precision as '(make-decimal "Infinity" 0)' language scruple;
-create function f_decimal_neg_inf_as_dp() returns double precision as '(make-decimal "-Infinity" 0)' language scruple;
-create function f_decimal_nan_as_dp() returns double precision as '(make-decimal "NaN" 0)' language scruple;
+'(* a b)' language guile3;
+create function f_int_as_dp() returns double precision as '1' language guile3;
+create function f_rational_as_dp() returns double precision as '1/2' language guile3;
+create function f_x_text_as_dp() returns double precision as '"not a number"' language guile3;
+create function f_decimal_as_dp() returns double precision as '(make-decimal 31415 4)' language guile3;
+create function f_decimal_inf_as_dp() returns double precision as '(make-decimal "Infinity" 0)' language guile3;
+create function f_decimal_neg_inf_as_dp() returns double precision as '(make-decimal "-Infinity" 0)' language guile3;
+create function f_decimal_nan_as_dp() returns double precision as '(make-decimal "NaN" 0)' language guile3;
 
 select is(f_dp(2.0, 1.5), 3.0::double precision, 'float8: simple sum');
 select is(f_dp(1.7976931348623157e308, 2.0), 'inf', 'float8: inf overflow');
@@ -189,19 +189,19 @@ select is(f_decimal_nan_as_dp(), 'nan'::double precision, 'float8: auto convert 
 -- Type decimal/numeric
 --
 
-create function f_numeric_id(a numeric) returns numeric as 'a' language scruple;
-create function f_int_as_numeric() returns numeric as '5' language scruple;
-create function f_nan_as_numeric() returns numeric as '+nan.0' language scruple;
-create function f_inf_as_numeric() returns numeric as '+inf.0' language scruple;
-create function f_neg_inf_as_numeric() returns numeric as '-inf.0' language scruple;
-create function f_rational_as_numeric() returns numeric as '1/2' language scruple;
-create function f_large_real_as_numeric() returns numeric as '6.02e23' language scruple;
-create function f_x_string_as_numeric() returns numeric as '"not a number"' language scruple;
-create function f_x_bad_decimal_1() returns numeric as '(make-decimal "a" 0)' language scruple;
-create function f_x_bad_decimal_2() returns numeric as '(make-decimal 0.5 0)' language scruple;
-create function f_x_bad_decimal_3() returns numeric as '(make-decimal 5 -1)' language scruple;
-create function f_x_bad_decimal_4() returns numeric as '(make-decimal 5 0.2)' language scruple;
-create function f_x_bad_decimal_5() returns numeric as '(make-decimal 5 "2")' language scruple;
+create function f_numeric_id(a numeric) returns numeric as 'a' language guile3;
+create function f_int_as_numeric() returns numeric as '5' language guile3;
+create function f_nan_as_numeric() returns numeric as '+nan.0' language guile3;
+create function f_inf_as_numeric() returns numeric as '+inf.0' language guile3;
+create function f_neg_inf_as_numeric() returns numeric as '-inf.0' language guile3;
+create function f_rational_as_numeric() returns numeric as '1/2' language guile3;
+create function f_large_real_as_numeric() returns numeric as '6.02e23' language guile3;
+create function f_x_string_as_numeric() returns numeric as '"not a number"' language guile3;
+create function f_x_bad_decimal_1() returns numeric as '(make-decimal "a" 0)' language guile3;
+create function f_x_bad_decimal_2() returns numeric as '(make-decimal 0.5 0)' language guile3;
+create function f_x_bad_decimal_3() returns numeric as '(make-decimal 5 -1)' language guile3;
+create function f_x_bad_decimal_4() returns numeric as '(make-decimal 5 0.2)' language guile3;
+create function f_x_bad_decimal_5() returns numeric as '(make-decimal 5 "2")' language guile3;
 
 select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- positive finite')
 from (select '3.1415'::numeric(5,3)) t(v);
@@ -260,10 +260,10 @@ select throws_ok(
 -- Type money
 --
 
-create function f_money_id(a money) returns money as 'a' language scruple;
-create function f_x_money_inexact() returns money as '1.5' language scruple;
-create function f_x_money_rational() returns money as '13/5' language scruple;
-create function f_x_money_string() returns money as '"$1.25"' language scruple;
+create function f_money_id(a money) returns money as 'a' language guile3;
+create function f_x_money_inexact() returns money as '1.5' language guile3;
+create function f_x_money_rational() returns money as '13/5' language guile3;
+create function f_x_money_string() returns money as '"$1.25"' language guile3;
 
 select is(f_money_id(t.v), t.v, 'money: identity mapping test')
 from (select '2.28'::money) t(v);
@@ -288,9 +288,9 @@ select throws_ok(
 -- Type text
 --
 
-create function f_text_in(a text) returns int as '(string-length a)' language scruple;
-create function f_text_out(a int) returns text as '(number->string a)' language scruple;
-create function f_text_error(a int) returns text as 'a' language scruple;
+create function f_text_in(a text) returns int as '(string-length a)' language guile3;
+create function f_text_out(a int) returns text as '(number->string a)' language guile3;
+create function f_text_error(a int) returns text as 'a' language guile3;
 
 select is(f_text_in('Hello, World!'), 13, 'text: text input');
 select is(f_text_out(13), '13', 'text: text output');
@@ -304,9 +304,9 @@ select throws_ok(
 -- Type char
 --
 
-create function f_char_in(a char) returns int as '(string-length a)' language scruple;
-create function f_char_out(a int) returns char as '(number->string a)' language scruple;
-create function f_char_error(a int) returns char as 'a' language scruple;
+create function f_char_in(a char) returns int as '(string-length a)' language guile3;
+create function f_char_out(a int) returns char as '(number->string a)' language guile3;
+create function f_char_error(a int) returns char as 'a' language guile3;
 
 select is(f_char_in('Hello, World!'), 13, 'char: char input');
 select is(f_char_out(13), '13', 'char: char output');
@@ -320,9 +320,9 @@ select throws_ok(
 -- Type varchar
 --
 
-create function f_varchar_in(a varchar) returns int as '(string-length a)' language scruple;
-create function f_varchar_out(a int) returns varchar as '(number->string a)' language scruple;
-create function f_varchar_error(a int) returns varchar as 'a' language scruple;
+create function f_varchar_in(a varchar) returns int as '(string-length a)' language guile3;
+create function f_varchar_out(a int) returns varchar as '(number->string a)' language guile3;
+create function f_varchar_error(a int) returns varchar as 'a' language guile3;
 
 select is(f_varchar_in('Hello, World!'), 13, 'varchar: varchar input');
 select is(f_varchar_out(13), '13', 'varchar: varchar output');
@@ -336,9 +336,9 @@ select throws_ok(
 -- Type bytea
 --
 
-create function f_bytea_in(a bytea) returns int as '(bytevector-length a)' language scruple;
-create function f_bytea_out(a int) returns bytea as '(make-bytevector a 42)' language scruple;
-create function f_bytea_error(a int) returns bytea as 'a' language scruple;
+create function f_bytea_in(a bytea) returns int as '(bytevector-length a)' language guile3;
+create function f_bytea_out(a int) returns bytea as '(make-bytevector a 42)' language guile3;
+create function f_bytea_error(a int) returns bytea as 'a' language guile3;
 
 select is(f_bytea_in('\x7730307421'::bytea), 5, 'bytea: bytea input');
 select is(f_bytea_out(2), '\x2a2a'::bytea, 'bytea: bytea output');
@@ -352,8 +352,8 @@ select throws_ok(
 -- Type timestamptz
 --
 
-create function f_tz_id(a timestamptz) returns timestamptz as 'a' language scruple;
-create function f_tz_to_text(a timestamptz) returns text as '(date->string a "~Y-~m-~d ~H:~M:~f ~z")' language scruple;
+create function f_tz_id(a timestamptz) returns timestamptz as 'a' language guile3;
+create function f_tz_to_text(a timestamptz) returns text as '(date->string a "~Y-~m-~d ~H:~M:~f ~z")' language guile3;
 
 select is(f_tz_id(t), t, 'timestamptz: identity mapping test')
 from current_timestamp t;
@@ -373,8 +373,8 @@ set time zone 'UTC';
 -- Type timestamp
 --
 
-create function f_ts_id(a timestamp) returns timestamp as 'a' language scruple;
-create function f_ts_to_text(a timestamp) returns text as '(date->string a "~Y-~m-~d ~H:~M:~f ~z")' language scruple;
+create function f_ts_id(a timestamp) returns timestamp as 'a' language guile3;
+create function f_ts_to_text(a timestamp) returns text as '(date->string a "~Y-~m-~d ~H:~M:~f ~z")' language guile3;
 
 select is(f_ts_id(t::timestamp), t::timestamp, 'timestamp: identity mapping test')
 from current_timestamp t;
@@ -387,8 +387,8 @@ from current_timestamp t;
 -- Type date
 --
 
-create function f_dt_id(a date) returns date as 'a' language scruple;
-create function f_dt_to_text(a date) returns text as '(date->string a "~Y-~m-~d")' language scruple;
+create function f_dt_id(a date) returns date as 'a' language guile3;
+create function f_dt_to_text(a date) returns text as '(date->string a "~Y-~m-~d")' language guile3;
 
 select is(f_dt_id(t::date), t::date, 'date: identity mapping test')
 from current_date t;
@@ -401,8 +401,8 @@ from current_date t;
 -- Type time
 --
 
-create function f_tm_id(a time) returns time as 'a' language scruple;
-create function f_tm_to_text(a time) returns text as '(date->string (time-monotonic->date a) "~H:~M:~f")' language scruple;
+create function f_tm_id(a time) returns time as 'a' language guile3;
+create function f_tm_to_text(a time) returns text as '(date->string (time-monotonic->date a) "~H:~M:~f")' language guile3;
 
 select is(f_tm_id(t::time), t::time, 'time: identity mapping test')
 from current_time t;
@@ -415,8 +415,8 @@ from current_time t;
 -- Type timetz
 --
 
-create function f_tmtz_id(a timetz) returns timetz as 'a' language scruple;
-create function f_tmtz_to_text(a timetz) returns text as '(date->string (time-monotonic->date a) "~H:~M:~f")' language scruple;
+create function f_tmtz_id(a timetz) returns timetz as 'a' language guile3;
+create function f_tmtz_to_text(a timetz) returns text as '(date->string (time-monotonic->date a) "~H:~M:~f")' language guile3;
 
 select is(f_tmtz_id(t), t, 'timetz: identity mapping test')
 from current_time t;
@@ -436,7 +436,7 @@ set time zone 'UTC';
 -- Type interval
 --
 
-create function f_itv_id(a interval) returns interval as 'a' language scruple;
+create function f_itv_id(a interval) returns interval as 'a' language guile3;
 
 select is(f_itv_id(t.itv), t.itv, 'interval: identity mapping test')
 from (select current_timestamp - current_date) t(itv);
@@ -446,8 +446,8 @@ from (select current_timestamp - current_date) t(itv);
 -- Type boolean
 --
 
-create function f_bool(a boolean) returns int as '(if a 1 0)' language scruple;
-create function f_to_bool(a int) returns boolean as '(zero? a)' language scruple;
+create function f_bool(a boolean) returns int as '(if a 1 0)' language guile3;
+create function f_to_bool(a int) returns boolean as '(zero? a)' language guile3;
 
 select is(f_bool(true), 1, 'boolean: true argument');
 select is(f_bool(false), 0, 'boolean: false argument');
@@ -466,7 +466,7 @@ end if;
 create type fruit as enum ('apple', 'acorn', 'olive');
 end $$ language plpgsql;
 
-create function f_fruit_id(a fruit) returns fruit as 'a' language scruple;
+create function f_fruit_id(a fruit) returns fruit as 'a' language guile3;
 
 select is(f_fruit_id('apple'::fruit), 'apple'::fruit, 'enum: identity mapping test 1');
 select is(f_fruit_id('acorn'::fruit), 'acorn'::fruit, 'enum: identity mapping test 2');
@@ -477,8 +477,8 @@ select is(f_fruit_id('olive'::fruit), 'olive'::fruit, 'enum: identity mapping te
 -- Type point
 --
 
-create function f_point_id(a point) returns point as 'a' language scruple;
-create function f_point_vec() returns point as '#(1 2)' language scruple;
+create function f_point_id(a point) returns point as 'a' language guile3;
+create function f_point_vec() returns point as '#(1 2)' language guile3;
 
 select ok(f_point_id(t.point) ~= t.point, 'point: identity mapping test')
 from (select point '(3.14, 2.72)') t(point);
@@ -490,7 +490,7 @@ select ok(f_point_vec() ~= point '(1, 2)', 'point: vector point');
 -- Type line
 --
 
-create function f_line_id(a line) returns line as 'a' language scruple;
+create function f_line_id(a line) returns line as 'a' language guile3;
 
 select ok(f_line_id(t.line) ?|| t.line and f_line_id(t.line) <-> t.line = 0.0,
           'line: identity mapping test')
@@ -501,7 +501,7 @@ from (select line '((3.14, 2.72), (14, 42))') t(line);
 -- Type lseg
 --
 
-create function f_lseg_id(a lseg) returns lseg as 'a' language scruple;
+create function f_lseg_id(a lseg) returns lseg as 'a' language guile3;
 
 select ok(f_lseg_id(t.lseg) ?|| t.lseg and f_lseg_id(t.lseg) <-> t.lseg = 0.0,
           'lseg: identity mapping test')
@@ -512,7 +512,7 @@ from (select lseg '((3.14, 2.72), (14, 42))') t(lseg);
 -- Type box
 --
 
-create function f_box_id(a box) returns box as 'a' language scruple;
+create function f_box_id(a box) returns box as 'a' language guile3;
 
 select ok(f_box_id(t.box) ~= t.box, 'box: identity mapping test')
 from (select box '((3.14, 2.72), (14, 42))') t(box);
@@ -522,7 +522,7 @@ from (select box '((3.14, 2.72), (14, 42))') t(box);
 -- Type path
 --
 
-create function f_path_id(a path) returns path as 'a' language scruple;
+create function f_path_id(a path) returns path as 'a' language guile3;
 
 select ok(f_path_id(t.path) = t.path, 'path: identity mapping test')
 from (select path '((3.14, 2.72), (14, 42), (0, 0))') t(path);
@@ -532,7 +532,7 @@ from (select path '((3.14, 2.72), (14, 42), (0, 0))') t(path);
 -- Type polygon
 --
 
-create function f_polygon_id(a polygon) returns polygon as 'a' language scruple;
+create function f_polygon_id(a polygon) returns polygon as 'a' language guile3;
 
 select ok(f_polygon_id(t.polygon) ~= t.polygon, 'polygon: identity mapping test')
 from (select polygon '((3.14, 2.72), (14, 42), (1, 1), (3.14, 2.72))') t(polygon);
@@ -542,7 +542,7 @@ from (select polygon '((3.14, 2.72), (14, 42), (1, 1), (3.14, 2.72))') t(polygon
 -- Type circle
 --
 
-create function f_circle_id(a circle) returns circle as 'a' language scruple;
+create function f_circle_id(a circle) returns circle as 'a' language guile3;
 
 select ok(f_circle_id(t.circle) ~= t.circle, 'circle: identity mapping test')
 from (select circle '((3.14, 2.72), 42)') t(circle);
@@ -552,7 +552,7 @@ from (select circle '((3.14, 2.72), 42)') t(circle);
 -- Type inet
 --
 
-create function f_inet_id(a inet) returns inet as 'a' language scruple;
+create function f_inet_id(a inet) returns inet as 'a' language guile3;
 
 select ok(f_inet_id(t.inet) = t.inet, 'inet: identity mapping test ipv4')
 from (select inet '192.168.100.128/25') t(inet);
@@ -565,7 +565,7 @@ from (select inet '2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128') t(inet);
 -- Type cidr
 --
 
-create function f_cidr_id(a cidr) returns cidr as 'a' language scruple;
+create function f_cidr_id(a cidr) returns cidr as 'a' language guile3;
 
 select ok(f_cidr_id(t.cidr) = t.cidr, 'cidr: identity mapping test ipv4')
 from (select cidr '192.168.100.128/25') t(cidr);
@@ -578,7 +578,7 @@ from (select cidr '2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128') t(cidr);
 -- Type macaddr
 --
 
-create function f_macaddr_id(a macaddr) returns macaddr as 'a' language scruple;
+create function f_macaddr_id(a macaddr) returns macaddr as 'a' language guile3;
 
 select ok(f_macaddr_id(t.macaddr) = t.macaddr, 'macaddr: identity mapping test')
 from (select macaddr '08:00:2b:01:02:03') t(macaddr);
@@ -588,7 +588,7 @@ from (select macaddr '08:00:2b:01:02:03') t(macaddr);
 -- Type macaddr8
 --
 
-create function f_macaddr8_id(a macaddr8) returns macaddr8 as 'a' language scruple;
+create function f_macaddr8_id(a macaddr8) returns macaddr8 as 'a' language guile3;
 
 select ok(f_macaddr8_id(t.macaddr8) = t.macaddr8, 'macaddr8: identity mapping test')
 from (select macaddr8 '08:00:2b:01:02:03:04:05') t(macaddr8);
@@ -598,7 +598,7 @@ from (select macaddr8 '08:00:2b:01:02:03:04:05') t(macaddr8);
 -- Type bit
 --
 
-create function f_bit_id(a bit(6)) returns bit(6) as 'a' language scruple;
+create function f_bit_id(a bit(6)) returns bit(6) as 'a' language guile3;
 
 select ok(f_bit_id(t.bit) = t.bit, 'bit: identity mapping test')
 from (select B'101010') t(bit);
@@ -608,7 +608,7 @@ from (select B'101010') t(bit);
 -- Type bit varying
 --
 
-create function f_varbit_id(a bit varying) returns bit varying as 'a' language scruple;
+create function f_varbit_id(a bit varying) returns bit varying as 'a' language guile3;
 
 select ok(f_varbit_id(t.varbit) = t.varbit, 'bit varying: identity mapping test')
 from (select B'101010111010011101011011010110000101') t(varbit);
@@ -618,7 +618,7 @@ from (select B'101010111010011101011011010110000101') t(varbit);
 -- Type tsvector
 --
 
-create function f_tsvector_id(a tsvector) returns tsvector as 'a' language scruple;
+create function f_tsvector_id(a tsvector) returns tsvector as 'a' language guile3;
 
 select ok(f_tsvector_id(t.tsvector) = t.tsvector, 'tsvector: identity mapping test')
 from (select 'a:1A fat:2B,4C cat:5D'::tsvector) t(tsvector);
@@ -628,7 +628,7 @@ from (select 'a:1A fat:2B,4C cat:5D'::tsvector) t(tsvector);
 -- Type tsquery
 --
 
-create function f_tsquery_id(a tsquery) returns tsquery as 'a' language scruple;
+create function f_tsquery_id(a tsquery) returns tsquery as 'a' language guile3;
 
 select ok(f_tsquery_id(t.tsquery) = t.tsquery, 'tsquery: identity mapping test')
 from (select 'fat:a & (rat:bc | cat:*d) <6> mat'::tsquery) t(tsquery);
@@ -638,7 +638,7 @@ from (select 'fat:a & (rat:bc | cat:*d) <6> mat'::tsquery) t(tsquery);
 -- Type uuid
 --
 
-create function f_uuid_id(a uuid) returns uuid as 'a' language scruple;
+create function f_uuid_id(a uuid) returns uuid as 'a' language guile3;
 
 select ok(f_uuid_id(t.uuid) = t.uuid, 'uuid: identity mapping test')
 from (select gen_random_uuid()) t(uuid);
@@ -648,7 +648,7 @@ from (select gen_random_uuid()) t(uuid);
 -- Type xml
 --
 
-create function f_xml_id(a xml) returns xml as 'a' language scruple;
+create function f_xml_id(a xml) returns xml as 'a' language guile3;
 
 select ok(xpath('/foo/text()', f_xml_id(t.xml))::text = '{bar}', 'xml: identity mapping test')
 from (select xml '<foo>bar</foo>') t(xml);
@@ -658,7 +658,7 @@ from (select xml '<foo>bar</foo>') t(xml);
 -- Type json
 --
 
-create function f_json_id(a json) returns json as 'a' language scruple;
+create function f_json_id(a json) returns json as 'a' language guile3;
 
 select ok(f_json_id(t.json)->'foo'->>0 = 'bar', 'json: identity mapping test')
 from (select '{"foo": ["bar", 42]}'::json) t(json);
@@ -668,7 +668,7 @@ from (select '{"foo": ["bar", 42]}'::json) t(json);
 -- Type jsonb
 --
 
-create function f_jsonb_id(a jsonb) returns jsonb as 'a' language scruple;
+create function f_jsonb_id(a jsonb) returns jsonb as 'a' language guile3;
 
 select ok(f_jsonb_id(t.jsonb)->'foo'->>0 = 'bar', 'jsonb: identity mapping test')
 from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);
@@ -678,7 +678,7 @@ from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);
 -- Type jsonpath
 --
 
-create function f_jsonpath_id(a jsonpath) returns jsonpath as 'a' language scruple;
+create function f_jsonpath_id(a jsonpath) returns jsonpath as 'a' language guile3;
 
 select ok(f_jsonpath_id(t.v)::text = t.v::text, 'jsonpath: identity mapping test')
 from (select '$.foo.bar'::jsonpath) t(v);
@@ -766,8 +766,8 @@ from (select 'strict $ ? (exists (@.name)) .name'::jsonpath) t(v);
 -- Arrays
 --
 
-create function f_array_arg(a text[]) returns text as '(vector-ref a 0)' language scruple;
-create function f_ret_array() returns text[] as '#("a" "b")' language scruple;
+create function f_array_arg(a text[]) returns text as '(vector-ref a 0)' language guile3;
+create function f_ret_array() returns text[] as '#("a" "b")' language guile3;
 
 select is(f_array_arg('{foo,bar}'::text[]), 'foo', 'array: 2 item parameter');
 select is(f_ret_array(), '{"a", "b"}'::text[], 'array: return 2 item text');
@@ -779,10 +779,10 @@ select is(f_ret_array(), '{"a", "b"}'::text[], 'array: return 2 item text');
 
 create type simple_record as (name text, count int, weight float8);
 
-create function f_record_arg_by_name(r simple_record) returns text as '(record-ref r ''name)' language scruple;
-create function f_record_arg_by_number(r simple_record) returns numeric as '(record-ref r 2)' language scruple;
-create function f_record_arg_type_name(r simple_record) returns text as '(symbol->string (car (record-types r)))' language scruple;
-create function f_ret_record() returns record as '(make-record ''(text int4 float8) #("a" 98 2.99792458e8) ''(s c v) #f)' language scruple;
+create function f_record_arg_by_name(r simple_record) returns text as '(record-ref r ''name)' language guile3;
+create function f_record_arg_by_number(r simple_record) returns numeric as '(record-ref r 2)' language guile3;
+create function f_record_arg_type_name(r simple_record) returns text as '(symbol->string (car (record-types r)))' language guile3;
+create function f_ret_record() returns record as '(make-record ''(text int4 float8) #("a" 98 2.99792458e8) ''(s c v) #f)' language guile3;
 
 select is(f_record_arg_by_name(row('foo', 5, 1.41)::simple_record), 'foo', 'record: argument by name');
 select is(f_record_arg_by_number(row('foo', 5, 1.41)::simple_record), 1.41, 'record: argument by number');
@@ -796,7 +796,7 @@ from (select 'a', 98, 2.99792458e8::float8) t(text, int, float8);
 -- Ranges
 --
 
-create function f_int4range_id(a int4range) returns int4range as 'a' language scruple;
+create function f_int4range_id(a int4range) returns int4range as 'a' language guile3;
 
 select ok(f_int4range_id(t.v) = t.v, 'int4range: int4 identity mapping test')
 from (select '[0, 60]'::int4range) t(v);
@@ -806,7 +806,7 @@ from (select '[0, 60]'::int4range) t(v);
 -- Multiranges
 --
 
-create function f_int4multirange_id(a int4multirange) returns int4multirange as 'a' language scruple;
+create function f_int4multirange_id(a int4multirange) returns int4multirange as 'a' language guile3;
 
 select ok(f_int4multirange_id(t.v) = t.v, 'int4multirange: identity mapping test')
 from (select '{[3,7), [8,9)}'::int4multirange) t(v);
@@ -818,7 +818,7 @@ from (select '{[3,7), [8,9)}'::int4multirange) t(v);
 
 create domain posint as integer check (value > 0);
 
-create function f_posint_id(a posint) returns posint as 'a' language scruple;
+create function f_posint_id(a posint) returns posint as 'a' language guile3;
 
 select ok(f_posint_id(t.v) = t.v, 'domain type: identity mapping test')
 from (select 42::posint) t(v);
@@ -828,9 +828,9 @@ from (select 42::posint) t(v);
 -- Set Returning Functions
 --
 
-create function f_setof_text() returns setof text as $$(list "one" "two")$$ language scruple;
+create function f_setof_text() returns setof text as $$(list "one" "two")$$ language guile3;
 
-create function f_setof_int_array() returns setof int4[] as $$(list #(0 -1) #(1 0))$$ language scruple;
+create function f_setof_int_array() returns setof int4[] as $$(list #(0 -1) #(1 0))$$ language guile3;
 
 create function f_setof_record() returns setof record as $$
 (let ((types '(int4 text float8))) ; '
@@ -840,7 +840,7 @@ create function f_setof_record() returns setof record as $$
               '(a b c) ;'
               #f))
 $$
-language scruple;
+language guile3;
 
 select ok(array_agg(t) = '{one,two}'::text[], 'setof: text')
 from f_setof_text() t(text);
@@ -867,83 +867,83 @@ select throws_ok(
 --
 
 create function f_execute_simple() returns int4 as '(scalar (execute "select 1"))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_int2() returns int2 as '(scalar (execute "select $1" ''(3)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_int4() returns int4 as '(scalar (execute "select $1" ''(3)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_int8() returns int8 as '(scalar (execute "select $1" ''(3)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_float4() returns float4 as '(scalar (execute "select $1" ''(3.14)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_float8() returns float8 as '(scalar (execute "select $1" ''(3.14)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_rat_float4() returns float4 as '(scalar (execute "select $1" ''(314/100)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_rat_float8() returns float8 as '(scalar (execute "select $1" ''(314/100)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_large_numeric() returns numeric as '(scalar (execute "select $1" ''(123456789012345678901234567890)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_rat_numeric() returns numeric as '(scalar (execute "select $1" ''(314/100)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_decimal() returns numeric as '(scalar (execute "select $1" `(,(make-decimal 314159 5))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_money() returns money as '(scalar (execute "select $1" ''(1234)))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_text() returns text as '(scalar (execute "select $1" ''("hello")))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_bytea() returns bytea as '(scalar (execute "select $1" ''(#u8(#x80 #x40 #x20))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_timestamp() returns timestamp as '(scalar (execute "select $1" `(,(make-date 123456789 56 34 12 1 1 1970 0))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_timestamptz() returns timestamptz as '(scalar (execute "select $1" `(,(make-date 123456789 56 34 12 1 1 1970 0))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_date() returns date as '(scalar (execute "select $1" `(,(make-date 123456789 56 34 12 1 1 1970 0))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_time() returns time as '(scalar (execute "select $1" `(,(make-time time-monotonic 123456789 (+ 56 (* 60 (+ 34 (* 60 12))))))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_timetz() returns timetz as '(scalar (execute "select $1" `(,(make-time time-monotonic 123456789 (+ 56 (* 60 (+ 34 (* 60 12))))))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_boolean(x int) returns boolean as '(scalar (execute "select $1" `(,(> x 0))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_point() returns point as '(scalar (execute "select $1" `(,(make-point 1 2))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_line() returns line as '(scalar (execute "select $1" `(,(make-line 3 2 1))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_lseg() returns lseg as '(scalar (execute "select $1" `(,(make-lseg (make-point 0 1) (make-point 2 3)))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_box() returns box as '(scalar (execute "select $1" `(,(make-box (make-point 0 1) (make-point 2 3)))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_path() returns path as '(scalar (execute "select $1" `(,(make-path #f (list->vector (list (make-point 0 1) (make-point 2 3) (make-point 4 1)))))))'
-language scruple;
+language guile3;
 
 create function f_execute_with_args_fruit() returns fruit as $$
 (scalar (execute "select $1" '((fruit . apple)))) ; '
-$$ language scruple;
+$$ language guile3;
 
 create function f_execute_with_args_polygon() returns polygon as $$
 (scalar (execute "select $1"
@@ -955,13 +955,13 @@ create function f_execute_with_args_polygon() returns polygon as $$
                                          (make-point 1 0)
                                          (make-point 0 1)))))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_inet() returns inet as $$
 (scalar (execute "select $1"
                  `(,(make-inet 'inet 32 #u8(192 168 1 42))))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_inet6() returns inet as $$
 (scalar (execute "select $1"
@@ -970,38 +970,38 @@ create function f_execute_with_args_inet6() returns inet as $$
                                               #x02 #xe0 #x81 #xff
                                               #xfe #x22 #xd1 #xf1)))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_cidr() returns cidr as $$
 (scalar (execute "select $1"
                  `(,(make-inet 'inet 8 #u8(10 0 0 0))))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_macaddr() returns macaddr as $$
 (scalar (execute "select $1"
                  `(,(make-macaddr #u8(#x08 #x00 #x2b #x01 #x02 #x03)))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_macaddr8() returns macaddr8 as $$
 (scalar (execute "select $1"
                  `(,(make-macaddr8 #u8(#x08 #x00 #x2b #x01 #x02 #x03 #x04 #x05)))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_bits() returns bit(6) as $$
 (scalar (execute "select $1"
                  `(,(make-bit-string #u8(#xa9) 8))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_tsvector() returns tsvector as $$
 (scalar (execute "select $1"
                  `(,(make-tsvector (list (make-tslexeme "foo"
                                                         (list (make-tsposition 1 3))))))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_tsquery() returns tsquery as $$
 (scalar (execute "select $1"
@@ -1010,52 +1010,52 @@ create function f_execute_with_args_tsquery() returns tsquery as $$
                                                 (value "mat" 0 #f)
                                                 6))))))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_uuid() returns uuid as $$
 (scalar (execute "select $1::uuid" '("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_xml() returns xml as $$
 (scalar (execute "select $1::xml" '("<foo>bar</foo>"))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_json() returns json as $$
 (scalar (execute "select $1::json" '("{\"foo\": [\"bar\", 42]}"))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_jsonb() returns jsonb as $$
 (scalar (execute "select $1::jsonb" '("{\"foo\": [\"bar\", 42]}"))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_jsonpath() returns jsonpath as $$
 (scalar (execute "select $1::jsonpath" '("strict $ ? (exists (@.name)) .name"))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_text_array() returns text[] as $$
 (scalar (execute "select $1" '(#("one" "two" "three")))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_int_array() returns int[] as $$
 (scalar (execute "select $1" '(#(1 65537)))) ;; '
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_simple_record() returns record as $$
 (scalar (execute "select row('foo', 5, 1.41)::simple_record"))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_int4range() returns int4range as $$
 (scalar (execute "select '[0, 60)'::int4range"))
 $$
-language scruple;
+language guile3;
 
 create function bool_diff(a bool, b bool) returns float8 as $$
   select case when a = b then 0.0 when a and not b then 1.0 else -1.0 end
@@ -1066,17 +1066,17 @@ create type boolrange as range (subtype = bool, subtype_diff = bool_diff);
 create function f_execute_with_args_boolrange() returns boolrange as $$
 (scalar (execute "select '[false, true]'::boolrange"))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_int4multirange() returns int4multirange as $$
 (scalar (execute "select '{[3,7), [8,9)}'::int4multirange"))
 $$
-language scruple;
+language guile3;
 
 create function f_execute_with_args_posint() returns posint as $$
 (scalar (execute "select 14::posint"))
 $$
-language scruple;
+language guile3;
 
 select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
 select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
@@ -1140,18 +1140,18 @@ create function f_execute_with_receiver_simple() returns int as $$
                               (if (= id 2)
                                   (stop-command-execution)
                                   name))))
-$$ language scruple;
+$$ language guile3;
 
 select is(f_execute_with_receiver_simple(), 1, 'execute_with_receive: simple');
 
 create function f_cursor_simple() returns text as $$
 (let ((c (cursor-open "select * from things order by id")))
   (record-ref (car (fetch c)) 'name)) ;; '
-$$ language scruple;
+$$ language guile3;
 
 select is(f_cursor_simple(), 'foo', 'cursor-open: simple');
 
-create function f_tr_new() returns trigger as 'new' language scruple;
+create function f_tr_new() returns trigger as 'new' language guile3;
 create trigger tr_things_before_insert before insert on things
   for each row execute function f_tr_new();
 
@@ -1168,7 +1168,7 @@ select is(insert_thing(4, 'more'), 4, 'simple trigger test');
 create function f_tr_modify_id() returns trigger as $$
 (record-set! new 'id (+ 1 (record-ref new 'id)))
 new
-$$ language scruple;
+$$ language guile3;
 
 drop trigger tr_things_before_insert on things;
 create trigger tr_things_before_insert before insert on things
@@ -1180,7 +1180,7 @@ create table ddl_record (event text, tag text);
 
 create function f_e_tr() returns event_trigger as $$
   (execute "insert into ddl_record values ('$1', '$2')" (list event tag))
-$$ volatile language scruple;
+$$ volatile language guile3;
 
 create event trigger et_basic on ddl_command_start execute function f_e_tr();
 
@@ -1192,7 +1192,7 @@ create table do_stuff (id int, label text);
 
 do $$
   (execute "insert into do_stuff values (42, 'Don''t Panic.')")
-$$ language scruple;
+$$ language guile3;
 
 select ok((select count(*) from do_stuff) = 1, 'basic inline call test');
 

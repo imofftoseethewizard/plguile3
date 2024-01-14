@@ -98,7 +98,7 @@ create function _scruple_set_role_forms(id oid, new_forms text[]) returns void a
 $$
 language sql volatile;
 
-create language scruple
+create language guile3
     handler scruple_call
     inline scruple_call_inline
     validator scruple_compile;
