@@ -1,106 +1,112 @@
 -- scruple--1.0.sql
 
-create function scruple_call()
+create schema plg3;
+
+set search_path to plg3, public;
+
+create function plg3_call()
 returns language_handler
 as 'MODULE_PATHNAME'
 language c strict;
 
-create function scruple_call_inline(internal)
+create function plg3_call_inline(internal)
 returns language_handler
 as 'MODULE_PATHNAME'
 language c strict;
 
-create function scruple_compile(oid)
+create function plg3_compile(oid)
 returns void
 as 'MODULE_PATHNAME'
 language c strict;
 
-create schema "%scruple";
-
-create table "%scruple".context (
+create table eval_env (
   role_id int primary key,
-  forms text[]);
+  forms text[],
+  call_time_limit float8,
+  call_allocation_limit int);
 
 -- default forms use role_id 0
-insert into "%scruple".context values (0, '{}'::text[]);
+--   initial defaults have no forms, a 1 second call limit, and a
+--   1 MiB call allocation limt.
+insert into eval_env values (0, '{}'::text[], 1.0, pow(2, 20));
 
-create function scruple_flush_func_cache_for_role(role_id int)
+create function plg3_role_forms_changed(role_id int)
 returns void
 as 'MODULE_PATHNAME'
 language c strict;
 
-create function scruple_context_trigger_handler() returns trigger as $$
+create function eval_env_trigger_handler() returns trigger as $$
 begin
 
   if TG_OP in ('INSERT', 'UPDATE') then
-    perform scruple_flush_func_cache_for_role(NEW.role_id);
+    perform plg3.plg3_role_forms_changed(NEW.role_id);
     return NEW;
   end if;
 
-  perform scruple_flush_func_cache_for_role(OLD.role_id);
+  perform plg3.plg3_role_forms_changed(OLD.role_id);
   return OLD;
 
 end $$ language plpgsql;
 
-create trigger scuple_context_trigger
-  after insert or update or delete on "%scruple".context
-  for each row execute procedure scruple_context_trigger_handler();
+create trigger eval_env_trigger
+  after insert or update or delete on plg3.eval_env
+  for each row execute procedure eval_env_trigger_handler();
 
-create function scruple_get_default_forms() returns text[] as $$
-  select _scruple_get_role_forms(0);
+create function get_role_forms(id oid) returns text[] as $$
+  select forms from plg3.eval_env where role_id = id;
 $$
 language sql volatile;
 
-create function scruple_add_default_forms(new_forms text[]) returns void as $$
-  select _scruple_add_role_forms(0, new_forms);
-$$
-language sql volatile;
-
-create function scruple_set_default_forms(new_forms text[]) returns void as $$
-  select _scruple_set_role_forms(0, new_forms);
-$$
-language sql volatile;
-
-create function scruple_get_role_forms(role_name text) returns text[] as $$
-  with u as (select * from pg_user where usename = role_name)
-  select _scruple_get_role_forms(u.usesysid) from u;
-$$
-language sql volatile;
-
-create function scruple_add_role_forms(role_name text, new_forms text[]) returns void as $$
-  with u as (select * from pg_user where usename = role_name)
-  select _scruple_add_role_forms(u.usesysid, new_forms) from u;
-$$
-language sql volatile;
-
-create function scruple_set_role_forms(role_name text, new_forms text[]) returns void as $$
-  with u as (select * from pg_user where usename = role_name)
-  select _scruple_set_role_forms(u.usesysid, new_forms) from u;
-$$
-language sql volatile;
-
-create function _scruple_get_role_forms(id oid) returns text[] as $$
-  select forms from "%scruple".context where role_id = id;
-$$
-language sql volatile;
-
-create function _scruple_add_role_forms(id oid, new_forms text[]) returns void as $$
-  insert into "%scruple".context values (id, new_forms)
+create function add_role_forms(id oid, new_forms text[]) returns void as $$
+  insert into plg3.eval_env (role_id, forms) values (id, new_forms)
     on conflict (role_id) do
-      update set forms = array_cat(_scruple_get_role_forms(id), new_forms);
+      update set forms = array_cat(plg3.get_role_forms(id), new_forms);
 $$
 language sql volatile;
 
-create function _scruple_set_role_forms(id oid, new_forms text[]) returns void as $$
-  insert into "%scruple".context values (id, new_forms)
+create function set_role_forms(id oid, new_forms text[]) returns void as $$
+  insert into plg3.eval_env (role_id, forms) values (id, new_forms)
     on conflict (role_id) do
       update set forms = new_forms;
 $$
 language sql volatile;
 
 create language guile3
-    handler scruple_call
-    inline scruple_call_inline
-    validator scruple_compile;
+    handler plg3_call
+    inline plg3_call_inline
+    validator plg3_compile;
 
-select scruple_add_role_forms('foo', '{a,b}'::text[]);
+set search_path to public;
+
+create function plg3_get_default_forms() returns text[] as $$
+  select plg3.get_role_forms(0);
+$$
+language sql volatile;
+
+create function plg3_add_default_forms(new_forms text[]) returns void as $$
+  select plg3.add_role_forms(0, new_forms);
+$$
+language sql volatile;
+
+create function plg3_set_default_forms(new_forms text[]) returns void as $$
+  select plg3.set_role_forms(0, new_forms);
+$$
+language sql volatile;
+
+create function plg3_get_role_forms(role_name text) returns text[] as $$
+  with u as (select * from pg_user where usename = role_name)
+  select plg3.get_role_forms(u.usesysid) from u;
+$$
+language sql volatile;
+
+create function plg3_add_role_forms(role_name text, new_forms text[]) returns void as $$
+  with u as (select * from pg_user where usename = role_name)
+  select plg3.add_role_forms(u.usesysid, new_forms) from u;
+$$
+language sql volatile;
+
+create function plg3_set_role_forms(role_name text, new_forms text[]) returns void as $$
+  with u as (select * from pg_user where usename = role_name)
+  select plg3.set_role_forms(u.usesysid, new_forms) from u;
+$$
+language sql volatile;

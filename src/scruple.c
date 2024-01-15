@@ -59,15 +59,15 @@
 
 PG_MODULE_MAGIC;
 
-PGDLLEXPORT Datum scruple_call(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum scruple_call_inline(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum scruple_compile(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum scruple_flush_func_cache_for_role(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plg3_call(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plg3_call_inline(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plg3_compile(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plg3_role_forms_changed(PG_FUNCTION_ARGS);
 
-PG_FUNCTION_INFO_V1(scruple_call);
-PG_FUNCTION_INFO_V1(scruple_call_inline);
-PG_FUNCTION_INFO_V1(scruple_compile);
-PG_FUNCTION_INFO_V1(scruple_flush_func_cache_for_role);
+PG_FUNCTION_INFO_V1(plg3_call);
+PG_FUNCTION_INFO_V1(plg3_call_inline);
+PG_FUNCTION_INFO_V1(plg3_compile);
+PG_FUNCTION_INFO_V1(plg3_role_forms_changed);
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -1057,7 +1057,7 @@ void _PG_fini(void)
 	hash_destroy(type_cache);
 }
 
-Datum scruple_flush_func_cache_for_role(PG_FUNCTION_ARGS)
+Datum plg3_role_forms_changed(PG_FUNCTION_ARGS)
 {
 	Oid role_oid = DatumGetObjectId(PG_GETARG_DATUM(0));
 	SCM func_oids = SCM_BOOL_F;
@@ -1070,7 +1070,7 @@ Datum scruple_flush_func_cache_for_role(PG_FUNCTION_ARGS)
 	return (Datum)1;
 }
 
-Datum scruple_call(PG_FUNCTION_ARGS)
+Datum plg3_call(PG_FUNCTION_ARGS)
 {
 	if (CALLED_AS_TRIGGER(fcinfo))
 		return scruple_call_trigger(fcinfo);
@@ -1676,7 +1676,7 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 	return scm_call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
 }
 
-Datum scruple_call_inline(PG_FUNCTION_ARGS)
+Datum plg3_call_inline(PG_FUNCTION_ARGS)
 {
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
 	char *source_text = codeblock->source_text;
@@ -1697,7 +1697,7 @@ Oid get_func_owner(Oid func_oid)
 	return owner_oid;
 }
 
-Datum scruple_compile(PG_FUNCTION_ARGS)
+Datum plg3_compile(PG_FUNCTION_ARGS)
 {
 	Oid func_oid = PG_GETARG_OID(0);
 	Oid owner_oid = get_func_owner(func_oid);
