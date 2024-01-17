@@ -70,13 +70,13 @@ Install docker.  To create the test image for Postgres 14
 
 To start a test monitor running that image
 
-    test/start-test-container 14 && docker logs -f scruple-test-14
+    test/start-test-container 14 && docker logs -f plg3-test-14
 
-That runs `pg-start` builds and installs `pgTAP` and `scruple` and
-then enters an infinite loop containing `inotifywait` watching a few
-key dependencies. When one of those changes, it rebuilds and
-reinstalls `scruple` and then calls `pg_prove` on the tests in
-`test/tests.sql`.
+That starts the Postgres cluster, builds and installs `pgTAP`
+and `scruple` and then enters an infinite loop containing
+`inotifywait` watching a few key dependencies. When one of those
+changes, it rebuilds and reinstalls `scruple` and then calls
+`pg_prove` on the tests in `test/tests.sql`.
 
 ## Installation
 
