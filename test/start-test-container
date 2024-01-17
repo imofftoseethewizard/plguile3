@@ -2,6 +2,7 @@
 
 cd $(dirname $0)/..
 
+IMAGE_NAME=scruple-test-$1
 CONTAINER_NAME=scruple-test-$1
 
 docker stop $CONTAINER_NAME >/dev/null 2>&1 || true
@@ -15,12 +16,5 @@ docker run \
        -w /repo \
        --name $CONTAINER_NAME \
        --mount "type=bind,src=$(pwd),dst=/repo" \
-       scruple-test \
-       bash -c "
-
-cd /repo/test
-
-./prepare-test-db $1
-./build-monitor
-
-"
+       $IMAGE_NAME \
+       bash -c "cd /repo/test && ./prepare-test-db $1 && ./build-monitor"

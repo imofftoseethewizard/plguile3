@@ -64,11 +64,11 @@ in event trigger handlers.
 
 ## Development Setup
 
-Install docker.  To create the test image
+Install docker.  To create the test image for Postgres 14
 
-    test/build-container-image
+    test/build-container-image 14
 
-To start a test monitor running Postgres 14
+To start a test monitor running that image
 
     test/start-test-container 14 && docker logs -f scruple-test-14
 

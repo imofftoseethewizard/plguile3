@@ -1,4 +1,4 @@
 #! /usr/bin/env bash
 
-docker rmi -f scruple-test
-docker build -t scruple-test $(dirname $0)
+docker rmi -f scruple-test-$1
+docker build --build-arg=PGVERSION=$1 -t scruple-test-$1 $(dirname $0)

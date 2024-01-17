@@ -1,5 +1,7 @@
 FROM pgxn/pgxn-tools:latest
 
+ARG PGVERSION
+
 ENV PGTAP_VERSION=1.3.0
 
 RUN apt-get update && \
@@ -17,3 +19,8 @@ RUN apt-get update && \
     apt-get remove -y unzip wget && \
     apt-get clean -y && \
     rm -rf /var/cache/apt/* /var/lib/apt/lists/*
+
+ADD pg-install.sh /usr/local/bin/pg-install.sh
+RUN bash pg-install.sh $PGVERSION
+
+CMD pg_ctlcluster $PGVERSION test start

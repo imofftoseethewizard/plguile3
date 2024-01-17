@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-pg-start $1
+pg_ctlcluster $1 test start
 
 cd /repo
 make
