@@ -154,9 +154,9 @@
     (hash-for-each
      (if ids
          (lambda (key value)
-           (hash-set! new key (if (member key ids)
-                                  (cons (car value) #f)
-                                  value)))
+           (unless (member key ids)
+             (hash-set! new key value))
+           new)
          (lambda (key value)
             (hash-set! new key (cons (car value) #f))))
      h)
@@ -691,15 +691,12 @@
 
 (define (apply-with-limits proc args time-limit allocation-limit)
   (let ((thunk (lambda () (apply proc args))))
-    (call-with-time-and-allocation-limits time-limit
-                                          allocation-limit
-                                          thunk)))
+    (call-with-time-and-allocation-limits time-limit allocation-limit thunk)))
 
-(define (untrusted-eval exp time-limit allocation-limit)
+(define (untrusted-eval exp module)
   (eval-in-sandbox exp
-                   #:time-limit time-limit
-                   #:allocation-limit (round (inexact->exact allocation-limit))
-                   #:bindings trusted-bindings))
+                   #:module module
+                   #:sever-module? #f))
 
 (define bytevector-bindings
   '(((guile)

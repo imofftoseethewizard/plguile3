@@ -6,7 +6,7 @@ language.
 ## Status
 
 Early alpha. Scruple is feature-complete. Current stable(ish) release
-is 0.16.0, though be warned that anything off of the knife edge of the
+is 0.18.0, though be warned that anything off of the knife edge of the
 happy path is likely to cause a crash.
 
 ## Overview
@@ -33,7 +33,8 @@ will be the alpha release.
 The 0.21.x versions will refine and refactor scruple.scm.
 
 The 0.23.x versions will include an extensive test campaign covering
-load, concurrency, memory correctness, fuzzing, etc.
+load, concurrency, session isolation, memory correctness, fuzzing,
+etc.
 
 Version 0.24.0 will be the pre-1.0 beta release.
 

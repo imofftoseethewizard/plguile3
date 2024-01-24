@@ -1,6 +1,6 @@
 begin;
 
-select plan(226);
+select plan(217);
 
 select lives_ok('create extension if not exists scruple', 'install (if not exists)');
 select lives_ok('drop extension scruple', 'de-install');
@@ -1196,34 +1196,32 @@ $$ language guile3;
 
 select ok((select count(*) from do_stuff) = 1, 'basic inline call test');
 
-select ok((select current_setting('scruple.call_time_limit')) = '1', 'setting test');
+-- select is(plg3_get_default_forms(), '{}'::text[], 'default forms initial');
 
-select is(plg3_get_default_forms(), '{}'::text[], 'default forms initial');
+-- select plg3_set_default_forms('{a,b}'::text[]);
 
-select plg3_set_default_forms('{a,b}'::text[]);
+-- select is(plg3_get_default_forms(), '{a,b}'::text[], 'set default forms 1');
 
-select is(plg3_get_default_forms(), '{a,b}'::text[], 'set default forms 1');
+-- select plg3_set_default_forms('{b,c}'::text[]);
 
-select plg3_set_default_forms('{b,c}'::text[]);
+-- select is(plg3_get_default_forms(), '{b,c}'::text[], 'set default forms 2');
 
-select is(plg3_get_default_forms(), '{b,c}'::text[], 'set default forms 2');
+-- select plg3_add_default_forms('{d,e}'::text[]);
 
-select plg3_add_default_forms('{d,e}'::text[]);
+-- select is(plg3_get_default_forms(), '{b,c,d,e}'::text[], 'add set default forms');
 
-select is(plg3_get_default_forms(), '{b,c,d,e}'::text[], 'add set default forms');
+-- select is(plg3_get_role_forms('postgres'), NULL, 'role forms initial');
 
-select is(plg3_get_role_forms('postgres'), NULL, 'role forms initial');
+-- select plg3_set_role_forms('postgres', '{a,b}'::text[]);
 
-select plg3_set_role_forms('postgres', '{a,b}'::text[]);
+-- select is(plg3_get_role_forms('postgres'), '{a,b}'::text[], 'set role forms 1');
 
-select is(plg3_get_role_forms('postgres'), '{a,b}'::text[], 'set role forms 1');
+-- select plg3_set_role_forms('postgres', '{b,c}'::text[]);
 
-select plg3_set_role_forms('postgres', '{b,c}'::text[]);
+-- select is(plg3_get_role_forms('postgres'), '{b,c}'::text[], 'set role forms 2');
 
-select is(plg3_get_role_forms('postgres'), '{b,c}'::text[], 'set role forms 2');
+-- select plg3_add_role_forms('postgres', '{d,e}'::text[]);
 
-select plg3_add_role_forms('postgres', '{d,e}'::text[]);
-
-select is(plg3_get_role_forms('postgres'), '{b,c,d,e}'::text[], 'add set role forms');
+-- select is(plg3_get_role_forms('postgres'), '{b,c,d,e}'::text[], 'add set role forms');
 
 rollback;

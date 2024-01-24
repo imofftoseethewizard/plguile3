@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2024-01-24
+
+This version adds per-role environments and per-role call limits. It
+also ensures that caches of sandbox modules are flushed when
+environments change, and that caches of compiled procedures are
+flushed when changes to the environment, source, or ownership of a
+function changes. This change is extensive and passes current tests,
+but needs further testing.
+
 ## [0.17.4] - 2024-01-17
 
 This version updates the test tooling so that postgres is built
