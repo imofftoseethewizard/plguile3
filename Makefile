@@ -1,13 +1,13 @@
 # Variables
-EXTENSION = scruple
+EXTENSION = plg3
 
 MODULE_big = $(EXTENSION)
 DATA = $(EXTENSION)--1.0.sql
 PG_CONFIG = pg_config
 SHLIB_LINK = -lguile-3.0
-CONTAINER_NAME = pg_scruple_test
-EXTENSION_CONTROL = scruple.control
-EXTENSION_SO = scruple.so
+CONTAINER_NAME = pg_plg3_test
+EXTENSION_CONTROL = plg3.control
+EXTENSION_SO = plg3.so
 DOCKER_EXTENSION_DIR = /usr/share/postgresql/14/extension/
 
 # The directory where the build artifacts will be placed
@@ -34,14 +34,14 @@ GUILE_LIBS = $(shell pkg-config --libs guile-3.0)
 override CPPFLAGS += $(GUILE_CFLAGS)
 override SHLIB_LINK += $(GUILE_LIBS)
 
-# Update to include build dir, so that scruple.scm.h is reachable
+# Update to include build dir, so that plg3.scm.h is reachable
 override CPPFLAGS += -I$(BUILD_DIR)
 
 # Compile llvm bitcode files for Postgres' JIT
 COMPILE.c.bc = $(CLANG) -Wno-ignored-attributes $(BITCODE_CFLAGS) $(CCFLAGS) $(CPPFLAGS) -emit-llvm -c
 
 # The object file depends on the build directory
-$(BUILD_DIR)/scruple.o: $(BUILD_DIR)
+$(BUILD_DIR)/plg3.o: $(BUILD_DIR)
 
 # Compile rules
 all: $(BUILD_DIR) $(OBJS)
@@ -49,10 +49,10 @@ all: $(BUILD_DIR) $(OBJS)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/scruple.scm.h: src/scruple.scm
+$(BUILD_DIR)/plg3.scm.h: src/plg3.scm
 	xxd -i $< > $@
 
-$(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/scruple.scm.h
+$(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plg3.scm.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.o: src/%.c
@@ -69,6 +69,6 @@ docker-install: all
 	docker cp $(EXTENSION_SO) $(CONTAINER_NAME):/usr/lib/postgresql/14/lib/
 
 	# Install the extension within the container's PostgreSQL instance
-	docker exec -it $(CONTAINER_NAME) psql -U postgres -c "CREATE EXTENSION scruple;"
+	docker exec -it $(CONTAINER_NAME) psql -U postgres -c "CREATE EXTENSION plg3;"
 
 .PHONY: deploy-to-docker

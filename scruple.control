@@ -1,5 +1,0 @@
-# scruple extension
-comment = 'A PostgreSQL extension to enable Guile scheme in SQL functions'
-default_version = '1.0'
-module_pathname = '$libdir/scruple'
-relocatable = true

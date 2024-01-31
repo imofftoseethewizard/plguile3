@@ -2,9 +2,9 @@ begin;
 
 select plan(217);
 
-select lives_ok('create extension if not exists scruple', 'install (if not exists)');
-select lives_ok('drop extension scruple', 'de-install');
-select lives_ok('create extension scruple', 'reinstall');
+select lives_ok('create extension if not exists plg3', 'install (if not exists)');
+select lives_ok('drop extension plg3', 'de-install');
+select lives_ok('create extension plg3', 'reinstall');
 
 --------------------------------------------------------------------------------
 --

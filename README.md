@@ -1,11 +1,11 @@
-# Scheme PostgreSQL Language Extension (Scruple)
+# Scheme PostgreSQL Language Extension (Plg3)
 
 This project joins my favorite database to my favorite programming
 language.
 
 ## Status
 
-Early alpha. Scruple is feature-complete. Current stable(ish) release
+Early alpha. Plg3 is feature-complete. Current stable(ish) release
 is 0.18.0, though be warned that anything off of the knife edge of the
 happy path is likely to cause a crash.
 
@@ -30,7 +30,7 @@ happy path to include corner, edge, and adversarial cases.
 At version 0.20.0 the extension will be functionally complete. This
 will be the alpha release.
 
-The 0.21.x versions will refine and refactor scruple.scm.
+The 0.21.x versions will refine and refactor plg3.scm.
 
 The 0.23.x versions will include an extensive test campaign covering
 load, concurrency, session isolation, memory correctness, fuzzing,
@@ -74,9 +74,9 @@ To start a test monitor running that image
     test/start-test-container 14 && docker logs -f plg3-test-14
 
 That starts the Postgres cluster, builds and installs `pgTAP`
-and `scruple` and then enters an infinite loop containing
+and `plg3` and then enters an infinite loop containing
 `inotifywait` watching a few key dependencies. When one of those
-changes, it rebuilds and reinstalls `scruple` and then calls
+changes, it rebuilds and reinstalls `plg3` and then calls
 `pg_prove` on the tests in `test/tests.sql`.
 
 ## Installation
@@ -84,8 +84,8 @@ changes, it rebuilds and reinstalls `scruple` and then calls
 For now, it's just a source install.
 
 ```bash
-git clone https://github.com/imofftoseethewizard/scruple.git
-cd scruple
+git clone https://github.com/imofftoseethewizard/plg3.git
+cd plg3
 make
 sudo make install
 ```

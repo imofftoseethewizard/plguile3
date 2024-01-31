@@ -1,4 +1,4 @@
--- scruple--1.0.sql
+-- plg3--1.0.sql
 
 create schema plg3;
 

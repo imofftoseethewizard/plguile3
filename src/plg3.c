@@ -57,8 +57,8 @@
 // convenience for calling one of these where the appropriate type oid is not available.
 #define OID_NOT_USED ((Oid)0)
 
-// Defines const char *src_scruple_scm.
-#include "scruple.scm.h"
+// Defines const char *src_plg3_scm.
+#include "plg3.scm.h"
 
 PG_MODULE_MAGIC;
 
@@ -651,8 +651,8 @@ void _PG_init(void)
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
 
-	elog(NOTICE, "evaluating scruple.scm");
-	eval_scheme_string((const char *)src_scruple_scm, scm_current_module());
+	elog(NOTICE, "evaluating plg3.scm");
+	eval_scheme_string((const char *)src_plg3_scm, scm_current_module());
 	elog(NOTICE, "done");
 
 	func_cache = scm_c_make_hash_table(16);
@@ -661,7 +661,7 @@ void _PG_init(void)
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
 
-	plg3_base_module = scm_c_resolve_module("scruple base");
+	plg3_base_module = scm_c_resolve_module("plg3 base");
 
 	define_primitive("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               4, 0, 0, (SCM (*)()) spi_execute);

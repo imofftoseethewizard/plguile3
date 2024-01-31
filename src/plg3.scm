@@ -1,9 +1,9 @@
-(define-module (scruple base)
+(define-module (plg3 base)
   #:use-module (ice-9 sandbox)
   #:use-module (srfi srfi-1)  ; fold-right
   #:use-module (srfi srfi-9)  ; define-record-type
   #:use-module (srfi srfi-11) ; let-values
-  #:use-module (srfi srfi-19) ; date, time, etc (used in scruple.c)
+  #:use-module (srfi srfi-19) ; date, time, etc (used in plg3.c)
   #:export (%cursor-open
             %execute
             %execute-with-receiver
@@ -846,10 +846,10 @@
      date->string
      string->date)))
 
-(define scruple-bindings
+(define plg3-bindings
   '(((guile)
      )
-    ((scruple base)
+    ((plg3 base)
      %cursor-open
      %execute
      %execute-with-receiver
@@ -999,4 +999,4 @@
   (append all-pure-and-impure-bindings
           bytevector-bindings
           srfi-19-bindings
-          scruple-bindings))
+          plg3-bindings))

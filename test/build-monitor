@@ -4,7 +4,7 @@ cd $(dirname $0)/..
 
 while true; do
 
-    inotifywait -e modify Makefile scruple--1.0.sql src/scruple.c src/scruple.scm test/tests.sql
+    inotifywait -e modify Makefile plg3--1.0.sql src/plg3.c src/plg3.scm test/tests.sql
 
     make && make install && pg_prove -U postgres test/tests.sql
 
