@@ -1,6 +1,6 @@
 begin;
 
-select plan(217);
+select plan(219);
 
 select lives_ok('create extension if not exists plg3', 'install (if not exists)');
 select lives_ok('drop extension plg3', 'de-install');
@@ -46,23 +46,31 @@ select is(f_double_in_out(12, 13), (-1, 156), 'protocol: inout params');
 create function f_small_sum(a smallint, b smallint) returns smallint as '(+ a b)'
 language guile3;
 
+create function f_x_int2_rational() returns smallint as '1/2'
+language guile3;
+
 create function f_x_int2_string() returns smallint as '"not an integer"'
 language guile3;
 
 select is(f_small_sum(1::smallint, 2::smallint), 3::smallint, 'int2: simple sum');
 select throws_ok(
   'select f_small_sum(32767::smallint, 1::smallint)',
-  'int2 result expected, not: 32768',
+  'out of range for int2: 32768',
   'int2: overflow check');
 
 select throws_ok(
   'select f_small_sum(-32767::smallint, -2::smallint)',
-  'int2 result expected, not: -32769',
+  'out of range for int2: -32769',
   'int2: underflow check');
 
 select throws_ok(
+  'select f_x_int2_rational()',
+  'wrong type, integer expected: 1/2',
+  'int2: exact check');
+
+select throws_ok(
   'select f_x_int2_string()',
-  'int2 result expected, not: "not an integer"',
+  'wrong type, integer expected: "not an integer"',
   'int2: wrong type check');
 
 --------------------------------------------------------------------------------
@@ -70,22 +78,30 @@ select throws_ok(
 -- Type int/int4
 --
 
+create function f_x_int4_rational() returns int4 as '1/2'
+language guile3;
+
 create function f_x_int4_string() returns int4 as '"not an integer"'
 language guile3;
 
 select throws_ok(
   'select f_sum(2147483647, 1)',
-  'int4 result expected, not: 2147483648',
+  'out of range for int4: 2147483648',
   'int4: overflow check');
 
 select throws_ok(
   'select f_sum(-2147483648, -1)',
-  'int4 result expected, not: -2147483649',
+  'out of range for int4: -2147483649',
   'int4: underflow check');
 
 select throws_ok(
+  'select f_x_int4_rational()',
+  'wrong type, integer expected: 1/2',
+  'int4: exact check');
+
+select throws_ok(
   'select f_x_int4_string()',
-  'int4 result expected, not: "not an integer"',
+  'wrong type, integer expected: "not an integer"',
   'int4: wrong type check');
 
 --------------------------------------------------------------------------------
@@ -102,17 +118,17 @@ language guile3;
 select is(f_big_sum(1::bigint, 2::bigint), 3::bigint, 'int8: simple sum');
 select throws_ok(
   'select f_big_sum(9223372036854775807::bigint, 1::bigint)',
-  'int8 result expected, not: 9223372036854775808',
+  'out of range for int8: 9223372036854775808',
   'int8: overflow check');
 
 select throws_ok(
   'select f_big_sum(-9223372036854775807::bigint, -2::bigint)',
-  'int8 result expected, not: -9223372036854775809',
+  'out of range for int8: -9223372036854775809',
   'int8: underflow check');
 
 select throws_ok(
   'select f_x_int8_string()',
-  'int8 result expected, not: "not an integer"',
+  'wrong type, integer expected: "not an integer"',
   'int8: wrong type check');
 
 --------------------------------------------------------------------------------
@@ -141,7 +157,7 @@ select is(f_rational_as_real(), 0.5::real, 'float4: auto convert from rational')
 
 select throws_ok(
   'select f_x_text_as_real()',
-  'number result expected, not: "not a number"',
+  'wrong type, number expected: "not a number"',
   'float4: wrong type check');
 
 select is(f_decimal_as_real(), 3.1415::real, 'float4: auto convert from decimal');
@@ -176,7 +192,7 @@ select is(f_rational_as_dp(), 0.5::double precision, 'float8: coerce rational');
 
 select throws_ok(
   'select f_x_text_as_dp()',
-  'number result expected, not: "not a number"',
+  'wrong type, number expected: "not a number"',
   'float8: wrong type check');
 
 select is(f_decimal_as_dp(), 3.1415::double precision, 'float8: auto convert from decimal');
@@ -270,17 +286,17 @@ from (select '2.28'::money) t(v);
 
 select throws_ok(
   'select f_x_money_inexact()',
-  'int8 result expected, not: 1.5',
+  'wrong type, integer expected: 1.5',
   'money: wrong type check, inexact');
 
 select throws_ok(
   'select f_x_money_rational()',
-  'int8 result expected, not: 13/5',
+  'wrong type, integer expected: 13/5',
   'money: wrong type check, rational');
 
 select throws_ok(
   'select f_x_money_string()',
-  'int8 result expected, not: "$1.25"',
+  'wrong type, integer expected: "$1.25"',
   'money: wrong type check, string');
 
 --------------------------------------------------------------------------------
@@ -296,7 +312,7 @@ select is(f_text_in('Hello, World!'), 13, 'text: text input');
 select is(f_text_out(13), '13', 'text: text output');
 select throws_ok(
        'select f_text_error(13)',
-       'string result expected, not: 13',
+       'wrong type, string expected: 13',
        'text: wrong return type check');
 
 --------------------------------------------------------------------------------
@@ -312,7 +328,7 @@ select is(f_char_in('Hello, World!'), 13, 'char: char input');
 select is(f_char_out(13), '13', 'char: char output');
 select throws_ok(
        'select f_char_error(13)',
-       'string result expected, not: 13',
+       'wrong type, string expected: 13',
        'char: wrong return type check');
 
 --------------------------------------------------------------------------------
@@ -328,7 +344,7 @@ select is(f_varchar_in('Hello, World!'), 13, 'varchar: varchar input');
 select is(f_varchar_out(13), '13', 'varchar: varchar output');
 select throws_ok(
        'select f_varchar_error(13)',
-       'string result expected, not: 13',
+       'wrong type, string expected: 13',
        'varchar: wrong return type check');
 
 --------------------------------------------------------------------------------

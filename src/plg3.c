@@ -1234,7 +1234,6 @@ HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
 		Form_pg_attribute attr = TupleDescAttr(tuple_desc, i);
 		SCM v = scm_c_vector_ref(attrs, i);
 
-		// TODO: handle attr->atttypmod
 		if (v == SCM_EOL)
 			ret_is_null[i] = true;
 		else
@@ -1995,13 +1994,9 @@ SCM compile_proc(HeapTuple proc_tuple, SCM module)
 
 	appendStringInfo(&buf, ")\n%s)", prosrc);
 
-	//module = find_or_create_module_for_role(owner_oid);
-
 	port = scm_open_input_string(scm_from_locale_string(buf.data));
 
 	scm_proc = untrusted_eval(scm_read(port), module);
-
-	/* ReleaseSysCache(proc_tuple); */
 
 	return scm_proc;
 }
@@ -2421,7 +2416,10 @@ SCM datum_int2_to_scm(Datum x, Oid type_oid)
 Datum scm_to_datum_int2(SCM x, Oid type_oid)
 {
 	if (!is_int2(x)) {
-		elog(ERROR, "int2 result expected, not: %s", scm_to_string(x));
+		if (!scm_is_integer(x))
+			elog(ERROR, "wrong type, integer expected: %s", scm_to_string(x));
+
+		elog(ERROR, "out of range for int2: %s", scm_to_string(x));
 	}
 
 	return Int16GetDatum(scm_to_short(x));
@@ -2435,7 +2433,10 @@ SCM datum_int4_to_scm(Datum x, Oid type_oid)
 Datum scm_to_datum_int4(SCM x, Oid type_oid)
 {
 	if (!is_int4(x)) {
-		elog(ERROR, "int4 result expected, not: %s", scm_to_string(x));
+		if (!scm_is_integer(x))
+			elog(ERROR, "wrong type, integer expected: %s", scm_to_string(x));
+
+		elog(ERROR, "out of range for int4: %s", scm_to_string(x));
 	}
 
 	return Int32GetDatum(scm_to_int32(x));
@@ -2449,7 +2450,10 @@ SCM datum_int8_to_scm(Datum x, Oid type_oid)
 Datum scm_to_datum_int8(SCM x, Oid type_oid)
 {
 	if (!is_int8(x)) {
-		elog(ERROR, "int8 result expected, not: %s", scm_to_string(x));
+		if (!scm_is_integer(x))
+			elog(ERROR, "wrong type, integer expected: %s", scm_to_string(x));
+
+		elog(ERROR, "out of range for int8: %s", scm_to_string(x));
 	}
 
 	return Int64GetDatum(scm_to_int64(x));
@@ -2469,7 +2473,7 @@ Datum scm_to_datum_float4(SCM x, Oid type_oid)
 		return Float4GetDatum(scm_to_double(scm_call_1(decimal_to_inexact_proc, x)));
 
 	else {
-		elog(ERROR, "number result expected, not: %s", scm_to_string(x));
+		elog(ERROR, "wrong type, number expected: %s", scm_to_string(x));
 	}
 }
 
@@ -2487,7 +2491,7 @@ Datum scm_to_datum_float8(SCM x, Oid type_oid)
 		return Float8GetDatum(scm_to_double(scm_call_1(decimal_to_inexact_proc, x)));
 
 	else {
-		elog(ERROR, "number result expected, not: %s", scm_to_string(x));
+		elog(ERROR, "wrong type, number expected: %s", scm_to_string(x));
 	}
 }
 
@@ -2505,7 +2509,7 @@ Datum scm_to_datum_record(SCM result, Oid ignored)
 	TupleDesc tuple_desc;
 
 	if (!is_record(result))
-		elog(ERROR, "record result expected, not: %s", scm_to_string(result));
+		elog(ERROR, "wrong type, record expected: %s", scm_to_string(result));
 
 	data = scm_call_1(record_attrs_proc, result);
 	len = scm_c_vector_length(data);
@@ -2550,9 +2554,8 @@ Datum scm_to_datum_text(SCM x, Oid type_oid)
 	text *pg_text;
 	Datum text_datum;
 
-	if (!scm_is_string(x)) {
-		elog(ERROR, "string result expected, not: %s", scm_to_string(x));
-	}
+	if (!scm_is_string(x))
+		elog(ERROR, "wrong type, string expected: %s", scm_to_string(x));
 
 	cstr = scm_to_locale_string(x);
 	pg_text = cstring_to_text(cstr);
@@ -2609,50 +2612,46 @@ SCM datum_timestamptz_to_scm(Datum x, Oid type_oid)
 	fsec_t msec;
 	int tz_offset;
 
-	if (timestamp2tm(timestamp, &tz_offset, &tm, &msec, NULL, NULL)) {
+	if (timestamp2tm(timestamp, &tz_offset, &tm, &msec, NULL, NULL))
+		elog(ERROR, "invalid timestamp datum");
 
-		elog(ERROR, "Invalid timestamp");
-		return SCM_BOOL_F; // Shouldn't reach here; just to satisfy the compiler
-	}
-	else {
-		return scm_call_8(
-			make_date_proc,
-			scm_from_long(msec * 1000),
-			scm_from_int(tm.tm_sec),
-			scm_from_int(tm.tm_min),
-			scm_from_int(tm.tm_hour),
-			scm_from_int(tm.tm_mday),
-			scm_from_int(tm.tm_mon),
-			scm_from_int(tm.tm_year),
-			scm_from_int(tz_offset));
-	}
+	return scm_call_8(
+		make_date_proc,
+		scm_from_long(msec * 1000),
+		scm_from_int(tm.tm_sec),
+		scm_from_int(tm.tm_min),
+		scm_from_int(tm.tm_hour),
+		scm_from_int(tm.tm_mday),
+		scm_from_int(tm.tm_mon),
+		scm_from_int(tm.tm_year),
+		scm_from_int(tz_offset));
 }
 
 Datum scm_to_datum_timestamptz(SCM x, Oid type_oid)
 {
-	if (!is_date(x)) {
-		elog(ERROR, "date result expected, not: %s", scm_to_string(x));
-	}
+	if (!is_date(x))
+		elog(ERROR, "wrong type, date expected: %s", scm_to_string(x));
+
 	else {
 		// Extract the individual components of the SRFI-19 date object
 		SCM nanosecond_scm = scm_call_1(date_nanosecond_proc, x);
 		SCM tz_offset_scm  = scm_call_1(date_zone_offset_proc, x);
-		SCM year_scm    = scm_call_1(date_year_proc, x);
-		SCM month_scm    = scm_call_1(date_month_proc, x);
-		SCM day_scm     = scm_call_1(date_day_proc, x);
-		SCM hour_scm    = scm_call_1(date_hour_proc, x);
-		SCM minute_scm    = scm_call_1(date_minute_proc, x);
-		SCM second_scm    = scm_call_1(date_second_proc, x);
+		SCM year_scm       = scm_call_1(date_year_proc, x);
+		SCM month_scm      = scm_call_1(date_month_proc, x);
+		SCM day_scm        = scm_call_1(date_day_proc, x);
+		SCM hour_scm       = scm_call_1(date_hour_proc, x);
+		SCM minute_scm     = scm_call_1(date_minute_proc, x);
+		SCM second_scm     = scm_call_1(date_second_proc, x);
 
 		// Convert from Scheme values to C types
 		long nanoseconds = scm_to_long(nanosecond_scm);
-		int tz_offset  = scm_to_int(tz_offset_scm);
-		int year   = scm_to_int(year_scm);
-		int month   = scm_to_int(month_scm);
-		int day    = scm_to_int(day_scm);
-		int hour   = scm_to_int(hour_scm);
-		int minute   = scm_to_int(minute_scm);
-		int second   = scm_to_int(second_scm);
+		int tz_offset    = scm_to_int(tz_offset_scm);
+		int year         = scm_to_int(year_scm);
+		int month        = scm_to_int(month_scm);
+		int day          = scm_to_int(day_scm);
+		int hour         = scm_to_int(hour_scm);
+		int minute       = scm_to_int(minute_scm);
+		int second       = scm_to_int(second_scm);
 
 		// Convert nanoseconds to fractional seconds (microseconds)
 		fsec_t msec = nanoseconds / 1000;
@@ -2667,13 +2666,10 @@ Datum scm_to_datum_timestamptz(SCM x, Oid type_oid)
 		tm.tm_min  = minute;
 		tm.tm_sec  = second;
 
-		if (tm2timestamp(&tm, msec, &tz_offset, &timestamp) == 0) {
-			return TimestampTzGetDatum(timestamp);
-		}
-		else {
+		if (tm2timestamp(&tm, msec, &tz_offset, &timestamp))
 			elog(ERROR, "Invalid date components");
-			return 0; // Shouldn't reach here; just to satisfy the compiler
-		}
+
+		return TimestampTzGetDatum(timestamp);
 	}
 }
 
@@ -2684,19 +2680,19 @@ SCM datum_date_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_date(SCM x, Oid type_oid)
 {
-	if (!is_date(x)) {
-		elog(ERROR, "date result expected, not: %s", scm_to_string(x));
-	}
+	if (!is_date(x))
+		elog(ERROR, "wrong type, date expected: %s", scm_to_string(x));
+
 	else {
 		// Extract the individual components of the SRFI-19 date object
-		SCM year_scm    = scm_call_1(date_year_proc, x);
-		SCM month_scm    = scm_call_1(date_month_proc, x);
-		SCM day_scm     = scm_call_1(date_day_proc, x);
+		SCM year_scm  = scm_call_1(date_year_proc, x);
+		SCM month_scm = scm_call_1(date_month_proc, x);
+		SCM day_scm   = scm_call_1(date_day_proc, x);
 
 		// Convert from Scheme values to C types
-		int year   = scm_to_int(year_scm);
-		int month   = scm_to_int(month_scm);
-		int day    = scm_to_int(day_scm);
+		int year  = scm_to_int(year_scm);
+		int month = scm_to_int(month_scm);
+		int day   = scm_to_int(day_scm);
 
 		return DateADTGetDatum(date2j(year, month, day) - POSTGRES_EPOCH_JDATE);
 	}
@@ -2707,25 +2703,21 @@ SCM datum_time_to_scm(Datum x, Oid type_oid)
 	struct pg_tm tm;
 	fsec_t msec;
 
-	if (time2tm(DatumGetTimeADT(x), &tm, &msec) == 0) {
-		return scm_call_3(
-			make_time_proc,
-			time_monotonic_symbol,
-			scm_from_long(msec * 1000),
-			scm_from_int(tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600));
-	}
-	else {
-		elog(ERROR, "Invalid time");
-		return SCM_BOOL_F; // Shouldn't reach here; just to satisfy the compiler
-	}
+	if (time2tm(DatumGetTimeADT(x), &tm, &msec))
+		elog(ERROR, "invalid time datum");
+
+	return scm_call_3(
+		make_time_proc,
+		time_monotonic_symbol,
+		scm_from_long(msec * 1000),
+		scm_from_int(tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600));
 }
 
 Datum scm_to_datum_time(SCM x, Oid type_oid)
 {
-	if (!is_time(x)) {
-		elog(ERROR, "time result expected, not: %s", scm_to_string(x));
-		return 0; // Shouldn't reach here; just to satisfy the compiler
-	}
+	if (!is_time(x))
+		elog(ERROR, "wrong type, time expected: %s", scm_to_string(x));
+
 	else {
 		int seconds = scm_to_int(scm_call_1(time_second_proc, x));
 		int nanoseconds = scm_to_int(scm_call_1(time_nanosecond_proc, x));
@@ -2743,51 +2735,43 @@ Datum scm_to_datum_time(SCM x, Oid type_oid)
 		tm.tm_min  = (seconds % 3600) / 60;
 		tm.tm_sec  = seconds % 60;
 
-		if (tm2time(&tm, msec, &time) == 0) {
-			return TimeADTGetDatum(time);
-		}
-		else {
+		if (tm2time(&tm, msec, &time))
 			elog(ERROR, "Invalid date components");
-			return 0; // Shouldn't reach here; just to satisfy the compiler
-		}
+
+		return TimeADTGetDatum(time);
 	}
 }
 
 SCM datum_timetz_to_scm(Datum x, Oid type_oid)
 {
-	TimeTzADT *ttz;
+	TimeTzADT *ttz = DatumGetTimeTzADTP(x);
+
+	struct pg_tm tm;
 	fsec_t msec;
 	int tz;
-	struct pg_tm tm;
 
-	/* Extract TimeTz struct from the input Datum */
-	ttz = DatumGetTimeTzADTP(x);
+	int secs;
 
-	if (timetz2tm(ttz, &tm, &msec, &tz) == 0) {
-
-		int secs = (tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600 + tz) % SECS_PER_DAY;
-
-		if (secs < 0)
-			secs += SECS_PER_DAY;
-
-		return scm_call_3(
-			make_time_proc,
-			time_monotonic_symbol,
-			scm_from_long(msec * 1000),
-			scm_from_int(secs));
-	}
-	else {
+	if (timetz2tm(ttz, &tm, &msec, &tz))
 		elog(ERROR, "Invalid time");
-		return SCM_BOOL_F; // Shouldn't reach here; just to satisfy the compiler
-	}
+
+	secs = (tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600 + tz) % SECS_PER_DAY;
+
+	if (secs < 0)
+		secs += SECS_PER_DAY;
+
+	return scm_call_3(
+		make_time_proc,
+		time_monotonic_symbol,
+		scm_from_long(msec * 1000),
+		scm_from_int(secs));
 }
 
 Datum scm_to_datum_timetz(SCM x, Oid type_oid)
 {
-	if (!is_time(x)) {
-		elog(ERROR, "time result expected, not: %s", scm_to_string(x));
-		return 0; // Shouldn't reach here; just to satisfy the compiler
-	}
+	if (!is_time(x))
+		elog(ERROR, "wrong type, time expected: %s", scm_to_string(x));
+
 	else {
 		TimeTzADT *result = (TimeTzADT *) palloc(sizeof(TimeTzADT));
 

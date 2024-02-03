@@ -30,7 +30,8 @@ happy path to include corner, edge, and adversarial cases.
 At version 0.20.0 the extension will be functionally complete. This
 will be the alpha release.
 
-The 0.21.x versions will refine and refactor plg3.scm.
+The 0.21.x versions will reorganize, refactor, refine, and document
+plg3.c and plg3.scm.
 
 The 0.23.x versions will include an extensive test campaign covering
 load, concurrency, session isolation, memory correctness, fuzzing,
