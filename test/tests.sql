@@ -248,27 +248,27 @@ select throws_ok(
 
 select throws_ok(
   'select f_x_bad_decimal_1()',
-  'invalid decimal result: #<decimal digits: "a" scale: 0>',
+  '%exception: ((invalid-decimal #:digits "a" #:scale 0))',
   'decimal: wrong type check, string');
 
 select throws_ok(
   'select f_x_bad_decimal_2()',
-  'invalid decimal result: #<decimal digits: 0.5 scale: 0>',
+  '%exception: ((invalid-decimal #:digits 0.5 #:scale 0))',
   'decimal: wrong type check, string');
 
 select throws_ok(
   'select f_x_bad_decimal_3()',
-  'invalid decimal result: #<decimal digits: 5 scale: -1>',
+  '%exception: ((invalid-decimal #:digits 5 #:scale -1))',
   'decimal: wrong type check, string');
 
 select throws_ok(
   'select f_x_bad_decimal_4()',
-  'invalid decimal result: #<decimal digits: 5 scale: 0.2>',
+  '%exception: ((invalid-decimal #:digits 5 #:scale 0.2))',
   'decimal: wrong type check, string');
 
 select throws_ok(
   'select f_x_bad_decimal_5()',
-  'invalid decimal result: #<decimal digits: 5 scale: "2">',
+  '%exception: ((invalid-decimal #:digits 5 #:scale "2"))',
   'decimal: wrong type check, string');
 
 --------------------------------------------------------------------------------

@@ -193,7 +193,6 @@ static bool is_circle(SCM x);
 static bool is_cursor(SCM x);
 static bool is_date(SCM x);
 static bool is_decimal(SCM x);
-static bool is_valid_decimal(SCM x);
 static bool is_inet(SCM x);
 static bool is_int2(SCM x);
 static bool is_int4(SCM x);
@@ -318,6 +317,8 @@ static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
 static FetchDirection scm_to_fetch_direction(SCM direction);
 static long scm_to_fetch_count(SCM count);
 static SCM apply_with_limits(SCM proc, SCM args);
+static SCM apply_with_limits_inner(void *data);
+static SCM apply_with_limits_error_handler(void *data, SCM key, SCM args);
 static SCM find_cached_proc(HeapTuple proc_tuple);
 static SCM compile_and_cache_proc(HeapTuple proc_tuple);
 static SCM hash_proc_source(HeapTuple proc_tuple);
@@ -393,7 +394,6 @@ static SCM is_table_proc;
 static SCM is_time_proc;
 static SCM is_tsquery_proc;
 static SCM is_tsvector_proc;
-static SCM is_valid_decimal_proc;
 static SCM jsonb_expr_proc;
 static SCM jsonpath_expr_proc;
 static SCM jsonpath_is_strict_proc;
@@ -766,7 +766,6 @@ void _PG_init(void)
 	is_time_proc                = eval_scheme_string("time?", plg3_base_module);
 	is_tsquery_proc             = eval_scheme_string("tsquery?", plg3_base_module);
 	is_tsvector_proc            = eval_scheme_string("tsvector?", plg3_base_module);
-	is_valid_decimal_proc       = eval_scheme_string("valid-decimal?", plg3_base_module);
 	jsonb_expr_proc             = eval_scheme_string("jsonb-expr", plg3_base_module);
 	jsonpath_expr_proc          = eval_scheme_string("jsonpath-expr", plg3_base_module);
 	jsonpath_is_strict_proc     = eval_scheme_string("jsonpath-strict?", plg3_base_module);
@@ -1276,7 +1275,24 @@ SCM apply_with_limits(SCM proc, SCM args)
 	time_limit = scm_from_double(limits.time_seconds);
 	allocation_limit = scm_from_int64(limits.allocation_bytes);
 
-	return scm_call_4(apply_with_limits_proc, proc, args, time_limit, allocation_limit);
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        apply_with_limits_inner,
+        (void *)scm_list_4(proc, args, time_limit, allocation_limit),
+        apply_with_limits_error_handler,
+        NULL);
+
+	// return scm_call_4(apply_with_limits_proc, proc, args, time_limit, allocation_limit);
+}
+
+SCM apply_with_limits_inner(void *data)
+{
+	return scm_apply_0(apply_with_limits_proc, (SCM)data);
+}
+
+SCM apply_with_limits_error_handler(void *data, SCM key, SCM args)
+{
+	elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
 }
 
 CallLimits *get_call_limits(CallLimits *limits)
@@ -2841,10 +2857,7 @@ Datum scm_to_datum_numeric(SCM x, Oid type_oid)
 	char *numeric_str = NULL;
 
 	if (is_decimal(x)) {
-		if (is_valid_decimal(x))
-			numeric_str = scm_to_locale_string(scm_call_1(decimal_to_string_proc, x));
-		else
-			elog(ERROR, "invalid decimal result: %s", scm_to_string(x));
+		numeric_str = scm_to_locale_string(scm_call_1(decimal_to_string_proc, x));
 	}
 	else if (scm_is_number(x)) {
 		if (scm_is_real(x)) {
@@ -2908,10 +2921,8 @@ Datum scm_to_datum_point(SCM x, Oid type_oid)
 	Point *point;
 
 	if (is_point(x)) {
-
 		scm_x = scm_call_1(point_x_proc, x);
 		scm_y = scm_call_1(point_y_proc, x);
-
 	}
 	else {
 		if (!scm_is_vector(x) || scm_c_vector_length(x) != 2)
@@ -5187,11 +5198,6 @@ bool is_tsquery(SCM x)
 bool is_tsvector(SCM x)
 {
 	return scm_is_true(scm_call_1(is_tsvector_proc, x));
-}
-
-bool is_valid_decimal(SCM x)
-{
-	return scm_is_true(scm_call_1(is_valid_decimal_proc, x));
 }
 
 Datum datum_date_to_timestamptz(Datum x)

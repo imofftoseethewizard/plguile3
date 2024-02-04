@@ -231,12 +231,6 @@
   (type boxed-datum-type)
   (value boxed-datum-value))
 
-(define-record-type decimal
-  (make-decimal digits scale)
-  decimal?
-  (digits decimal-digits)
-  (scale decimal-scale))
-
 (define-record-type record
   (make-record types attrs attr-names attr-names-hash)
   record?
@@ -283,6 +277,25 @@
       (raise-exception `(non-scalar-result #:length ,(table-length t) #:width ,(table-width t))))
   (record-ref (table-row t 0) 0))
 
+(define-record-type decimal
+  (%make-decimal digits scale)
+  decimal?
+  (digits decimal-digits)
+  (scale decimal-scale))
+
+(define (make-decimal digits scale)
+  (if (or
+       (equal? digits "NaN")
+       (equal? digits "Infinity")
+       (equal? digits "-Infinity")
+       (and (number? digits)
+            (exact-integer? digits)
+            (number? scale)
+            (exact-integer? scale)
+            (>= scale 0)))
+      (%make-decimal digits scale)
+      (raise-exception `(invalid-decimal #:digits ,digits #:scale ,scale))))
+
 (define (string->decimal s)
   (cond
    ((string=? s "NaN")       (make-decimal s 0))
@@ -321,20 +334,6 @@
                                                 f)
                                           "")))
                      ""))))))
-
-(define (valid-decimal? d)
-  (and (decimal? d)
-       (let ((digits (decimal-digits d))
-             (scale (decimal-scale d)))
-         (or
-          (equal? digits "NaN")
-          (equal? digits "Infinity")
-          (equal? digits "-Infinity")
-          (and (number? digits)
-               (exact-integer? digits)
-               (number? scale)
-               (exact-integer? scale)
-               (>= scale 0))))))
 
 (define (decimal->inexact d)
   (let ((digits (decimal-digits d))
