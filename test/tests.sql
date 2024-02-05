@@ -213,7 +213,7 @@ create function f_neg_inf_as_numeric() returns numeric as '-inf.0' language guil
 create function f_rational_as_numeric() returns numeric as '1/2' language guile3;
 create function f_large_real_as_numeric() returns numeric as '6.02e23' language guile3;
 create function f_x_string_as_numeric() returns numeric as '"not a number"' language guile3;
-create function f_x_bad_decimal_1() returns numeric as '(make-decimal "a" 0)' language guile3;
+create function f_x_bad_decimal_1() returns numeric as '(define (r) (make-decimal "a" 0)) (r)' language guile3;
 create function f_x_bad_decimal_2() returns numeric as '(make-decimal 0.5 0)' language guile3;
 create function f_x_bad_decimal_3() returns numeric as '(make-decimal 5 -1)' language guile3;
 create function f_x_bad_decimal_4() returns numeric as '(make-decimal 5 0.2)' language guile3;
@@ -249,27 +249,27 @@ select throws_ok(
 select throws_ok(
   'select f_x_bad_decimal_1()',
   '%exception: ((invalid-decimal #:digits "a" #:scale 0))',
-  'decimal: wrong type check, string');
+  'decimal: bad decimal 1');
 
 select throws_ok(
   'select f_x_bad_decimal_2()',
   '%exception: ((invalid-decimal #:digits 0.5 #:scale 0))',
-  'decimal: wrong type check, string');
+  'decimal: bad decimal 2');
 
 select throws_ok(
   'select f_x_bad_decimal_3()',
   '%exception: ((invalid-decimal #:digits 5 #:scale -1))',
-  'decimal: wrong type check, string');
+  'decimal: bad decimal 3');
 
 select throws_ok(
   'select f_x_bad_decimal_4()',
   '%exception: ((invalid-decimal #:digits 5 #:scale 0.2))',
-  'decimal: wrong type check, string');
+  'decimal: bad decimal 4');
 
 select throws_ok(
   'select f_x_bad_decimal_5()',
   '%exception: ((invalid-decimal #:digits 5 #:scale "2"))',
-  'decimal: wrong type check, string');
+  'decimal: bad decimal 5');
 
 --------------------------------------------------------------------------------
 --

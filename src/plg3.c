@@ -319,6 +319,7 @@ static long scm_to_fetch_count(SCM count);
 static SCM apply_with_limits(SCM proc, SCM args);
 static SCM apply_with_limits_inner(void *data);
 static SCM apply_with_limits_error_handler(void *data, SCM key, SCM args);
+static SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args);
 static SCM find_cached_proc(HeapTuple proc_tuple);
 static SCM compile_and_cache_proc(HeapTuple proc_tuple);
 static SCM hash_proc_source(HeapTuple proc_tuple);
@@ -1275,12 +1276,12 @@ SCM apply_with_limits(SCM proc, SCM args)
 	time_limit = scm_from_double(limits.time_seconds);
 	allocation_limit = scm_from_int64(limits.allocation_bytes);
 
-    return scm_internal_catch(
+    return scm_c_catch(
         SCM_BOOL_T,
         apply_with_limits_inner,
         (void *)scm_list_4(proc, args, time_limit, allocation_limit),
-        apply_with_limits_error_handler,
-        NULL);
+        apply_with_limits_error_handler, NULL,
+        apply_with_limits_pre_unwind_handler, NULL);
 
 	// return scm_call_4(apply_with_limits_proc, proc, args, time_limit, allocation_limit);
 }
@@ -1292,7 +1293,48 @@ SCM apply_with_limits_inner(void *data)
 
 SCM apply_with_limits_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
+	SCM port = scm_open_output_string();
+	SCM stack = scm_make_stack(SCM_BOOL_T, SCM_EOL);
+	SCM output;
+	char *backtrace, *c_str_backtrace;
+
+	if (scm_to_int(scm_stack_length(stack)) <= 1)
+		elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
+	else {
+		scm_display_backtrace(stack, port, SCM_INUM1, SCM_BOOL_F);
+
+		output = scm_get_output_string(port);
+		c_str_backtrace = scm_to_locale_string(output);
+		backtrace = pstrdup(c_str_backtrace);
+
+		free(c_str_backtrace);
+
+		elog(ERROR, "%s: %s\n%s", scm_to_string(key), scm_to_string(args), backtrace);
+	}
+}
+
+SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args)
+{
+	SCM port = scm_open_output_string();
+	SCM stack = scm_make_stack(SCM_BOOL_T, SCM_EOL);
+	SCM output;
+	char *backtrace, *c_str_backtrace;
+	int frame_count = scm_to_int(scm_stack_length(stack));
+
+	if (scm_to_int(scm_stack_length(stack)) >= 7) {
+
+		scm_display_backtrace(stack, port, SCM_INUM1, scm_from_int(frame_count-5));
+
+		output = scm_get_output_string(port);
+		c_str_backtrace = scm_to_locale_string(output);
+		backtrace = pstrdup(c_str_backtrace);
+
+		free(c_str_backtrace);
+
+		elog(NOTICE, "%s: %s\n%s", scm_to_string(key), scm_to_string(args), backtrace);
+	}
+
+	return SCM_BOOL_F;
 }
 
 CallLimits *get_call_limits(CallLimits *limits)

@@ -294,7 +294,7 @@
             (exact-integer? scale)
             (>= scale 0)))
       (%make-decimal digits scale)
-      (raise-exception `(invalid-decimal #:digits ,digits #:scale ,scale))))
+      (raise-exception `(invalid-decimal #:digits ,digits #:scale ,scale) #:continuable? #t)))
 
 (define (string->decimal s)
   (cond
