@@ -1271,6 +1271,11 @@ SCM apply_with_limits(SCM proc, SCM args)
 	CallLimits limits;
 	SCM time_limit, allocation_limit;
 
+	// Used to communicate between the pre-unwind handler, which
+	// captures the backtrace, and the error handler, which displays
+	// it.
+	SCM backtrace = SCM_BOOL_F;
+
 	get_call_limits(&limits);
 
 	time_limit = scm_from_double(limits.time_seconds);
@@ -1280,10 +1285,8 @@ SCM apply_with_limits(SCM proc, SCM args)
         SCM_BOOL_T,
         apply_with_limits_inner,
         (void *)scm_list_4(proc, args, time_limit, allocation_limit),
-        apply_with_limits_error_handler, NULL,
-        apply_with_limits_pre_unwind_handler, NULL);
-
-	// return scm_call_4(apply_with_limits_proc, proc, args, time_limit, allocation_limit);
+        apply_with_limits_error_handler, &backtrace,
+        apply_with_limits_pre_unwind_handler, &backtrace);
 }
 
 SCM apply_with_limits_inner(void *data)
@@ -1293,45 +1296,39 @@ SCM apply_with_limits_inner(void *data)
 
 SCM apply_with_limits_error_handler(void *data, SCM key, SCM args)
 {
-	SCM port = scm_open_output_string();
-	SCM stack = scm_make_stack(SCM_BOOL_T, SCM_EOL);
-	SCM output;
-	char *backtrace, *c_str_backtrace;
+	SCM backtrace = *(SCM *)data;
 
-	if (scm_to_int(scm_stack_length(stack)) <= 1)
+	if (backtrace == SCM_BOOL_F)
 		elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
 	else {
-		scm_display_backtrace(stack, port, SCM_INUM1, SCM_BOOL_F);
-
-		output = scm_get_output_string(port);
-		c_str_backtrace = scm_to_locale_string(output);
-		backtrace = pstrdup(c_str_backtrace);
+		char *p_str_backtrace, *c_str_backtrace;
+		c_str_backtrace = scm_to_locale_string(backtrace);
+		p_str_backtrace = pstrdup(c_str_backtrace);
 
 		free(c_str_backtrace);
 
-		elog(ERROR, "%s: %s\n%s", scm_to_string(key), scm_to_string(args), backtrace);
+		elog(ERROR, "%s: %s\n%s", scm_to_string(key), scm_to_string(args), p_str_backtrace);
 	}
 }
 
 SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args)
 {
-	SCM port = scm_open_output_string();
+	// The bottom of the stack contains frames for calls of protective
+	// procedures: with-exception-handler, call-with-time-limit, etc.
+	// Omit these from any backtrace shown to the user.
+	const int internal_frame_count = 7;
+
 	SCM stack = scm_make_stack(SCM_BOOL_T, SCM_EOL);
-	SCM output;
-	char *backtrace, *c_str_backtrace;
-	int frame_count = scm_to_int(scm_stack_length(stack));
+	int frame_count = scm_to_int(scm_stack_length(stack)) - internal_frame_count;
 
-	if (scm_to_int(scm_stack_length(stack)) >= 7) {
+	if (frame_count > 0) {
 
-		scm_display_backtrace(stack, port, SCM_INUM1, scm_from_int(frame_count-5));
+		SCM port = scm_open_output_string();
 
-		output = scm_get_output_string(port);
-		c_str_backtrace = scm_to_locale_string(output);
-		backtrace = pstrdup(c_str_backtrace);
+		scm_display_backtrace(stack, port, SCM_INUM1, scm_from_int(frame_count));
 
-		free(c_str_backtrace);
-
-		elog(NOTICE, "%s: %s\n%s", scm_to_string(key), scm_to_string(args), backtrace);
+		*(SCM *)data = scm_get_output_string(port);
+		scm_close_port(port);
 	}
 
 	return SCM_BOOL_F;
