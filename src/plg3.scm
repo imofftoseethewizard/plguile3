@@ -697,6 +697,9 @@
                    #:module module
                    #:sever-module? #f))
 
+(define exception-bindings
+  '(()))
+
 (define bytevector-bindings
   '(((guile)
      string-utf8-length)
@@ -847,7 +850,7 @@
 
 (define plg3-bindings
   '(((guile)
-     )
+     with-exception-handler)
     ((plg3 base)
      %cursor-open
      %execute

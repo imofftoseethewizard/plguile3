@@ -1,6 +1,6 @@
 begin;
 
-select plan(219);
+select plan(220);
 
 select lives_ok('create extension if not exists plg3', 'install (if not exists)');
 select lives_ok('drop extension plg3', 'de-install');
@@ -1094,6 +1094,14 @@ create function f_execute_with_args_posint() returns posint as $$
 $$
 language guile3;
 
+create function f_execute_wrong_type_command() returns text as $$
+(with-exception-handler
+  (lambda (exc) "bad command")
+  (lambda () (execute 5))
+  #:unwind? #t)
+$$
+language guile3;
+
 select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
 select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
 select is(f_execute_with_args_int8(), 3::int8, 'execute: with args int8');
@@ -1146,6 +1154,8 @@ select is(f_execute_with_args_posint(), 14::posint, 'execute: with args posint')
 
 select is(f_execute_with_args_boolrange(), '[false, true]'::boolrange, 'execute: with args boolrange');
 select is(f_execute_with_args_int4multirange(), '{[3,7), [8,9)}'::int4multirange, 'execute: with args int4multirange');
+
+select is(f_execute_wrong_type_command(), 'bad command', 'execute: wrong_type_command');
 
 create table things (id int, name text);
 insert into things values (1, 'foo'), (2, 'bar');

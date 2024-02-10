@@ -307,6 +307,8 @@ static SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid);
 static char scm_range_flags_to_char(SCM range);
 static SCM stop_command_execution(void);
 static SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read_only, SCM count);
+static void throw_wrong_argument_type(const char *param_name, const char *type, SCM v);
+static void throw_runtime_error(const char *format, ...);
 static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
@@ -5309,19 +5311,19 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 	SCM rows_processed;
 	SCM table;
 
-	if (!scm_is_string(command)) {
-		// TODO
-	}
+	if (!scm_is_string(command))
+		throw_wrong_argument_type("command", "string", command);
 
-	if (!scm_is_bool(read_only)) {
-		// TODO
-	}
+	if (!scm_is_bool(read_only))
+		throw_wrong_argument_type("read-only", "boolean", read_only);
 
-	if (!scm_is_exact(count) || scm_to_bool(scm_negative_p(count))) {
-		// TODO
-	}
+	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
+		throw_wrong_argument_type("count", "non-negative integer", count);
 
-	SPI_connect();
+	ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
 	if (args == SCM_EOL)
 		ret = SPI_execute(
@@ -5417,6 +5419,28 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 	return scm_values(scm_list_2(table, rows_processed));
 }
 
+void throw_wrong_argument_type(const char *param_name, const char *type, SCM v) {
+	SCM error_symbol = scm_from_utf8_symbol("wrong-argument-type");
+	SCM arg_name_symbol = scm_from_utf8_symbol(param_name);
+	SCM expected_type_desc = scm_from_locale_string(type);
+	SCM args = scm_list_3(arg_name_symbol, expected_type_desc, v);
+	scm_throw(error_symbol, args);
+}
+
+void throw_runtime_error(const char *format, ...) {
+	va_list varags;
+	char buffer[1000];
+
+	SCM error_symbol = scm_from_utf8_symbol("runtime-error");
+	SCM message, args;
+
+	vsnprintf(buffer, sizeof(buffer), format, varags);
+
+	message = scm_from_locale_string(buffer);
+	args = scm_list_1(message);
+	scm_throw(error_symbol, args);
+}
+
 SCM stop_command_execution()
 {
 	return stop_marker;
@@ -5437,22 +5461,21 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	int nargs = scm_to_int(scm_length(args));
 	Oid *arg_types = NULL;
 
+	int ret;
 	SPIPlanPtr plan;
 	SPIExecuteOptions options = {0};
 
-	// TODO check receiver_proc is callable
+	if (scm_procedure_p(receiver_proc) == SCM_BOOL_F)
+		throw_wrong_argument_type("receiver-proc", "procedure", receiver_proc);
 
-	if (!scm_is_string(command)) {
-		// TODO
-	}
+	if (!scm_is_string(command))
+		throw_wrong_argument_type("command", "string", command);
 
-	if (!scm_is_bool(read_only)) {
-		// TODO
-	}
+	if (!scm_is_bool(read_only))
+		throw_wrong_argument_type("read-only", "boolean", read_only);
 
-	if (!scm_is_exact(count) || scm_to_bool(scm_negative_p(count))) {
-		// TODO
-	}
+	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
+		throw_wrong_argument_type("count", "non-negative integer", count);
 
 	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
 	param_list->numParams = nargs;
@@ -5488,7 +5511,10 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 
 	dest.result = dest.tail = scm_cons(SCM_EOL, SCM_EOL);
 
-	SPI_connect();
+	ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
 	plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
 
@@ -5553,16 +5579,15 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	int nargs = scm_to_int(scm_length(args));
 	Oid *arg_types = NULL;
 
+	int ret;
 	char *name_cstr;
 	SCM cursor;
 
-	if (!scm_is_string(command)) {
-		// TODO
-	}
+	if (!scm_is_string(command))
+		throw_wrong_argument_type("command", "string", command);
 
-	if (!scm_is_bool(read_only)) {
-		// TODO
-	}
+	if (!scm_is_bool(read_only))
+		throw_wrong_argument_type("read-only", "boolean", read_only);
 
 	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
 	param_list->numParams = nargs;
@@ -5593,7 +5618,10 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	options.read_only     = scm_to_bool(read_only);
 	options.cursorOptions = CURSOR_OPT_BINARY;
 
-	SPI_connect();
+	ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
 	name_cstr = name == SCM_BOOL_F ? NULL : scm_to_locale_string(name);
 
@@ -5612,22 +5640,27 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 {
 	const char *name;
+	int ret;
 	Portal portal;
 
 	TupleDesc tuple_desc;
 	SCM attr_names, attr_names_hash, records, type_names;
 
-	SPI_connect();
-
 	if (!is_cursor(cursor))
-		elog(ERROR, "TODO");
+		throw_wrong_argument_type("cursor", "cursor", cursor);
 
 	name = scm_to_locale_string(scm_call_1(cursor_name_proc, cursor));
+
+	ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
 	portal = SPI_cursor_find(name);
 
 	if (portal == NULL) {
-		elog(ERROR, "spi_cursor_fetch: no such cursor: %s", name);
+		SPI_finish();
+		throw_runtime_error("no such cursor: %s", name);
 	}
 
 	SPI_scroll_cursor_fetch(portal, scm_to_fetch_direction(direction), scm_to_fetch_count(count));
@@ -5676,13 +5709,20 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 SCM spi_cursor_move(SCM cursor, SCM direction, SCM count)
 {
 	const char *name = (const char *)scm_foreign_object_ref(cursor, 0);
+	int ret;
 	Portal portal;
 
-	SPI_connect();
+	ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
 	portal = SPI_cursor_find(name);
 
-	// TODO handle NULL
+	if (portal == NULL) {
+		SPI_finish();
+		throw_runtime_error("no such cursor: %s", name);
+	}
 
 	SPI_scroll_cursor_move(portal, scm_to_fetch_direction(direction), scm_to_fetch_count(count));
 
