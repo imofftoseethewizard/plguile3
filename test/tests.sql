@@ -1,6 +1,6 @@
 begin;
 
-select plan(220);
+select plan(221);
 
 select lives_ok('create extension if not exists plg3', 'install (if not exists)');
 select lives_ok('drop extension plg3', 'de-install');
@@ -1221,6 +1221,15 @@ do $$
 $$ language guile3;
 
 select ok((select count(*) from do_stuff) = 1, 'basic inline call test');
+
+create function f_x_nested() returns int as $$
+ (execute "do ' begin raise exception ''nested error''; end; ' language plpgsql;")
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_nested()',
+  'execute-error: ("P0001" "nested error" #f #f)',
+  'nested error handling');
 
 -- select is(plg3_get_default_forms(), '{}'::text[], 'default forms initial');
 

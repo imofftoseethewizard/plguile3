@@ -307,8 +307,11 @@ static SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid);
 static char scm_range_flags_to_char(SCM range);
 static SCM stop_command_execution(void);
 static SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read_only, SCM count);
+static char *scm_string_to_pstr(SCM s);
 static void throw_wrong_argument_type(const char *param_name, const char *type, SCM v);
 static void throw_runtime_error(const char *format, ...);
+static void throw_execute_error(ErrorData *edata);
+static void handle_execute_error(void);
 static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
@@ -1302,15 +1305,9 @@ SCM apply_with_limits_error_handler(void *data, SCM key, SCM args)
 
 	if (backtrace == SCM_BOOL_F)
 		elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
-	else {
-		char *p_str_backtrace, *c_str_backtrace;
-		c_str_backtrace = scm_to_locale_string(backtrace);
-		p_str_backtrace = pstrdup(c_str_backtrace);
-
-		free(c_str_backtrace);
-
-		elog(ERROR, "%s: %s\n%s", scm_to_string(key), scm_to_string(args), p_str_backtrace);
-	}
+	else
+		elog(ERROR, "%s: %s\n%s", scm_to_string(key), scm_to_string(args),
+		     scm_string_to_pstr(backtrace));
 }
 
 SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args)
@@ -1318,7 +1315,7 @@ SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args)
 	// The bottom of the stack contains frames for calls of protective
 	// procedures: with-exception-handler, call-with-time-limit, etc.
 	// Omit these from any backtrace shown to the user.
-	const int internal_frame_count = 7;
+	const int internal_frame_count = 8;
 
 	SCM stack = scm_make_stack(SCM_BOOL_T, SCM_EOL);
 	int frame_count = scm_to_int(scm_stack_length(stack)) - internal_frame_count;
@@ -1763,6 +1760,7 @@ Datum plg3_call_inline(PG_FUNCTION_ARGS)
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
 	char *source_text = codeblock->source_text;
 
+	// TODO sandboxed execution, exception handling
 	eval_scheme_string(source_text, plg3_base_module);
 
 	return (Datum)0;
@@ -5325,37 +5323,47 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
-	if (args == SCM_EOL)
-		ret = SPI_execute(
-			scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
-	else {
-		int nargs = scm_to_int(scm_length(args));
-		Oid *arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
-		Datum *arg_values = (Datum *)palloc(sizeof(Datum) * nargs);
-		char *arg_nulls = (char *)palloc0(sizeof(char) * nargs);
+	PG_TRY();
+	{
+		if (args == SCM_EOL)
+			ret = SPI_execute(
+				scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
+		else {
+			int nargs = scm_to_int(scm_length(args));
+			Oid *arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
+			Datum *arg_values = (Datum *)palloc(sizeof(Datum) * nargs);
+			char *arg_nulls = (char *)palloc0(sizeof(char) * nargs);
 
-		SCM rest = args;
+			SCM rest = args;
 
-		for (int i = 0; i < nargs; i++) {
-			SCM arg = scm_car(rest);
-			Oid type_oid = infer_scm_type_oid(arg);
+			for (int i = 0; i < nargs; i++) {
+				SCM arg = scm_car(rest);
+				Oid type_oid = infer_scm_type_oid(arg);
 
-			if (type_oid == InvalidOid)
-				elog(ERROR, "spi_execute: unable to infer result type");
+				if (type_oid == InvalidOid)
+					elog(ERROR, "spi_execute: unable to infer result type");
 
-			arg_types[i] = type_oid;
-			arg_values[i] = scm_to_datum(arg, type_oid);
-			// arg_nulls[i] = 1; set to 'n' for null
-			rest = scm_cdr(rest);
+				arg_types[i] = type_oid;
+				arg_values[i] = scm_to_datum(arg, type_oid);
+				// TODO support NULL specification
+				// arg_nulls[i] = 1; set to 'n' for null
+				rest = scm_cdr(rest);
+			}
+
+			ret = SPI_execute_with_args(
+				scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
+				scm_to_bool(read_only), scm_to_long(count));
 		}
-
-		ret = SPI_execute_with_args(
-			scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
-			scm_to_bool(read_only), scm_to_long(count));
 	}
+	PG_CATCH();
+	{
+		handle_execute_error();
+	}
+	PG_END_TRY();
 
 	if (ret < 0) {
-		// TODO
+		SPI_finish();
+		throw_runtime_error("SPI_execute failed: %s", SPI_result_code_string(ret));
 	}
 
 	switch (ret) {
@@ -5415,11 +5423,11 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 	rows_processed = scm_from_int64(SPI_processed);
 
 	SPI_finish();
-
 	return scm_values(scm_list_2(table, rows_processed));
 }
 
-void throw_wrong_argument_type(const char *param_name, const char *type, SCM v) {
+void throw_wrong_argument_type(const char *param_name, const char *type, SCM v)
+{
 	SCM error_symbol = scm_from_utf8_symbol("wrong-argument-type");
 	SCM arg_name_symbol = scm_from_utf8_symbol(param_name);
 	SCM expected_type_desc = scm_from_locale_string(type);
@@ -5427,17 +5435,33 @@ void throw_wrong_argument_type(const char *param_name, const char *type, SCM v) 
 	scm_throw(error_symbol, args);
 }
 
-void throw_runtime_error(const char *format, ...) {
-	va_list varags;
-	char buffer[1000];
+void throw_runtime_error(const char *format, ...)
+{
+	va_list vargs;
+	char buffer[1000]; // TODO const
 
 	SCM error_symbol = scm_from_utf8_symbol("runtime-error");
 	SCM message, args;
 
-	vsnprintf(buffer, sizeof(buffer), format, varags);
+	va_start(vargs, format);
+	vsnprintf(buffer, sizeof(buffer), format, vargs);
+	elog(NOTICE, "throw_runtime_error: %s", buffer);
 
 	message = scm_from_locale_string(buffer);
 	args = scm_list_1(message);
+	scm_throw(error_symbol, args);
+}
+
+void throw_execute_error(ErrorData *edata)
+{
+	SCM error_symbol = scm_from_utf8_symbol("execute-error");
+
+	SCM args = scm_list_4(
+		scm_from_locale_string(unpack_sql_state(edata->sqlerrcode)),
+		edata->message ? scm_from_locale_string(edata->message) : SCM_BOOL_F,
+		edata->detail  ? scm_from_locale_string(edata->detail)  : SCM_BOOL_F,
+		edata->hint    ? scm_from_locale_string(edata->hint)    : SCM_BOOL_F);
+
 	scm_throw(error_symbol, args);
 }
 
@@ -5462,7 +5486,6 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	Oid *arg_types = NULL;
 
 	int ret;
-	SPIPlanPtr plan;
 	SPIExecuteOptions options = {0};
 
 	if (scm_procedure_p(receiver_proc) == SCM_BOOL_F)
@@ -5516,13 +5539,29 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
-	plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
-
-	SPI_execute_plan_extended(plan, &options);
+	PG_TRY();
+	{
+		SPIPlanPtr plan = SPI_prepare(scm_to_locale_string(command), nargs, arg_types);
+		SPI_execute_plan_extended(plan, &options);
+	}
+	PG_CATCH();
+	{
+		handle_execute_error();
+	}
+	PG_END_TRY();
 
 	SPI_finish();
 
 	return scm_cdr(dest.result);
+}
+
+void handle_execute_error(void)
+{
+	ErrorData *edata = CopyErrorData();
+	SPI_finish();
+	AbortCurrentTransaction();
+	StartTransactionCommand();
+	throw_execute_error(edata);
 }
 
 void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
@@ -5580,7 +5619,6 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	Oid *arg_types = NULL;
 
 	int ret;
-	char *name_cstr;
 	SCM cursor;
 
 	if (!scm_is_string(command))
@@ -5623,18 +5661,34 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
-	name_cstr = name == SCM_BOOL_F ? NULL : scm_to_locale_string(name);
-
-	portal = SPI_cursor_parse_open(name_cstr, scm_to_locale_string(command), &options);
-
-	if (name_cstr)
-		free(name_cstr);
+	PG_TRY();
+	{
+		portal = SPI_cursor_parse_open(
+			scm_string_to_pstr(name), scm_string_to_pstr(command), &options);
+	}
+	PG_CATCH();
+	{
+		handle_execute_error();
+	}
+	PG_END_TRY();
 
 	cursor = scm_call_1(make_cursor_proc, scm_from_locale_string(portal->name));
 
 	SPI_finish();
 
 	return cursor;
+}
+
+char *scm_string_to_pstr(SCM s)
+{
+	if (s == SCM_EOL || s == SCM_BOOL_F)
+		return NULL;
+	else {
+		char *cstr = scm_to_locale_string(s);
+		char *pstr = pstrdup(cstr);
+		free(cstr);
+		return pstr;
+	}
 }
 
 SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
