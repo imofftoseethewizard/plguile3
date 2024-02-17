@@ -1,22 +1,27 @@
-# Scheme PostgreSQL Language Extension (Plg3)
+# PostgreSQL/Guile3 Trusted Language Extension
 
 This project joins my favorite database to my favorite programming
 language.
 
 ## Status
 
-Early alpha. Plg3 is feature-complete. Current stable(ish) release
-is 0.18.0, though be warned that anything off of the knife edge of the
-happy path is likely to cause a crash.
+Early alpha. Plg3 is feature-complete. The latest release of the
+0.19.x series is the most stable. There are still crashing code paths,
+but there are fewer in each successive commit.
 
 ## Overview
 
-This project provides a PostgreSQL extension that enables the creation
-of database functions using Guile Scheme 3.0.
+This project provides a PostgreSQL trusted language extension that
+enables the creation of database functions using Guile Scheme 3.0.
 
 ## Features
 
-- Define and run PostgreSQL functions in Guile Scheme
+- Define and run functions or call inline with `DO ...`
+- All Scheme code is evaluated in a sandbox module
+- Per user execution environments
+- Per user call time and allocation limits (within each connection)
+- Supports all built-in data types
+- Triggers and Event Triggers
 - Comprehensive testing suite
 
 ## Roadmap
