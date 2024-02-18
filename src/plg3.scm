@@ -692,6 +692,13 @@
   (let ((thunk (lambda () (apply proc args))))
     (call-with-time-and-allocation-limits time-limit allocation-limit thunk)))
 
+(define (eval-with-limits exp module time-limit allocation-limit)
+  (eval-in-sandbox exp
+                   #:time-limit time-limit
+                   #:allocation-limit allocation-limit
+                   #:module module
+                   #:sever-module? #f))
+
 (define (untrusted-eval exp module)
   (eval-in-sandbox exp
                    #:module module

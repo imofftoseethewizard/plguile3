@@ -212,12 +212,17 @@ static bool is_time(SCM x);
 static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
 
+static SCM load_base_module(void);
+static SCM base_module_loader(void *data);
+static SCM load_base_module_error_handler(void *data, SCM key, SCM args);
+static void role_remove_func_oid(SCM old_owner, SCM func);
+static SCM base_module_evaluator(void *data);
+static SCM eval_string_in_base_module(const char *text);
+static SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args);
 static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
 static SCM untrusted_eval(SCM expr, SCM env);
 static SCM find_or_create_module_for_role(Oid role_oid);
 static SCM scm_error_handler(void *data, SCM key, SCM args);
-static SCM eval_string_executor(void *data);
-static SCM eval_scheme_string(const char *cstr, SCM module);
 static SCM call_scheme_1_inner(void *data);
 static SCM call_scheme_1(SCM func, SCM arg);
 static SCM call_scheme_2_inner(void *data);
@@ -321,10 +326,13 @@ static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
 static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
 static FetchDirection scm_to_fetch_direction(SCM direction);
 static long scm_to_fetch_count(SCM count);
-static SCM apply_with_limits(SCM proc, SCM args);
-static SCM apply_with_limits_inner(void *data);
-static SCM apply_with_limits_error_handler(void *data, SCM key, SCM args);
-static SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args);
+static SCM apply_in_sandbox(SCM proc, SCM args);
+static SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit);
+static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
+static SCM apply_0_with_handlers(SCM proc, SCM args, int internal_backtrace_frame_count);
+static SCM apply_0_with_handlers_inner(void *data);
+static SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args);
+static SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args);
 static SCM find_cached_proc(HeapTuple proc_tuple);
 static SCM compile_and_cache_proc(HeapTuple proc_tuple);
 static SCM hash_proc_source(HeapTuple proc_tuple);
@@ -368,7 +376,7 @@ static SCM date_year_proc;
 static SCM date_zone_offset_proc;
 static SCM decimal_to_inexact_proc;
 static SCM decimal_to_string_proc;
-static SCM untrusted_eval_proc;
+static SCM eval_with_limits_proc;
 static SCM flush_function_cache_proc;
 static SCM inet_address_proc;
 static SCM inet_bits_proc;
@@ -451,7 +459,6 @@ static SCM record_attr_names_proc;
 static SCM record_attrs_proc;
 static SCM record_types_proc;
 static SCM role_add_func_oid_proc;
-static SCM role_remove_func_oid_proc;
 static SCM role_to_func_oids_proc;
 static SCM string_to_decimal_proc;
 static SCM table_attr_names_proc;
@@ -468,6 +475,7 @@ static SCM tsposition_index_proc;
 static SCM tsposition_weight_proc;
 static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
+static SCM untrusted_eval_proc;
 static SCM validate_tsquery_proc;
 
 // Symbols for triggers
@@ -658,7 +666,7 @@ void _PG_init(void)
 	scm_init_guile();
 
 	elog(NOTICE, "evaluating plg3.scm");
-	eval_scheme_string((const char *)src_plg3_scm, scm_current_module());
+	plg3_base_module = load_base_module();
 	elog(NOTICE, "done");
 
 	func_cache = scm_c_make_hash_table(16);
@@ -666,8 +674,6 @@ void _PG_init(void)
 
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
-
-	plg3_base_module = scm_c_resolve_module("plg3 base");
 
 	define_primitive("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               4, 0, 0, (SCM (*)()) spi_execute);
@@ -725,129 +731,129 @@ void _PG_init(void)
 	   syntax transformer to give us proc we need.
 	*/
 
-	apply_with_limits_proc      = eval_scheme_string("apply-with-limits", plg3_base_module);
-	bit_string_data_proc        = eval_scheme_string("bit-string-data", plg3_base_module);
-	bit_string_length_proc      = eval_scheme_string("bit-string-length", plg3_base_module);
-	box_a_proc                  = eval_scheme_string("box-a", plg3_base_module);
-	box_b_proc                  = eval_scheme_string("box-b", plg3_base_module);
-	boxed_datum_type_proc       = eval_scheme_string("boxed-datum-type", plg3_base_module);
-	boxed_datum_value_proc      = eval_scheme_string("boxed-datum-value", plg3_base_module);
-	circle_center_proc          = eval_scheme_string("circle-center", plg3_base_module);
-	circle_radius_proc          = eval_scheme_string("circle-radius", plg3_base_module);
-	cursor_name_proc            = eval_scheme_string("cursor-name", plg3_base_module);
-	date_day_proc               = eval_scheme_string("date-day", plg3_base_module);
-	date_hour_proc              = eval_scheme_string("date-hour", plg3_base_module);
-	date_minute_proc            = eval_scheme_string("date-minute", plg3_base_module);
-	date_month_proc             = eval_scheme_string("date-month", plg3_base_module);
-	date_nanosecond_proc        = eval_scheme_string("date-nanosecond", plg3_base_module);
-	date_second_proc            = eval_scheme_string("date-second", plg3_base_module);
-	date_year_proc              = eval_scheme_string("date-year", plg3_base_module);
-	date_zone_offset_proc       = eval_scheme_string("date-zone-offset", plg3_base_module);
-	untrusted_eval_proc         = eval_scheme_string("untrusted-eval", plg3_base_module);
-	flush_function_cache_proc   = eval_scheme_string("flush-function-cache", plg3_base_module);
-	inet_address_proc           = eval_scheme_string("inet-address", plg3_base_module);
-	inet_bits_proc              = eval_scheme_string("inet-bits", plg3_base_module);
-	inet_family_proc            = eval_scheme_string("inet-family", plg3_base_module);
-	is_bit_string_proc          = eval_scheme_string("bit-string?", plg3_base_module);
-	is_box_proc                 = eval_scheme_string("box?", plg3_base_module);
-	is_boxed_datum_proc         = eval_scheme_string("boxed-datum?", plg3_base_module);
-	is_circle_proc              = eval_scheme_string("circle?", plg3_base_module);
-	is_cursor_proc              = eval_scheme_string("cursor?", plg3_base_module);
-	is_date_proc                = eval_scheme_string("date?", plg3_base_module);
-	is_decimal_proc             = eval_scheme_string("decimal?", plg3_base_module);
-	is_inet_proc                = eval_scheme_string("inet?", plg3_base_module);
-	is_jsonb_proc               = eval_scheme_string("jsonb?", plg3_base_module);
-	is_jsonpath_proc            = eval_scheme_string("jsonpath?", plg3_base_module);
-	is_line_proc                = eval_scheme_string("line?", plg3_base_module);
-	is_lseg_proc                = eval_scheme_string("lseg?", plg3_base_module);
-	is_macaddr8_proc            = eval_scheme_string("macaddr8?", plg3_base_module);
-	is_macaddr_proc             = eval_scheme_string("macaddr?", plg3_base_module);
-	is_multirange_proc          = eval_scheme_string("multirange?", plg3_base_module);
-	is_path_proc                = eval_scheme_string("path?", plg3_base_module);
-	is_point_proc               = eval_scheme_string("point?", plg3_base_module);
-	is_polygon_proc             = eval_scheme_string("polygon?", plg3_base_module);
-	is_range_proc               = eval_scheme_string("range?", plg3_base_module);
-	is_record_proc              = eval_scheme_string("record?", plg3_base_module);
-	is_table_proc               = eval_scheme_string("table?", plg3_base_module);
-	is_time_proc                = eval_scheme_string("time?", plg3_base_module);
-	is_tsquery_proc             = eval_scheme_string("tsquery?", plg3_base_module);
-	is_tsvector_proc            = eval_scheme_string("tsvector?", plg3_base_module);
-	jsonb_expr_proc             = eval_scheme_string("jsonb-expr", plg3_base_module);
-	jsonpath_expr_proc          = eval_scheme_string("jsonpath-expr", plg3_base_module);
-	jsonpath_is_strict_proc     = eval_scheme_string("jsonpath-strict?", plg3_base_module);
-	line_a_proc                 = eval_scheme_string("line-a", plg3_base_module);
-	line_b_proc                 = eval_scheme_string("line-b", plg3_base_module);
-	line_c_proc                 = eval_scheme_string("line-c", plg3_base_module);
-	lseg_a_proc                 = eval_scheme_string("lseg-a", plg3_base_module);
-	lseg_b_proc                 = eval_scheme_string("lseg-b", plg3_base_module);
-	macaddr8_data_proc          = eval_scheme_string("macaddr8-data", plg3_base_module);
-	macaddr_data_proc           = eval_scheme_string("macaddr-data", plg3_base_module);
-	make_bit_string_proc        = eval_scheme_string("make-bit-string", plg3_base_module);
-	make_box_proc               = eval_scheme_string("make-box", plg3_base_module);
-	make_boxed_datum_proc       = eval_scheme_string("make-boxed-datum", plg3_base_module);
-	make_circle_proc            = eval_scheme_string("make-circle", plg3_base_module);
-	make_cursor_proc            = eval_scheme_string("make-cursor", plg3_base_module);
-	make_date_proc              = eval_scheme_string("make-date", plg3_base_module);
-	make_inet_proc              = eval_scheme_string("make-inet", plg3_base_module);
-	make_jsonb_proc             = eval_scheme_string("make-jsonb", plg3_base_module);
-	make_jsonpath_proc          = eval_scheme_string("make-jsonpath", plg3_base_module);
-	make_line_proc              = eval_scheme_string("make-line", plg3_base_module);
-	make_lseg_proc              = eval_scheme_string("make-lseg", plg3_base_module);
-	make_multirange_proc        = eval_scheme_string("make-multirange", plg3_base_module);
-	make_macaddr8_proc          = eval_scheme_string("make-macaddr8", plg3_base_module);
-	make_macaddr_proc           = eval_scheme_string("make-macaddr", plg3_base_module);
-	make_path_proc              = eval_scheme_string("make-path", plg3_base_module);
-	make_point_proc             = eval_scheme_string("make-point", plg3_base_module);
-	make_polygon_proc           = eval_scheme_string("make-polygon", plg3_base_module);
-	make_range_proc             = eval_scheme_string("make-range", plg3_base_module);
-	make_record_proc            = eval_scheme_string("make-record", plg3_base_module);
-	make_sandbox_module_proc    = eval_scheme_string("make-sandbox-module", plg3_base_module);
-	make_table_proc             = eval_scheme_string("make-table", plg3_base_module);
-	make_time_proc              = eval_scheme_string("make-time", plg3_base_module);
-	make_tslexeme_proc          = eval_scheme_string("make-tslexeme", plg3_base_module);
-	make_tsposition_proc        = eval_scheme_string("make-tsposition", plg3_base_module);
-	make_tsquery_proc           = eval_scheme_string("make-tsquery", plg3_base_module);
-	make_tsvector_proc          = eval_scheme_string("make-tsvector", plg3_base_module);
-	multirange_ranges_proc      = eval_scheme_string("multirange-ranges", plg3_base_module);
-	normalize_tsvector_proc     = eval_scheme_string("normalize-tsvector", plg3_base_module);
-	path_is_closed_proc         = eval_scheme_string("path-closed?", plg3_base_module);
-	path_points_proc            = eval_scheme_string("path-points", plg3_base_module);
-	point_x_proc                = eval_scheme_string("point-x", plg3_base_module);
-	point_y_proc                = eval_scheme_string("point-y", plg3_base_module);
-	polygon_boundbox_proc       = eval_scheme_string("polygon-boundbox", plg3_base_module);
-	polygon_points_proc         = eval_scheme_string("polygon-points", plg3_base_module);
-	range_flags_proc            = eval_scheme_string("range-flags", plg3_base_module);
-	range_lower_proc            = eval_scheme_string("range-lower", plg3_base_module);
-	range_upper_proc            = eval_scheme_string("range-upper", plg3_base_module);
-	record_attr_names_proc      = eval_scheme_string("record-attr-names", plg3_base_module);
-	record_attrs_proc           = eval_scheme_string("record-attrs", plg3_base_module);
-	record_types_proc           = eval_scheme_string("record-types", plg3_base_module);
-	role_add_func_oid_proc      = eval_scheme_string("role-add-func-oid!", plg3_base_module);
-	role_remove_func_oid_proc   = eval_scheme_string("role-remove-func-oid!", plg3_base_module);
-	role_to_func_oids_proc      = eval_scheme_string("role->func-oids", plg3_base_module);
-	table_attr_names_proc       = eval_scheme_string("table-attr-names", plg3_base_module);
-	table_rows_proc             = eval_scheme_string("table-rows", plg3_base_module);
-	table_types_proc            = eval_scheme_string("table-types", plg3_base_module);
-	time_duration_symbol        = eval_scheme_string("time-duration", plg3_base_module);
-	time_monotonic_symbol       = eval_scheme_string("time-monotonic", plg3_base_module);
-	time_nanosecond_proc        = eval_scheme_string("time-nanosecond", plg3_base_module);
-	time_second_proc            = eval_scheme_string("time-second", plg3_base_module);
-	trusted_bindings            = eval_scheme_string("trusted-bindings", plg3_base_module);
-	tslexeme_lexeme_proc        = eval_scheme_string("tslexeme-lexeme", plg3_base_module);
-	tslexeme_positions_proc     = eval_scheme_string("tslexeme-positions", plg3_base_module);
-	tsposition_index_proc       = eval_scheme_string("tsposition-index", plg3_base_module);
-	tsposition_weight_proc      = eval_scheme_string("tsposition-weight", plg3_base_module);
-	tsquery_expr_proc           = eval_scheme_string("tsquery-expr", plg3_base_module);
-	tsvector_lexemes_proc       = eval_scheme_string("tsvector-lexemes", plg3_base_module);
-	//	validate_jsonpath_proc      = eval_scheme_string("validate-jsonpath", plg3_base_module);
-	validate_tsquery_proc       = eval_scheme_string("validate-tsquery", plg3_base_module);
+	apply_with_limits_proc      = eval_string_in_base_module("apply-with-limits");
+	bit_string_data_proc        = eval_string_in_base_module("bit-string-data");
+	bit_string_length_proc      = eval_string_in_base_module("bit-string-length");
+	box_a_proc                  = eval_string_in_base_module("box-a");
+	box_b_proc                  = eval_string_in_base_module("box-b");
+	boxed_datum_type_proc       = eval_string_in_base_module("boxed-datum-type");
+	boxed_datum_value_proc      = eval_string_in_base_module("boxed-datum-value");
+	circle_center_proc          = eval_string_in_base_module("circle-center");
+	circle_radius_proc          = eval_string_in_base_module("circle-radius");
+	cursor_name_proc            = eval_string_in_base_module("cursor-name");
+	date_day_proc               = eval_string_in_base_module("date-day");
+	date_hour_proc              = eval_string_in_base_module("date-hour");
+	date_minute_proc            = eval_string_in_base_module("date-minute");
+	date_month_proc             = eval_string_in_base_module("date-month");
+	date_nanosecond_proc        = eval_string_in_base_module("date-nanosecond");
+	date_second_proc            = eval_string_in_base_module("date-second");
+	date_year_proc              = eval_string_in_base_module("date-year");
+	date_zone_offset_proc       = eval_string_in_base_module("date-zone-offset");
+	eval_with_limits_proc       = eval_string_in_base_module("eval-with-limits");
+	flush_function_cache_proc   = eval_string_in_base_module("flush-function-cache");
+	inet_address_proc           = eval_string_in_base_module("inet-address");
+	inet_bits_proc              = eval_string_in_base_module("inet-bits");
+	inet_family_proc            = eval_string_in_base_module("inet-family");
+	is_bit_string_proc          = eval_string_in_base_module("bit-string?");
+	is_box_proc                 = eval_string_in_base_module("box?");
+	is_boxed_datum_proc         = eval_string_in_base_module("boxed-datum?");
+	is_circle_proc              = eval_string_in_base_module("circle?");
+	is_cursor_proc              = eval_string_in_base_module("cursor?");
+	is_date_proc                = eval_string_in_base_module("date?");
+	is_decimal_proc             = eval_string_in_base_module("decimal?");
+	is_inet_proc                = eval_string_in_base_module("inet?");
+	is_jsonb_proc               = eval_string_in_base_module("jsonb?");
+	is_jsonpath_proc            = eval_string_in_base_module("jsonpath?");
+	is_line_proc                = eval_string_in_base_module("line?");
+	is_lseg_proc                = eval_string_in_base_module("lseg?");
+	is_macaddr8_proc            = eval_string_in_base_module("macaddr8?");
+	is_macaddr_proc             = eval_string_in_base_module("macaddr?");
+	is_multirange_proc          = eval_string_in_base_module("multirange?");
+	is_path_proc                = eval_string_in_base_module("path?");
+	is_point_proc               = eval_string_in_base_module("point?");
+	is_polygon_proc             = eval_string_in_base_module("polygon?");
+	is_range_proc               = eval_string_in_base_module("range?");
+	is_record_proc              = eval_string_in_base_module("record?");
+	is_table_proc               = eval_string_in_base_module("table?");
+	is_time_proc                = eval_string_in_base_module("time?");
+	is_tsquery_proc             = eval_string_in_base_module("tsquery?");
+	is_tsvector_proc            = eval_string_in_base_module("tsvector?");
+	jsonb_expr_proc             = eval_string_in_base_module("jsonb-expr");
+	jsonpath_expr_proc          = eval_string_in_base_module("jsonpath-expr");
+	jsonpath_is_strict_proc     = eval_string_in_base_module("jsonpath-strict?");
+	line_a_proc                 = eval_string_in_base_module("line-a");
+	line_b_proc                 = eval_string_in_base_module("line-b");
+	line_c_proc                 = eval_string_in_base_module("line-c");
+	lseg_a_proc                 = eval_string_in_base_module("lseg-a");
+	lseg_b_proc                 = eval_string_in_base_module("lseg-b");
+	macaddr8_data_proc          = eval_string_in_base_module("macaddr8-data");
+	macaddr_data_proc           = eval_string_in_base_module("macaddr-data");
+	make_bit_string_proc        = eval_string_in_base_module("make-bit-string");
+	make_box_proc               = eval_string_in_base_module("make-box");
+	make_boxed_datum_proc       = eval_string_in_base_module("make-boxed-datum");
+	make_circle_proc            = eval_string_in_base_module("make-circle");
+	make_cursor_proc            = eval_string_in_base_module("make-cursor");
+	make_date_proc              = eval_string_in_base_module("make-date");
+	make_inet_proc              = eval_string_in_base_module("make-inet");
+	make_jsonb_proc             = eval_string_in_base_module("make-jsonb");
+	make_jsonpath_proc          = eval_string_in_base_module("make-jsonpath");
+	make_line_proc              = eval_string_in_base_module("make-line");
+	make_lseg_proc              = eval_string_in_base_module("make-lseg");
+	make_multirange_proc        = eval_string_in_base_module("make-multirange");
+	make_macaddr8_proc          = eval_string_in_base_module("make-macaddr8");
+	make_macaddr_proc           = eval_string_in_base_module("make-macaddr");
+	make_path_proc              = eval_string_in_base_module("make-path");
+	make_point_proc             = eval_string_in_base_module("make-point");
+	make_polygon_proc           = eval_string_in_base_module("make-polygon");
+	make_range_proc             = eval_string_in_base_module("make-range");
+	make_record_proc            = eval_string_in_base_module("make-record");
+	make_sandbox_module_proc    = eval_string_in_base_module("make-sandbox-module");
+	make_table_proc             = eval_string_in_base_module("make-table");
+	make_time_proc              = eval_string_in_base_module("make-time");
+	make_tslexeme_proc          = eval_string_in_base_module("make-tslexeme");
+	make_tsposition_proc        = eval_string_in_base_module("make-tsposition");
+	make_tsquery_proc           = eval_string_in_base_module("make-tsquery");
+	make_tsvector_proc          = eval_string_in_base_module("make-tsvector");
+	multirange_ranges_proc      = eval_string_in_base_module("multirange-ranges");
+	normalize_tsvector_proc     = eval_string_in_base_module("normalize-tsvector");
+	path_is_closed_proc         = eval_string_in_base_module("path-closed?");
+	path_points_proc            = eval_string_in_base_module("path-points");
+	point_x_proc                = eval_string_in_base_module("point-x");
+	point_y_proc                = eval_string_in_base_module("point-y");
+	polygon_boundbox_proc       = eval_string_in_base_module("polygon-boundbox");
+	polygon_points_proc         = eval_string_in_base_module("polygon-points");
+	range_flags_proc            = eval_string_in_base_module("range-flags");
+	range_lower_proc            = eval_string_in_base_module("range-lower");
+	range_upper_proc            = eval_string_in_base_module("range-upper");
+	record_attr_names_proc      = eval_string_in_base_module("record-attr-names");
+	record_attrs_proc           = eval_string_in_base_module("record-attrs");
+	record_types_proc           = eval_string_in_base_module("record-types");
+	role_add_func_oid_proc      = eval_string_in_base_module("role-add-func-oid!");
+	role_to_func_oids_proc      = eval_string_in_base_module("role->func-oids");
+	table_attr_names_proc       = eval_string_in_base_module("table-attr-names");
+	table_rows_proc             = eval_string_in_base_module("table-rows");
+	table_types_proc            = eval_string_in_base_module("table-types");
+	time_duration_symbol        = eval_string_in_base_module("time-duration");
+	time_monotonic_symbol       = eval_string_in_base_module("time-monotonic");
+	time_nanosecond_proc        = eval_string_in_base_module("time-nanosecond");
+	time_second_proc            = eval_string_in_base_module("time-second");
+	trusted_bindings            = eval_string_in_base_module("trusted-bindings");
+	tslexeme_lexeme_proc        = eval_string_in_base_module("tslexeme-lexeme");
+	tslexeme_positions_proc     = eval_string_in_base_module("tslexeme-positions");
+	tsposition_index_proc       = eval_string_in_base_module("tsposition-index");
+	tsposition_weight_proc      = eval_string_in_base_module("tsposition-weight");
+	tsquery_expr_proc           = eval_string_in_base_module("tsquery-expr");
+	tsvector_lexemes_proc       = eval_string_in_base_module("tsvector-lexemes");
+	untrusted_eval_proc         = eval_string_in_base_module("untrusted-eval");
+	//	validate_jsonpath_proc      = eval_string_in_base_module("validate-jsonpath");
+	validate_tsquery_proc       = eval_string_in_base_module("validate-tsquery");
 
-	decimal_to_string_proc  = eval_scheme_string("decimal->string", plg3_base_module);
-	decimal_to_inexact_proc = eval_scheme_string("decimal->inexact", plg3_base_module);
-	is_int2_proc            = eval_scheme_string("int2-compatible?", plg3_base_module);
-	is_int4_proc            = eval_scheme_string("int4-compatible?", plg3_base_module);
-	is_int8_proc            = eval_scheme_string("int8-compatible?", plg3_base_module);
-	string_to_decimal_proc  = eval_scheme_string("string->decimal", plg3_base_module);
+	decimal_to_string_proc  = eval_string_in_base_module("decimal->string");
+	decimal_to_inexact_proc = eval_string_in_base_module("decimal->inexact");
+	is_int2_proc            = eval_string_in_base_module("int2-compatible?");
+	is_int4_proc            = eval_string_in_base_module("int4-compatible?");
+	is_int8_proc            = eval_string_in_base_module("int8-compatible?");
+	string_to_decimal_proc  = eval_string_in_base_module("string->decimal");
 
 	after_symbol     = scm_from_utf8_symbol("after");
 	before_symbol    = scm_from_utf8_symbol("before");
@@ -968,6 +974,27 @@ void _PG_init(void)
 	elog(NOTICE, "initialization complete");
 }
 
+SCM load_base_module(void)
+{
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        base_module_loader, NULL,
+        load_base_module_error_handler, NULL);
+}
+
+SCM base_module_loader(void *data)
+{
+	SCM text = scm_from_locale_string((const char *)src_plg3_scm);
+	scm_eval_string_in_module(text, scm_current_module());
+	return scm_c_resolve_module("plg3 base");
+}
+
+SCM load_base_module_error_handler(void *data, SCM key, SCM args)
+{
+	elog(ERROR, "Unable to load plg3 base module: %s %s", scm_to_string(key),
+	     scm_to_string(args));
+}
+
 void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
 {
 	scm_c_module_define(plg3_base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
@@ -979,28 +1006,6 @@ SCM scm_error_handler(void *data, SCM key, SCM args)
 	elog(NOTICE, "%s", scm_to_string(key));
 	elog(NOTICE, "%s", scm_to_string(args));
     return SCM_BOOL_F;
-}
-
-SCM eval_string_executor(void *data)
-{
-	SCM pair = (SCM)data;
-	SCM text = scm_car(pair);
-	SCM module = scm_cdr(pair);
-
-	return scm_eval_string_in_module(text, module);
-}
-
-/* Function to evaluate Scheme code with error handling */
-SCM eval_scheme_string(const char *cstr, SCM module)
-{
-	 SCM str = scm_from_locale_string(cstr);
-
-	 return scm_internal_catch(
-		 SCM_BOOL_T,
-		 (scm_t_catch_body)eval_string_executor,
-		 (void *)scm_cons(str, module),
-		 scm_error_handler,
-		 NULL);
 }
 
 SCM call_scheme_1_inner(void *data)
@@ -1066,7 +1071,7 @@ Datum call_event_trigger(FunctionCallInfo fcinfo)
 	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
 	SCM args = prepare_event_trigger_arguments(event_trigger_data);
 
-	apply_with_limits(proc, args);
+	apply_in_sandbox(proc, args);
 
 	return PointerGetDatum(NULL);
 }
@@ -1088,7 +1093,7 @@ Datum call_trigger(FunctionCallInfo fcinfo)
 	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
 	SCM args = prepare_trigger_arguments(trigger_data);
 
-	SCM scm_result = apply_with_limits(proc, args);
+	SCM scm_result = apply_in_sandbox(proc, args);
 
 	if (scm_result != SCM_BOOL_F && TRIGGER_FIRED_FOR_ROW(event)) {
 
@@ -1143,7 +1148,7 @@ SCM find_cached_proc(HeapTuple proc_tuple)
 
 	if (old_owner != owner) {
 		// An ALTER FUNCTION ... OWNER TO ... statement was executed.
-		scm_call_2(role_remove_func_oid_proc, old_owner, func);
+		role_remove_func_oid(old_owner, func);
 		scm_hash_remove_x(func_cache, func);
 		return SCM_BOOL_F;
 	}
@@ -1156,6 +1161,37 @@ SCM find_cached_proc(HeapTuple proc_tuple)
 	}
 
 	return scm_car(entry);
+}
+
+void role_remove_func_oid(SCM old_owner, SCM func)
+{
+	static SCM role_remove_func_oid_proc = SCM_BOOL_F;
+
+	if (role_remove_func_oid_proc == SCM_BOOL_F)
+		role_remove_func_oid_proc = eval_string_in_base_module("role-remove-func-oid!");
+
+	scm_call_2(role_remove_func_oid_proc, old_owner, func);
+}
+
+SCM eval_string_in_base_module(const char *text)
+{
+	return scm_internal_catch(
+		SCM_BOOL_T,
+		(scm_t_catch_body)base_module_evaluator,
+		(void *)scm_from_locale_string(text),
+		base_module_evaluator_error_handler,
+		(void *)text);
+}
+
+SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args)
+{
+	elog(ERROR, "internal error: failed to evaluate \"%s\" in plg3 base module: %s %s",
+	     (const char *)data, scm_to_string(key), scm_to_string(args));
+}
+
+SCM base_module_evaluator(void *data)
+{
+	return scm_eval_string_in_module((SCM)data, plg3_base_module);
 }
 
 SCM prepare_trigger_arguments(TriggerData *trigger_data)
@@ -1260,7 +1296,7 @@ Datum call_ordinary(FunctionCallInfo fcinfo)
 	SCM proc = find_or_compile_proc(func_oid);
 	SCM args = prepare_ordinary_arguments(fcinfo);
 
-	SCM scm_result = apply_with_limits(proc, args);
+	SCM scm_result = apply_in_sandbox(proc, args);
 
 	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
@@ -1271,35 +1307,70 @@ Datum call_ordinary(FunctionCallInfo fcinfo)
 	return result;
 }
 
-SCM apply_with_limits(SCM proc, SCM args)
+SCM apply_in_sandbox(SCM proc, SCM args)
 {
 	CallLimits limits;
 	SCM time_limit, allocation_limit;
-
-	// Used to communicate between the pre-unwind handler, which
-	// captures the backtrace, and the error handler, which displays
-	// it.
-	SCM backtrace = SCM_BOOL_F;
 
 	get_call_limits(&limits);
 
 	time_limit = scm_from_double(limits.time_seconds);
 	allocation_limit = scm_from_int64(limits.allocation_bytes);
 
+	return apply_with_limits(proc, args, time_limit, allocation_limit);
+}
+
+SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
+{
+	return apply_0_with_handlers(
+		apply_with_limits_proc,
+		scm_list_4(proc, args, time_limit, allocation_limit),
+		8);
+}
+
+SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
+{
+	return apply_0_with_handlers(
+		eval_with_limits_proc,
+		scm_list_4(expr, module, time_limit, allocation_limit),
+		8);
+}
+
+typedef struct {
+	SCM proc;
+	SCM args;
+	int internal_frame_count;
+} ApplyWithHandlersData;
+
+SCM apply_0_with_handlers(SCM proc, SCM args, int internal_backtrace_frame_count)
+{
+	ApplyWithHandlersData data = {
+		proc,
+		args,
+		internal_backtrace_frame_count,
+	};
+
+	// Used to communicate between the pre-unwind handler, which
+	// captures the backtrace, and the error handler, which displays
+	// it.
+	SCM backtrace = SCM_BOOL_F;
+
     return scm_c_catch(
         SCM_BOOL_T,
-        apply_with_limits_inner,
-        (void *)scm_list_4(proc, args, time_limit, allocation_limit),
-        apply_with_limits_error_handler, &backtrace,
-        apply_with_limits_pre_unwind_handler, &backtrace);
+        apply_0_with_handlers_inner,
+        (void *)&data,
+        apply_0_with_handlers_error_handler, &backtrace,
+        apply_0_with_handlers_pre_unwind_handler, &backtrace);
 }
 
-SCM apply_with_limits_inner(void *data)
+SCM apply_0_with_handlers_inner(void *data)
 {
-	return scm_apply_0(apply_with_limits_proc, (SCM)data);
+	ApplyWithHandlersData *d = (ApplyWithHandlersData *)data;
+
+	return scm_apply_0(d->proc, d->args);
 }
 
-SCM apply_with_limits_error_handler(void *data, SCM key, SCM args)
+SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args)
 {
 	SCM backtrace = *(SCM *)data;
 
@@ -1310,7 +1381,7 @@ SCM apply_with_limits_error_handler(void *data, SCM key, SCM args)
 		     scm_string_to_pstr(backtrace));
 }
 
-SCM apply_with_limits_pre_unwind_handler(void *data, SCM key, SCM args)
+SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args)
 {
 	// The bottom of the stack contains frames for calls of protective
 	// procedures: with-exception-handler, call-with-time-limit, etc.
@@ -1760,8 +1831,20 @@ Datum plg3_call_inline(PG_FUNCTION_ARGS)
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
 	char *source_text = codeblock->source_text;
 
-	// TODO sandboxed execution, exception handling
-	eval_scheme_string(source_text, plg3_base_module);
+	CallLimits limits;
+	SCM time_limit, allocation_limit;
+
+	SCM module = find_or_create_module_for_role(GetUserId());
+	SCM port = scm_open_input_string(scm_from_locale_string(source_text));
+	SCM x;
+
+	get_call_limits(&limits);
+
+	time_limit = scm_from_double(limits.time_seconds);
+	allocation_limit = scm_from_int64(limits.allocation_bytes);
+
+	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
+		eval_with_limits(x, module, time_limit, allocation_limit);
 
 	return (Datum)0;
 }
@@ -1970,7 +2053,7 @@ void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
 		SCM old_owner = scm_cadr(entry);
 
 		if (owner != old_owner)
-			call_scheme_2(role_remove_func_oid_proc, old_owner, func);
+			role_remove_func_oid(old_owner, func);
 	}
 
 	call_scheme_2(role_add_func_oid_proc, owner, func);
@@ -5587,7 +5670,7 @@ bool dest_receive(TupleTableSlot *slot, DestReceiver *self)
 		args = scm_cons(is_null ? SCM_EOL : datum_to_scm(datum, type_oid), args);
 	}
 
-	result = scm_apply_0(proc, args);
+	result = apply_in_sandbox(proc, args);
 
 	if (result == stop_marker)
 		return false;

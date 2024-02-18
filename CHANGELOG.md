@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.5] - 2024-02-18
+
+This version includes a minor refactor of evaluating scheme code in
+the sandbox, or applying a procedure with space and time limits, and
+includes proper error handling for failures to dereference symbols in
+the base module.
+
 ## [0.19.4] - 2024-02-17
 
 This version adds PG_TRY handling to the SPI execution code path.
