@@ -222,11 +222,17 @@ static SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args);
 static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
 static SCM untrusted_eval(SCM expr, SCM env);
 static SCM find_or_create_module_for_role(Oid role_oid);
-static SCM scm_error_handler(void *data, SCM key, SCM args);
-static SCM call_scheme_1_inner(void *data);
-static SCM call_scheme_1(SCM func, SCM arg);
-static SCM call_scheme_2_inner(void *data);
-static SCM call_scheme_2(SCM func, SCM arg1, SCM arg2);
+static SCM call_1_executor(void *data);
+static SCM call_1(SCM func, SCM arg);
+static SCM call_2_executor(void *data);
+static SCM call_2(SCM func, SCM arg1, SCM arg2);
+static SCM call_3_executor(void *data);
+static SCM call_3(SCM func, SCM arg1, SCM arg2, SCM arg3);
+static SCM call_4_executor(void *data);
+static SCM call_4(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4);
+static SCM call_8_executor(void *data);
+static SCM call_8(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4, SCM arg5, SCM arg6, SCM arg7, SCM arg8);
+static SCM call_error_handler(void *data, SCM key, SCM args);
 static void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid multirange_type_oid);
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
@@ -1000,48 +1006,91 @@ void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fc
 	scm_c_module_define(plg3_base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
 }
 
-/* Error handler function */
-SCM scm_error_handler(void *data, SCM key, SCM args)
-{
-	elog(NOTICE, "%s", scm_to_string(key));
-	elog(NOTICE, "%s", scm_to_string(args));
-    return SCM_BOOL_F;
-}
-
-SCM call_scheme_1_inner(void *data)
-{
-    SCM *args = (SCM *)data;
-    return scm_call_1(args[0], args[1]);
-}
-
-SCM call_scheme_1(SCM func, SCM arg1)
+SCM call_1(SCM func, SCM arg1)
 {
     SCM args[2] = {func, arg1};
 
     return scm_internal_catch(
         SCM_BOOL_T,
-        call_scheme_1_inner,
-        args,
-        scm_error_handler,
-        NULL);
+        call_1_executor, args,
+        call_error_handler, args);
 }
 
-SCM call_scheme_2_inner(void *data)
+SCM call_1_executor(void *data)
 {
     SCM *args = (SCM *)data;
-    return scm_call_2(args[0], args[1], args[2]);
+    return scm_call_1(args[0], args[1]);
 }
 
-SCM call_scheme_2(SCM func, SCM arg1, SCM arg2)
+SCM call_2(SCM func, SCM arg1, SCM arg2)
 {
 	SCM args[3] = {func, arg1, arg2};
 
     return scm_internal_catch(
         SCM_BOOL_T,
-        call_scheme_2_inner,
-        args,
-        scm_error_handler,
-        NULL);
+        call_2_executor, args,
+        call_error_handler, args);
+}
+
+SCM call_2_executor(void *data)
+{
+    SCM *args = (SCM *)data;
+    return scm_call_2(args[0], args[1], args[2]);
+}
+
+SCM call_3(SCM func, SCM arg1, SCM arg2, SCM arg3)
+{
+	SCM args[4] = {func, arg1, arg2, arg3};
+
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        call_3_executor, args,
+        call_error_handler, args);
+}
+
+SCM call_3_executor(void *data)
+{
+    SCM *args = (SCM *)data;
+    return scm_call_3(args[0], args[1], args[2], args[3]);
+}
+
+SCM call_4(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4)
+{
+	SCM args[5] = {func, arg1, arg2, arg3, arg4};
+
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        call_4_executor, args,
+        call_error_handler, args);
+}
+
+SCM call_4_executor(void *data)
+{
+    SCM *args = (SCM *)data;
+    return scm_call_4(args[0], args[1], args[2], args[3], args[4]);
+}
+
+SCM call_8(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4, SCM arg5, SCM arg6, SCM arg7, SCM arg8)
+{
+	SCM args[9] = {func, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8};
+
+    return scm_internal_catch(
+        SCM_BOOL_T,
+        call_8_executor, args,
+        call_error_handler, args);
+}
+
+SCM call_8_executor(void *data)
+{
+    SCM *args = (SCM *)data;
+    return scm_call_8(
+	    args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
+}
+
+SCM call_error_handler(void *data, SCM key, SCM args)
+{
+	elog(ERROR, "Unable to call %s base module: %s %s", scm_to_string(*(SCM *)data),
+	     scm_to_string(key), scm_to_string(args));
 }
 
 void _PG_fini(void)
@@ -1170,7 +1219,7 @@ void role_remove_func_oid(SCM old_owner, SCM func)
 	if (role_remove_func_oid_proc == SCM_BOOL_F)
 		role_remove_func_oid_proc = eval_string_in_base_module("role-remove-func-oid!");
 
-	scm_call_2(role_remove_func_oid_proc, old_owner, func);
+	call_2(role_remove_func_oid_proc, old_owner, func);
 }
 
 SCM eval_string_in_base_module(const char *text)
@@ -1265,7 +1314,7 @@ HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
 	Datum *ret_values;
 	bool *ret_is_null;
 
-	SCM attrs = scm_call_1(record_attrs_proc, x);
+	SCM attrs = call_1(record_attrs_proc, x);
 
 	ret_values = (Datum *) palloc0(sizeof(Datum) * tuple_desc->natts);
 	ret_is_null = (bool *) palloc0(sizeof(bool) * tuple_desc->natts);
@@ -1605,7 +1654,7 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, MemoryContext ct
     tupstore = tuplestore_begin_heap(true, false, work_mem);
 
     if (is_table(x))
-        rows = scm_call_1(table_rows_proc, x);
+        rows = call_1(table_rows_proc, x);
     else
         rows = x;
 
@@ -1616,7 +1665,7 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, MemoryContext ct
         SCM item = scm_car(rows);
 
         if (is_record(item))
-	        item = scm_call_1(record_attrs_proc, item);
+	        item = call_1(record_attrs_proc, item);
 
         if (!scm_is_vector(item))
 	        elog(ERROR, "scm_to_setof_composite_datum: vector expected, not %s", scm_to_string(item));
@@ -1685,8 +1734,8 @@ Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
         rows = x;
 
     else {
-	    default_types = scm_call_1(table_types_proc, x);
-        rows = scm_call_1(table_rows_proc, x);
+	    default_types = call_1(table_types_proc, x);
+        rows = call_1(table_rows_proc, x);
         default_tuple_desc = table_tuple_desc(x);
     }
 
@@ -1699,8 +1748,8 @@ Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
         bool *is_null;
 
         if (is_record(item)) {
-	        rec_attrs = scm_call_1(record_attrs_proc, item);
-	        types = scm_call_1(record_types_proc, item);
+	        rec_attrs = call_1(record_attrs_proc, item);
+	        types = call_1(record_types_proc, item);
 
 	        if (scm_is_eq(types, default_types))
 		        tuple_desc = default_tuple_desc;
@@ -1773,16 +1822,16 @@ Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
 
 TupleDesc record_tuple_desc(SCM x)
 {
-	SCM attr_names = scm_call_1(record_attr_names_proc, x);
-	SCM type_desc_list = scm_call_1(record_types_proc, x);
+	SCM attr_names = call_1(record_attr_names_proc, x);
+	SCM type_desc_list = call_1(record_types_proc, x);
 
 	return build_tuple_desc(attr_names, type_desc_list);
 }
 
 TupleDesc table_tuple_desc(SCM x)
 {
-	SCM attr_names = scm_call_1(table_attr_names_proc, x);
-	SCM type_desc_list = scm_call_1(table_types_proc, x);
+	SCM attr_names = call_1(table_attr_names_proc, x);
+	SCM type_desc_list = call_1(table_types_proc, x);
 
 	return build_tuple_desc(attr_names, type_desc_list);
 }
@@ -1823,7 +1872,7 @@ TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list)
 
 SCM make_boxed_datum(Oid type_oid, Datum x)
 {
-	return scm_call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
+	return call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
 }
 
 Datum plg3_call_inline(PG_FUNCTION_ARGS)
@@ -1925,8 +1974,8 @@ void flush_module_cache_for_role(Oid role_oid)
 
 	scm_hash_remove_x(module_cache, role);
 
-	func_cache = scm_call_2(
-		flush_function_cache_proc, func_cache, scm_call_1(role_to_func_oids_proc, role));
+	func_cache = call_2(
+		flush_function_cache_proc, func_cache, call_1(role_to_func_oids_proc, role));
 
 	scm_gc_protect_object(func_cache);
 	scm_gc_unprotect_object(old_func_cache);
@@ -1956,7 +2005,7 @@ SCM get_cached_module(Oid role_oid)
 
 SCM make_sandbox_module(int64 preamble_id)
 {
-	SCM module = scm_call_1(make_sandbox_module_proc, trusted_bindings);
+	SCM module = call_1(make_sandbox_module_proc, trusted_bindings);
 
 	if (preamble_id) {
 
@@ -2056,7 +2105,7 @@ void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
 			role_remove_func_oid(old_owner, func);
 	}
 
-	call_scheme_2(role_add_func_oid_proc, owner, func);
+	call_2(role_add_func_oid_proc, owner, func);
 	scm_hash_set_x(func_cache, func, scm_cons(proc, scm_cons(owner, src_hash)));
 }
 
@@ -2141,7 +2190,7 @@ SCM compile_proc(HeapTuple proc_tuple, SCM module)
 
 SCM untrusted_eval(SCM expr, SCM module)
 {
-	return scm_call_2(untrusted_eval_proc, expr, module);
+	return call_2(untrusted_eval_proc, expr, module);
 }
 
 SCM unbox_datum(SCM x)
@@ -2253,7 +2302,7 @@ Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *
     TupleDescInitEntry(tupdesc, 1, "", type_oid, -1, 0);
 
     if (is_table(x))
-        rows = scm_call_1(table_rows_proc, x);
+        rows = call_1(table_rows_proc, x);
     else
         rows = x;
 
@@ -2517,7 +2566,7 @@ SCM datum_heap_tuple_to_scm(Datum x, TupleDesc tuple_desc)
 	pfree(is_null);
 	ReleaseTupleDesc(tuple_desc);
 
-	return scm_call_4(make_record_proc, type_names, values, attr_names, attr_names_hash);
+	return call_4(make_record_proc, type_names, values, attr_names, attr_names_hash);
 }
 
 SCM type_desc_expr(Oid type_oid)
@@ -2608,7 +2657,7 @@ Datum scm_to_datum_float4(SCM x, Oid type_oid)
 		return Float4GetDatum(scm_to_double(x));
 
 	else if (is_decimal(x))
-		return Float4GetDatum(scm_to_double(scm_call_1(decimal_to_inexact_proc, x)));
+		return Float4GetDatum(scm_to_double(call_1(decimal_to_inexact_proc, x)));
 
 	else {
 		elog(ERROR, "wrong type, number expected: %s", scm_to_string(x));
@@ -2626,7 +2675,7 @@ Datum scm_to_datum_float8(SCM x, Oid type_oid)
 		return Float8GetDatum(scm_to_double(x));
 
 	else if (is_decimal(x))
-		return Float8GetDatum(scm_to_double(scm_call_1(decimal_to_inexact_proc, x)));
+		return Float8GetDatum(scm_to_double(call_1(decimal_to_inexact_proc, x)));
 
 	else {
 		elog(ERROR, "wrong type, number expected: %s", scm_to_string(x));
@@ -2649,7 +2698,7 @@ Datum scm_to_datum_record(SCM result, Oid ignored)
 	if (!is_record(result))
 		elog(ERROR, "wrong type, record expected: %s", scm_to_string(result));
 
-	data = scm_call_1(record_attrs_proc, result);
+	data = call_1(record_attrs_proc, result);
 	len = scm_c_vector_length(data);
 	tuple_desc = record_tuple_desc(result);
 
@@ -2753,7 +2802,7 @@ SCM datum_timestamptz_to_scm(Datum x, Oid type_oid)
 	if (timestamp2tm(timestamp, &tz_offset, &tm, &msec, NULL, NULL))
 		elog(ERROR, "invalid timestamp datum");
 
-	return scm_call_8(
+	return call_8(
 		make_date_proc,
 		scm_from_long(msec * 1000),
 		scm_from_int(tm.tm_sec),
@@ -2772,14 +2821,14 @@ Datum scm_to_datum_timestamptz(SCM x, Oid type_oid)
 
 	else {
 		// Extract the individual components of the SRFI-19 date object
-		SCM nanosecond_scm = scm_call_1(date_nanosecond_proc, x);
-		SCM tz_offset_scm  = scm_call_1(date_zone_offset_proc, x);
-		SCM year_scm       = scm_call_1(date_year_proc, x);
-		SCM month_scm      = scm_call_1(date_month_proc, x);
-		SCM day_scm        = scm_call_1(date_day_proc, x);
-		SCM hour_scm       = scm_call_1(date_hour_proc, x);
-		SCM minute_scm     = scm_call_1(date_minute_proc, x);
-		SCM second_scm     = scm_call_1(date_second_proc, x);
+		SCM nanosecond_scm = call_1(date_nanosecond_proc, x);
+		SCM tz_offset_scm  = call_1(date_zone_offset_proc, x);
+		SCM year_scm       = call_1(date_year_proc, x);
+		SCM month_scm      = call_1(date_month_proc, x);
+		SCM day_scm        = call_1(date_day_proc, x);
+		SCM hour_scm       = call_1(date_hour_proc, x);
+		SCM minute_scm     = call_1(date_minute_proc, x);
+		SCM second_scm     = call_1(date_second_proc, x);
 
 		// Convert from Scheme values to C types
 		long nanoseconds = scm_to_long(nanosecond_scm);
@@ -2823,9 +2872,9 @@ Datum scm_to_datum_date(SCM x, Oid type_oid)
 
 	else {
 		// Extract the individual components of the SRFI-19 date object
-		SCM year_scm  = scm_call_1(date_year_proc, x);
-		SCM month_scm = scm_call_1(date_month_proc, x);
-		SCM day_scm   = scm_call_1(date_day_proc, x);
+		SCM year_scm  = call_1(date_year_proc, x);
+		SCM month_scm = call_1(date_month_proc, x);
+		SCM day_scm   = call_1(date_day_proc, x);
 
 		// Convert from Scheme values to C types
 		int year  = scm_to_int(year_scm);
@@ -2844,7 +2893,7 @@ SCM datum_time_to_scm(Datum x, Oid type_oid)
 	if (time2tm(DatumGetTimeADT(x), &tm, &msec))
 		elog(ERROR, "invalid time datum");
 
-	return scm_call_3(
+	return call_3(
 		make_time_proc,
 		time_monotonic_symbol,
 		scm_from_long(msec * 1000),
@@ -2857,8 +2906,8 @@ Datum scm_to_datum_time(SCM x, Oid type_oid)
 		elog(ERROR, "wrong type, time expected: %s", scm_to_string(x));
 
 	else {
-		int seconds = scm_to_int(scm_call_1(time_second_proc, x));
-		int nanoseconds = scm_to_int(scm_call_1(time_nanosecond_proc, x));
+		int seconds = scm_to_int(call_1(time_second_proc, x));
+		int nanoseconds = scm_to_int(call_1(time_nanosecond_proc, x));
 
 		// Convert nanoseconds to fractional seconds (microseconds)
 		fsec_t msec = nanoseconds / 1000;
@@ -2898,7 +2947,7 @@ SCM datum_timetz_to_scm(Datum x, Oid type_oid)
 	if (secs < 0)
 		secs += SECS_PER_DAY;
 
-	return scm_call_3(
+	return call_3(
 		make_time_proc,
 		time_monotonic_symbol,
 		scm_from_long(msec * 1000),
@@ -2913,8 +2962,8 @@ Datum scm_to_datum_timetz(SCM x, Oid type_oid)
 	else {
 		TimeTzADT *result = (TimeTzADT *) palloc(sizeof(TimeTzADT));
 
-		int seconds = scm_to_int(scm_call_1(time_second_proc, x));
-		int nanoseconds = scm_to_int(scm_call_1(time_nanosecond_proc, x));
+		int seconds = scm_to_int(call_1(time_second_proc, x));
+		int nanoseconds = scm_to_int(call_1(time_nanosecond_proc, x));
 
 		// Get tz from current time
 		struct pg_tm tm;
@@ -2937,7 +2986,7 @@ SCM datum_interval_to_scm(Datum x, Oid type_oid)
 {
 	Interval *interval = DatumGetIntervalP(x);
 
-	return scm_call_3(
+	return call_3(
 		make_time_proc,
 		time_duration_symbol,
 		scm_from_long((interval->time % USECS_PER_SEC) * NS_PER_USEC),
@@ -2949,7 +2998,7 @@ SCM datum_interval_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_interval(SCM x, Oid type_oid)
 {
-	SCM seconds = scm_call_1(time_second_proc, x);
+	SCM seconds = call_1(time_second_proc, x);
 
 	Interval *interval = (Interval *)palloc(sizeof(Interval));
 
@@ -2962,7 +3011,7 @@ Datum scm_to_datum_interval(SCM x, Oid type_oid)
 
 	interval->time =
 		scm_to_long(scm_floor_remainder(seconds, scm_from_int(SECS_PER_DAY))) * USECS_PER_SEC
-		+ scm_to_long(scm_call_1(time_nanosecond_proc, x)) / NS_PER_USEC;
+		+ scm_to_long(call_1(time_nanosecond_proc, x)) / NS_PER_USEC;
 
 	return IntervalPGetDatum(interval);
 }
@@ -2971,7 +3020,7 @@ SCM datum_numeric_to_scm(Datum x, Oid type_oid)
 {
 	SCM s = scm_from_locale_string(DatumGetCString(DirectFunctionCall1(numeric_out, x)));
 
-	return scm_call_1(string_to_decimal_proc, s);
+	return call_1(string_to_decimal_proc, s);
 }
 
 Datum scm_to_datum_numeric(SCM x, Oid type_oid)
@@ -2979,7 +3028,7 @@ Datum scm_to_datum_numeric(SCM x, Oid type_oid)
 	char *numeric_str = NULL;
 
 	if (is_decimal(x)) {
-		numeric_str = scm_to_locale_string(scm_call_1(decimal_to_string_proc, x));
+		numeric_str = scm_to_locale_string(call_1(decimal_to_string_proc, x));
 	}
 	else if (scm_is_number(x)) {
 		if (scm_is_real(x)) {
@@ -3031,7 +3080,7 @@ SCM datum_point_to_scm(Datum x, Oid type_oid)
 	SCM scm_y = scm_from_double(point->y);
 
 	// Create the SCM point object using the Scheme function
-	SCM scm_point = scm_call_2(make_point_proc, scm_x, scm_y);
+	SCM scm_point = call_2(make_point_proc, scm_x, scm_y);
 
 	return scm_point;
 }
@@ -3043,8 +3092,8 @@ Datum scm_to_datum_point(SCM x, Oid type_oid)
 	Point *point;
 
 	if (is_point(x)) {
-		scm_x = scm_call_1(point_x_proc, x);
-		scm_y = scm_call_1(point_y_proc, x);
+		scm_x = call_1(point_x_proc, x);
+		scm_y = call_1(point_y_proc, x);
 	}
 	else {
 		if (!scm_is_vector(x) || scm_c_vector_length(x) != 2)
@@ -3080,7 +3129,7 @@ SCM datum_line_to_scm(Datum x, Oid type_oid)
 	SCM scm_c = scm_from_double(line->C);
 
 	// Create the SCM line object using the Scheme function
-	SCM scm_line = scm_call_3(make_line_proc, scm_a, scm_b, scm_c);
+	SCM scm_line = call_3(make_line_proc, scm_a, scm_b, scm_c);
 
 	return scm_line;
 }
@@ -3093,9 +3142,9 @@ Datum scm_to_datum_line(SCM x, Oid type_oid)
 	else {
 
 		// Get a, b, and c components from the Scheme line object
-		SCM scm_a = scm_call_1(line_a_proc, x);
-		SCM scm_b = scm_call_1(line_b_proc, x);
-		SCM scm_c = scm_call_1(line_c_proc, x);
+		SCM scm_a = call_1(line_a_proc, x);
+		SCM scm_b = call_1(line_b_proc, x);
+		SCM scm_c = call_1(line_c_proc, x);
 
 		// Convert SCM a and b to float8
 		float8 a_val = scm_to_double(scm_a);
@@ -3124,7 +3173,7 @@ SCM datum_lseg_to_scm(Datum x, Oid type_oid)
 	SCM scm_point_b = datum_point_to_scm(PointPGetDatum(&lseg->p[1]), OID_NOT_USED);
 
 	// Create the Scheme lseg object
-	SCM scm_lseg = scm_call_2(make_lseg_proc, scm_point_a, scm_point_b);
+	SCM scm_lseg = call_2(make_lseg_proc, scm_point_a, scm_point_b);
 
 	return scm_lseg;
 }
@@ -3137,8 +3186,8 @@ Datum scm_to_datum_lseg(SCM x, Oid type_oid)
 	else {
 
 		// Get point components from the Scheme lseg object
-		SCM scm_a = scm_call_1(lseg_a_proc, x);
-		SCM scm_b = scm_call_1(lseg_b_proc, x);
+		SCM scm_a = call_1(lseg_a_proc, x);
+		SCM scm_b = call_1(lseg_b_proc, x);
 
 		// Convert SCM a and b to float8
 		Datum a_val = scm_to_datum_point(scm_a, OID_NOT_USED);
@@ -3165,7 +3214,7 @@ SCM datum_box_to_scm(Datum x, Oid type_oid)
 	SCM scm_point_b = datum_point_to_scm(PointPGetDatum(&box->low), OID_NOT_USED);
 
 	// Create the Scheme box object
-	SCM scm_box = scm_call_2(make_box_proc, scm_point_a, scm_point_b);
+	SCM scm_box = call_2(make_box_proc, scm_point_a, scm_point_b);
 
 	return scm_box;
 }
@@ -3178,8 +3227,8 @@ Datum scm_to_datum_box(SCM x, Oid type_oid)
 	else {
 
 		// Get a and b components from the Scheme box object
-		SCM scm_a = scm_call_1(box_a_proc, x);
-		SCM scm_b = scm_call_1(box_b_proc, x);
+		SCM scm_a = call_1(box_a_proc, x);
+		SCM scm_b = call_1(box_b_proc, x);
 
 		// Convert SCM a and b to float8
 		Datum a_val = scm_to_datum_point(scm_a, OID_NOT_USED);
@@ -3212,7 +3261,7 @@ SCM datum_path_to_scm(Datum x, Oid type_oid)
 		scm_c_vector_set_x(scm_points_vector, i, scm_point);
 	}
 
-	return scm_call_2(make_path_proc, scm_is_closed, scm_points_vector);
+	return call_2(make_path_proc, scm_is_closed, scm_points_vector);
 }
 
 Datum scm_to_datum_path(SCM x, Oid type_oid)
@@ -3225,7 +3274,7 @@ Datum scm_to_datum_path(SCM x, Oid type_oid)
 		PATH *path;
 
 		// Get the Scheme vector of points from the Scheme path object
-		SCM scm_points_vector = scm_call_1(path_points_proc, x);
+		SCM scm_points_vector = call_1(path_points_proc, x);
 
 		// Get the number of points in the vector
 		int npts = scm_to_int(scm_vector_length(scm_points_vector));
@@ -3244,7 +3293,7 @@ Datum scm_to_datum_path(SCM x, Oid type_oid)
 		SET_VARSIZE(path, size);
 		path->npts = npts;
 
-		path->closed = scm_to_bool(scm_call_1(path_is_closed_proc, x));
+		path->closed = scm_to_bool(call_1(path_is_closed_proc, x));
 
 		/* prevent instability in unused pad bytes */
 		path->dummy = 0;
@@ -3276,7 +3325,7 @@ SCM datum_polygon_to_scm(Datum x, Oid type_oid)
 		scm_c_vector_set_x(scm_points_vector, i, scm_point);
 	}
 
-	return scm_call_2(make_polygon_proc, scm_boundbox, scm_points_vector);
+	return call_2(make_polygon_proc, scm_boundbox, scm_points_vector);
 }
 
 Datum scm_to_datum_polygon(SCM x, Oid type_oid)
@@ -3289,7 +3338,7 @@ Datum scm_to_datum_polygon(SCM x, Oid type_oid)
 		POLYGON *polygon;
 
 		// Get the Scheme vector of points from the Scheme polygon object
-		SCM scm_points_vector = scm_call_1(polygon_points_proc, x);
+		SCM scm_points_vector = call_1(polygon_points_proc, x);
 
 		// Get the number of points in the vector
 		int npts = scm_to_int(scm_vector_length(scm_points_vector));
@@ -3309,7 +3358,7 @@ Datum scm_to_datum_polygon(SCM x, Oid type_oid)
 		SET_VARSIZE(polygon, size);
 		polygon->npts = npts;
 
-		scm_boundbox = scm_call_1(polygon_boundbox_proc, x);
+		scm_boundbox = call_1(polygon_boundbox_proc, x);
 		polygon->boundbox = *DatumGetBoxP(scm_to_datum_box(scm_boundbox, OID_NOT_USED));
 
 		// Convert each point from Scheme object to Datum and populate the POLYGON
@@ -3334,7 +3383,7 @@ SCM datum_circle_to_scm(Datum x, Oid type_oid)
 	SCM scm_radius = scm_from_double(radius);
 
 	// Use your Scheme procedure to create the circle record
-	return scm_call_2(make_circle_proc, scm_center, scm_radius);
+	return call_2(make_circle_proc, scm_center, scm_radius);
 }
 
 Datum scm_to_datum_circle(SCM x, Oid type_oid)
@@ -3344,8 +3393,8 @@ Datum scm_to_datum_circle(SCM x, Oid type_oid)
 	}
 	else {
 		// Retrieve the center point and radius from the Scheme record
-		SCM scm_center = scm_call_1(circle_center_proc, x);
-		SCM scm_radius = scm_call_1(circle_radius_proc, x);
+		SCM scm_center = call_1(circle_center_proc, x);
+		SCM scm_radius = call_1(circle_radius_proc, x);
 
 		// Convert the center to a Point Datum
 		Datum center_datum = scm_to_datum_point(scm_center, OID_NOT_USED);
@@ -3383,7 +3432,7 @@ SCM datum_inet_to_scm(Datum x, Oid type_oid)
 		scm_c_bytevector_set_x(scm_address, i, addr[i]);
 	}
 
-	return scm_call_3(make_inet_proc, scm_family, scm_bits, scm_address);
+	return call_3(make_inet_proc, scm_family, scm_bits, scm_address);
 }
 
 Datum scm_to_datum_inet(SCM x, Oid type_oid)
@@ -3395,9 +3444,9 @@ Datum scm_to_datum_inet(SCM x, Oid type_oid)
 		inet *inet;
 
 		// Get the family, bits, and address from the SCM object
-		SCM scm_family = scm_call_1(inet_family_proc, x);
-		SCM scm_bits = scm_call_1(inet_bits_proc, x);
-		SCM scm_address = scm_call_1(inet_address_proc, x);
+		SCM scm_family = call_1(inet_family_proc, x);
+		SCM scm_bits = call_1(inet_bits_proc, x);
+		SCM scm_address = call_1(inet_address_proc, x);
 
 		char *family_str = scm_to_locale_string(scm_symbol_to_string(scm_family));
 		int bits = scm_to_int(scm_bits);
@@ -3459,7 +3508,7 @@ SCM datum_macaddr_to_scm(Datum x, Oid type_oid)
 	scm_c_bytevector_set_x(scm_data, 4, mac->e);
 	scm_c_bytevector_set_x(scm_data, 5, mac->f);
 
-	return scm_call_1(make_macaddr_proc, scm_data);
+	return call_1(make_macaddr_proc, scm_data);
 }
 
 Datum scm_to_datum_macaddr(SCM x, Oid type_oid)
@@ -3469,7 +3518,7 @@ Datum scm_to_datum_macaddr(SCM x, Oid type_oid)
 	}
 	else {
 		// Get the data bytevector from the SCM object
-		SCM scm_data = scm_call_1(macaddr_data_proc, x);
+		SCM scm_data = call_1(macaddr_data_proc, x);
 		macaddr *mac;
 
 		// Check the length of the bytevector
@@ -3511,7 +3560,7 @@ SCM datum_macaddr8_to_scm(Datum x, Oid type_oid)
 	scm_c_bytevector_set_x(scm_data, 6, mac->g);
 	scm_c_bytevector_set_x(scm_data, 7, mac->h);
 
-	return scm_call_1(make_macaddr8_proc, scm_data);
+	return call_1(make_macaddr8_proc, scm_data);
 }
 
 Datum scm_to_datum_macaddr8(SCM x, Oid type_oid)
@@ -3521,7 +3570,7 @@ Datum scm_to_datum_macaddr8(SCM x, Oid type_oid)
 	}
 	else {
 		// Get the data bytevector from the SCM object
-		SCM scm_data = scm_call_1(macaddr8_data_proc, x);
+		SCM scm_data = call_1(macaddr8_data_proc, x);
 		macaddr8 *mac;
 
 		// Check the length of the bytevector
@@ -3561,7 +3610,7 @@ SCM datum_bit_string_to_scm(Datum x, Oid type_oid)
 	// Copy the data from the varbit struct to the bytevector
 	memcpy(SCM_BYTEVECTOR_CONTENTS(scm_data), VARBITS(bit_str), VARBITBYTES(bit_str));
 
-	return scm_call_2(make_bit_string_proc, scm_data, scm_from_int(bitlen));
+	return call_2(make_bit_string_proc, scm_data, scm_from_int(bitlen));
 }
 
 Datum scm_to_datum_bit_string(SCM x, Oid type_oid)
@@ -3571,8 +3620,8 @@ Datum scm_to_datum_bit_string(SCM x, Oid type_oid)
 	}
 	else {
 		// Get the length and data from the Scheme record
-		SCM scm_length = scm_call_1(bit_string_length_proc, x);
-		SCM scm_data = scm_call_1(bit_string_data_proc, x);
+		SCM scm_length = call_1(bit_string_length_proc, x);
+		SCM scm_data = call_1(bit_string_data_proc, x);
 
 		// Convert the length to a C int
 		int bitlen = scm_to_int(scm_length);
@@ -3700,7 +3749,7 @@ Datum scm_to_datum_json(SCM x, Oid type_oid)
 
 SCM datum_jsonb_to_scm(Datum x, Oid type_oid)
 {
-	return scm_call_1(make_jsonb_proc, jsonb_to_scm_expr(DatumGetJsonbP(x)));
+	return call_1(make_jsonb_proc, jsonb_to_scm_expr(DatumGetJsonbP(x)));
 }
 
 SCM jsonb_to_scm_expr(Jsonb *jsb)
@@ -3779,9 +3828,9 @@ SCM jsb_scalar_to_scm(JsonbValue *jsb)
 
 Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 {
-	SCM expr = is_jsonb(x) ? scm_call_1(jsonb_expr_proc, x) : x;
+	SCM expr = is_jsonb(x) ? call_1(jsonb_expr_proc, x) : x;
 
-	// scm_call_1(validate_jsonb_proc, expr); //TODO
+	// call_1(validate_jsonb_proc, expr); //TODO
 
 	return JsonbPGetDatum(jsonb_root_expr_to_jsonb(expr));
 }
@@ -3894,7 +3943,7 @@ SCM datum_jsonpath_to_scm(Datum x, Oid type_oid)
 	jsp_init(&elem, jsp);
 	expr = jsp_to_scm(&elem, expr);
 
-	return scm_call_2(make_jsonpath_proc, scm_from_bool(!(jsp->header & JSONPATH_LAX)), expr);
+	return call_2(make_jsonpath_proc, scm_from_bool(!(jsp->header & JSONPATH_LAX)), expr);
 }
 
 Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
@@ -3902,19 +3951,19 @@ Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
 	StringInfoData buf;
 	JsonPath *jsp;
 
-	// scm_call_1(validate_jsonpath_proc, x); //TODO
+	// call_1(validate_jsonpath_proc, x); //TODO
 
 	initStringInfo(&buf);
 	appendStringInfoSpaces(&buf, JSONPATH_HDRSZ);
 
-	scm_expr_to_jsp(&buf, scm_call_1(jsonpath_expr_proc, x));
+	scm_expr_to_jsp(&buf, call_1(jsonpath_expr_proc, x));
 
 	jsp = (JsonPath *)buf.data;
 	SET_VARSIZE(jsp, buf.len);
 
 	jsp->header = JSONPATH_VERSION;
 
-	if (scm_call_1(jsonpath_is_strict_proc, x) == SCM_BOOL_F)
+	if (call_1(jsonpath_is_strict_proc, x) == SCM_BOOL_F)
 		jsp->header |= JSONPATH_LAX;
 
 	return PointerGetDatum(jsp);
@@ -3950,7 +3999,7 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 		case jpiNumeric:
 			n = NumericGetDatum(jsp_get_numeric(v));
 			arg = scm_from_locale_string(DatumGetCString(DirectFunctionCall1(numeric_out, n)));
-			return scm_call_1(string_to_decimal_proc, arg);
+			return call_1(string_to_decimal_proc, arg);
 
 		case jpiString:
 			return scm_from_locale_string(jsp_get_string(v));
@@ -4653,7 +4702,7 @@ SCM datum_tsquery_to_scm(Datum x, Oid type_oid)
 	QueryItem *query_items = GETQUERY(query);
 	char *operands = GETOPERAND(query);
 
-	return call_scheme_1(make_tsquery_proc, tsquery_items_to_scm(&query_items, operands));
+	return call_1(make_tsquery_proc, tsquery_items_to_scm(&query_items, operands));
 }
 
 Datum scm_to_datum_tsquery(SCM x, Oid type_oid)
@@ -4670,9 +4719,9 @@ Datum scm_to_datum_tsquery(SCM x, Oid type_oid)
 	if (!is_tsquery(x))
 		elog(ERROR, "tsquery result expected, not: %s", scm_to_string(x));
 
-	call_scheme_1(validate_tsquery_proc, x);
+	call_1(validate_tsquery_proc, x);
 
-	expr = scm_call_1(tsquery_expr_proc, x);
+	expr = call_1(tsquery_expr_proc, x);
 
 	tsquery_expr_size(expr, &item_count, &operand_bytes);
 
@@ -4872,15 +4921,15 @@ SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
             SCM pos_scm = scm_from_int(pos);
             SCM weight_scm = scm_from_int(weight);
 
-            tsposition_scm = scm_call_2(make_tsposition_proc, pos_scm, weight_scm);
+            tsposition_scm = call_2(make_tsposition_proc, pos_scm, weight_scm);
             positions_scm_list = scm_append(scm_list_2(positions_scm_list, scm_list_1(tsposition_scm)));
         }
 
-        tslexeme_scm = scm_call_2(make_tslexeme_proc, lexeme_scm, positions_scm_list);
+        tslexeme_scm = call_2(make_tslexeme_proc, lexeme_scm, positions_scm_list);
         tsvector_scm_list = scm_append(scm_list_2(tsvector_scm_list, scm_list_1(tslexeme_scm)));
     }
 
-    tsvector_scm = scm_call_1(make_tsvector_proc, tsvector_scm_list);
+    tsvector_scm = call_1(make_tsvector_proc, tsvector_scm_list);
 
     return tsvector_scm;
 }
@@ -4888,9 +4937,9 @@ SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
 Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
 {
 
-	SCM n = call_scheme_1(normalize_tsvector_proc, x);
+	SCM n = call_1(normalize_tsvector_proc, x);
 	size_t buffer_size = calculate_tsvector_buffer_size(n);
-	SCM lexemes = scm_call_1(tsvector_lexemes_proc, n);
+	SCM lexemes = call_1(tsvector_lexemes_proc, n);
 	long lexeme_count = scm_to_long(scm_length(lexemes));
 	size_t alloc_size = CALCDATASIZE(lexeme_count, buffer_size);
 
@@ -4917,8 +4966,8 @@ Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
 
 	for (long i = 0; i < lexeme_count; i++) {
 		SCM lexeme = scm_car(lexemes);
-		SCM lexeme_str = scm_call_1(tslexeme_lexeme_proc, lexeme);
-		SCM positions = scm_call_1(tslexeme_positions_proc, lexeme);
+		SCM lexeme_str = call_1(tslexeme_lexeme_proc, lexeme);
+		SCM positions = call_1(tslexeme_positions_proc, lexeme);
 
 		size_t str_len = scm_c_string_utf8_length(lexeme_str);
 
@@ -4963,7 +5012,7 @@ Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
 
 uint16 get_tsposition_index(SCM position)
 {
-	uint16 index = scm_to_uint16(scm_call_1(tsposition_index_proc, position));
+	uint16 index = scm_to_uint16(call_1(tsposition_index_proc, position));
 
 	if (index > 0x3fff)
 		elog(ERROR, "get_tsposition_index: index out of range: %d > %d", index, 0x3fff);
@@ -4973,7 +5022,7 @@ uint16 get_tsposition_index(SCM position)
 
 uint16 get_tsposition_weight(SCM position)
 {
-	uint16 weight = scm_to_uint16(scm_call_1(tsposition_weight_proc, position));
+	uint16 weight = scm_to_uint16(call_1(tsposition_weight_proc, position));
 
 	if (weight > 3)
 		elog(ERROR, "get_tsposition_weight: weight out of range: %d > %d", weight, 3);
@@ -4983,14 +5032,14 @@ uint16 get_tsposition_weight(SCM position)
 
 size_t calculate_tsvector_buffer_size(SCM x)
 {
-	SCM lexemes = scm_call_1(tsvector_lexemes_proc, x);
+	SCM lexemes = call_1(tsvector_lexemes_proc, x);
 	size_t buflen = 0;
 
 	while (lexemes != SCM_EOL) {
 		SCM lexeme = scm_car(lexemes);
-		long pos_count = scm_to_long(scm_length(scm_call_1(tslexeme_positions_proc, lexeme)));
+		long pos_count = scm_to_long(scm_length(call_1(tslexeme_positions_proc, lexeme)));
 
-		buflen += scm_c_string_utf8_length(scm_call_1(tslexeme_lexeme_proc, lexeme));
+		buflen += scm_c_string_utf8_length(call_1(tslexeme_lexeme_proc, lexeme));
 		buflen = SHORTALIGN(buflen);
 		buflen += pos_count * sizeof(WordEntryPos) + sizeof(uint16);
 
@@ -5020,7 +5069,7 @@ SCM datum_range_to_scm(Datum x, Oid type_oid)
 	scm_lower = range_bound_to_scm(&lower, subtype_oid);
 	scm_upper = range_bound_to_scm(&upper, subtype_oid);
 
-	return scm_call_3(make_range_proc, scm_lower, scm_upper, scm_flags);
+	return call_3(make_range_proc, scm_lower, scm_upper, scm_flags);
 }
 
 SCM range_flags_to_scm(char flags)
@@ -5063,8 +5112,8 @@ Datum scm_to_datum_range(SCM x, Oid type_oid)
 	lower.lower = true;
 	upper.lower = false;
 
-	scm_lower = scm_call_1(range_lower_proc, x);
-	scm_upper = scm_call_1(range_upper_proc, x);
+	scm_lower = call_1(range_lower_proc, x);
+	scm_upper = call_1(range_upper_proc, x);
 
 	lower.inclusive = flags & RANGE_LB_INC;
 	upper.inclusive = flags & RANGE_UB_INC;
@@ -5086,7 +5135,7 @@ Datum scm_to_datum_range(SCM x, Oid type_oid)
 char scm_range_flags_to_char(SCM range)
 {
 
-	SCM scm_flags = scm_call_1(range_flags_proc, range);
+	SCM scm_flags = call_1(range_flags_proc, range);
 
 	char flags = 0;
 
@@ -5136,7 +5185,7 @@ SCM datum_multirange_to_scm(Datum x, Oid type_oid)
 		scm_ranges = scm_cons(scm_range, scm_ranges);
 	}
 
-	return scm_call_1(make_multirange_proc, scm_ranges);
+	return call_1(make_multirange_proc, scm_ranges);
 }
 
 Datum scm_to_datum_multirange(SCM x, Oid type_oid)
@@ -5148,7 +5197,7 @@ Datum scm_to_datum_multirange(SCM x, Oid type_oid)
 		Oid range_type_oid = get_multirange_range(type_oid);
 		TypeCacheEntry *rangetyp = lookup_type_cache(range_type_oid, TYPECACHE_RANGE_INFO);
 
-		SCM scm_ranges = scm_call_1(multirange_ranges_proc, x);
+		SCM scm_ranges = call_1(multirange_ranges_proc, x);
 		int32 range_count = scm_to_int(scm_length(scm_ranges));
 
 		RangeType **ranges = palloc(range_count * sizeof(RangeType *));
@@ -5179,147 +5228,147 @@ Datum scm_to_datum_void(SCM x, Oid type_oid)
 
 Oid get_boxed_datum_type(SCM x)
 {
-	return scm_to_uint32(scm_call_1(boxed_datum_type_proc, x));
+	return scm_to_uint32(call_1(boxed_datum_type_proc, x));
 }
 
 Datum get_boxed_datum_value(SCM x)
 {
-	return scm_to_uint64(scm_call_1(boxed_datum_value_proc, x));
+	return scm_to_uint64(call_1(boxed_datum_value_proc, x));
 }
 
 bool is_bit_string(SCM x)
 {
-	return scm_is_true(scm_call_1(is_bit_string_proc, x));
+	return scm_is_true(call_1(is_bit_string_proc, x));
 }
 
 bool is_box(SCM x)
 {
-	return scm_is_true(scm_call_1(is_box_proc, x));
+	return scm_is_true(call_1(is_box_proc, x));
 }
 
 bool is_boxed_datum(SCM x)
 {
-	return scm_is_true(scm_call_1(is_boxed_datum_proc, x));
+	return scm_is_true(call_1(is_boxed_datum_proc, x));
 }
 
 bool is_circle(SCM x)
 {
-	return scm_is_true(scm_call_1(is_circle_proc, x));
+	return scm_is_true(call_1(is_circle_proc, x));
 }
 
 bool is_cursor(SCM x)
 {
-	return scm_is_true(scm_call_1(is_cursor_proc, x));
+	return scm_is_true(call_1(is_cursor_proc, x));
 }
 
 bool is_date(SCM x)
 {
-	return scm_is_true(scm_call_1(is_date_proc, x));
+	return scm_is_true(call_1(is_date_proc, x));
 }
 
 bool is_decimal(SCM x)
 {
-	return scm_is_true(scm_call_1(is_decimal_proc, x));
+	return scm_is_true(call_1(is_decimal_proc, x));
 }
 
 bool is_inet(SCM x)
 {
-	return scm_is_true(scm_call_1(is_inet_proc, x));
+	return scm_is_true(call_1(is_inet_proc, x));
 }
 
 bool is_int2(SCM x)
 {
-	return scm_is_true(scm_call_1(is_int2_proc, x));
+	return scm_is_true(call_1(is_int2_proc, x));
 }
 
 bool is_int4(SCM x)
 {
-	return scm_is_true(scm_call_1(is_int4_proc, x));
+	return scm_is_true(call_1(is_int4_proc, x));
 }
 
 bool is_int8(SCM x)
 {
-	return scm_is_true(scm_call_1(is_int8_proc, x));
+	return scm_is_true(call_1(is_int8_proc, x));
 }
 
 bool is_jsonb(SCM x)
 {
-	return scm_is_true(scm_call_1(is_jsonb_proc, x));
+	return scm_is_true(call_1(is_jsonb_proc, x));
 }
 
 bool is_jsonpath(SCM x)
 {
-	return scm_is_true(scm_call_1(is_jsonpath_proc, x));
+	return scm_is_true(call_1(is_jsonpath_proc, x));
 }
 
 bool is_line(SCM x)
 {
-	return scm_is_true(scm_call_1(is_line_proc, x));
+	return scm_is_true(call_1(is_line_proc, x));
 }
 
 bool is_lseg(SCM x)
 {
-	return scm_is_true(scm_call_1(is_lseg_proc, x));
+	return scm_is_true(call_1(is_lseg_proc, x));
 }
 
 bool is_macaddr(SCM x)
 {
-	return scm_is_true(scm_call_1(is_macaddr_proc, x));
+	return scm_is_true(call_1(is_macaddr_proc, x));
 }
 
 bool is_macaddr8(SCM x)
 {
-	return scm_is_true(scm_call_1(is_macaddr8_proc, x));
+	return scm_is_true(call_1(is_macaddr8_proc, x));
 }
 
 bool is_multirange(SCM x)
 {
-	return scm_is_true(scm_call_1(is_multirange_proc, x));
+	return scm_is_true(call_1(is_multirange_proc, x));
 }
 
 bool is_path(SCM x)
 {
-	return scm_is_true(scm_call_1(is_path_proc, x));
+	return scm_is_true(call_1(is_path_proc, x));
 }
 
 bool is_point(SCM x)
 {
-	return scm_is_true(scm_call_1(is_point_proc, x));
+	return scm_is_true(call_1(is_point_proc, x));
 }
 
 bool is_polygon(SCM x)
 {
-	return scm_is_true(scm_call_1(is_polygon_proc, x));
+	return scm_is_true(call_1(is_polygon_proc, x));
 }
 
 bool is_range(SCM x)
 {
-	return scm_is_true(scm_call_1(is_range_proc, x));
+	return scm_is_true(call_1(is_range_proc, x));
 }
 
 bool is_record(SCM x)
 {
-	return scm_is_true(scm_call_1(is_record_proc, x));
+	return scm_is_true(call_1(is_record_proc, x));
 }
 
 bool is_table(SCM x)
 {
-	return scm_is_true(scm_call_1(is_table_proc, x));
+	return scm_is_true(call_1(is_table_proc, x));
 }
 
 bool is_time(SCM x)
 {
-	return scm_is_true(scm_call_1(is_time_proc, x));
+	return scm_is_true(call_1(is_time_proc, x));
 }
 
 bool is_tsquery(SCM x)
 {
-	return scm_is_true(scm_call_1(is_tsquery_proc, x));
+	return scm_is_true(call_1(is_tsquery_proc, x));
 }
 
 bool is_tsvector(SCM x)
 {
-	return scm_is_true(scm_call_1(is_tsvector_proc, x));
+	return scm_is_true(call_1(is_tsvector_proc, x));
 }
 
 Datum datum_date_to_timestamptz(Datum x)
@@ -5339,7 +5388,7 @@ char *scm_to_string(SCM obj)
 	MemoryContext context = CurrentMemoryContext;
 
 	SCM proc = scm_eval_string(scm_from_locale_string("(lambda (x) (format #f \"~s\" x))"));
-	SCM str_scm = scm_call_1(proc, obj);
+	SCM str_scm = call_1(proc, obj);
 
 	// Convert SCM string to C string and allocate it in the given memory context
 	size_t len;
@@ -5490,11 +5539,11 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 					scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
 			}
 
-			record = scm_call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
+			record = call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
 			records = scm_cons(record, records);
 		}
 
-		table = scm_call_4(make_table_proc, type_names, records, attr_names, attr_names_hash);
+		table = call_4(make_table_proc, type_names, records, attr_names, attr_names_hash);
 
 		break;
 	}
@@ -5755,7 +5804,7 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	}
 	PG_END_TRY();
 
-	cursor = scm_call_1(make_cursor_proc, scm_from_locale_string(portal->name));
+	cursor = call_1(make_cursor_proc, scm_from_locale_string(portal->name));
 
 	SPI_finish();
 
@@ -5786,7 +5835,7 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 	if (!is_cursor(cursor))
 		throw_wrong_argument_type("cursor", "cursor", cursor);
 
-	name = scm_to_locale_string(scm_call_1(cursor_name_proc, cursor));
+	name = scm_to_locale_string(call_1(cursor_name_proc, cursor));
 
 	ret = SPI_connect();
 
@@ -5834,7 +5883,7 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 				scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
 		}
 
-		record = scm_call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
+		record = call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
 		records = scm_cons(record, records);
 	}
 
@@ -6081,8 +6130,8 @@ Oid infer_range_type_oid(SCM x)
 	RangeCacheEntry *entry;
 	bool found;
 
-	lower = scm_call_1(range_lower_proc, x);
-	upper = scm_call_1(range_upper_proc, x);
+	lower = call_1(range_lower_proc, x);
+	upper = call_1(range_upper_proc, x);
 
 	lower_oid = infer_scm_type_oid(lower);
 	upper_oid = infer_scm_type_oid(upper);
@@ -6151,7 +6200,7 @@ bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_t
 
 Oid infer_multirange_type_oid(SCM x)
 {
-	SCM ranges = scm_call_1(multirange_ranges_proc, x);
+	SCM ranges = call_1(multirange_ranges_proc, x);
 
 	Oid subtype_oid = InvalidOid;
 
@@ -6167,8 +6216,8 @@ Oid infer_multirange_type_oid(SCM x)
 		SCM lower, upper;
 		Oid lower_oid, upper_oid;
 
-		lower = scm_call_1(range_lower_proc, range);
-		upper = scm_call_1(range_upper_proc, range);
+		lower = call_1(range_lower_proc, range);
+		upper = call_1(range_upper_proc, range);
 
 		lower_oid = infer_scm_type_oid(lower);
 		upper_oid = infer_scm_type_oid(upper);
