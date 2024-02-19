@@ -534,7 +534,7 @@
          (or (= 1 len)
              (raise-exception `(jsonpath-invalid-root-expr ,e))))
 
-        ((abs any-array any-key ceiling double exists floor keyvalue size type unknown?)
+        ((abs any-array any-key ceiling double exists floor keyvalue negate nop size type unknown?)
          (or (and (= 2 len)
                   (validate-expr (list-ref e 1) validate-expr))
              (raise-exception `(jsonpath-invalid-unary-expr ,e))))
@@ -620,34 +620,41 @@
       (raise-exception `(jsonpath-invalid-any-bounds ,e))))
 
 (define (validate-jsonpath-filter-expr e validate-expr)
-  (letrec ((validate (lambda (e)
-                       (or (eq? e '(@))
+  (letrec ((validate (lambda (e _)
+                       (or (equal? e '(@))
                            (validate-expr e validate)))))
-    (validate e)))
+    (validate e #f)))
 
 (define (validate-jsonpath-index-exprs exprs validate-expr)
   (or (and (pair? exprs)
            (not (null? exprs))
-           (letrec ((validate (lambda (e)
+           (letrec ((validate (lambda (e _)
                                 (or (eq? e '(last))
                                     (validate-expr e validate)))))
              (let loop ((es exprs))
                (or (null? es)
-                   (and (validate (list-ref (car es) 0))
-                        (validate (list-ref (car es) 1))
+                   (and (validate (list-ref (car es) 0) #f)
+                        (validate (list-ref (car es) 1) #f)
                         (loop (cdr es)))))))
 
       (raise-exception `(jsonpath-invalid-index-exprs ,exprs))))
 
 (define (validate-jsonpath-regex-flags flags)
-  (or (and (pair? flags)
+  (or (null? flags)
+      (and (pair? flags)
            (let loop ((fs flags))
-             (and (case (car fs)
-                    ((dotall ispace mline quote wspace)
+             (and (pair? fs)
+                  (case (car fs)
+                    ((dot-matches-newline
+                      ignore-case
+                      multi-line
+                      literal
+                      whitespace)
                      #t)
                     (else
                      (raise-exception `(jsonpath-invalid-regex-flag ,(car fs)))))
-                  (loop (cdr fs)))))
+                  (loop (cdr fs)))
+             #t))
 
       (raise-exception `(jsonpath-invalid-regex-flags ,flags))))
 

@@ -483,6 +483,8 @@ static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
 static SCM untrusted_eval_proc;
 static SCM validate_tsquery_proc;
+//static SCM validate_jsonb_proc;
+static SCM validate_jsonpath_proc;
 
 // Symbols for triggers
 static SCM after_symbol;
@@ -851,7 +853,7 @@ void _PG_init(void)
 	tsquery_expr_proc           = eval_string_in_base_module("tsquery-expr");
 	tsvector_lexemes_proc       = eval_string_in_base_module("tsvector-lexemes");
 	untrusted_eval_proc         = eval_string_in_base_module("untrusted-eval");
-	//	validate_jsonpath_proc      = eval_string_in_base_module("validate-jsonpath");
+	validate_jsonpath_proc      = eval_string_in_base_module("validate-jsonpath");
 	validate_tsquery_proc       = eval_string_in_base_module("validate-tsquery");
 
 	decimal_to_string_proc  = eval_string_in_base_module("decimal->string");
@@ -3830,7 +3832,7 @@ Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 {
 	SCM expr = is_jsonb(x) ? call_1(jsonb_expr_proc, x) : x;
 
-	// call_1(validate_jsonb_proc, expr); //TODO
+	// call_1(validate_jsonb_proc, expr); TODO
 
 	return JsonbPGetDatum(jsonb_root_expr_to_jsonb(expr));
 }
@@ -3951,7 +3953,7 @@ Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
 	StringInfoData buf;
 	JsonPath *jsp;
 
-	// call_1(validate_jsonpath_proc, x); //TODO
+	call_1(validate_jsonpath_proc, x);
 
 	initStringInfo(&buf);
 	appendStringInfoSpaces(&buf, JSONPATH_HDRSZ);
