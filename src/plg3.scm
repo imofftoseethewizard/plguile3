@@ -633,7 +633,8 @@
                                     (validate-expr e validate)))))
              (let loop ((es exprs))
                (or (null? es)
-                   (and (validate (list-ref (car es) 0) #f)
+                   (and (pair? es)
+                        (validate (list-ref (car es) 0) #f)
                         (validate (list-ref (car es) 1) #f)
                         (loop (cdr es)))))))
 

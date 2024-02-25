@@ -1,6 +1,6 @@
 begin;
 
-select plan(221);
+select plan(236);
 
 select lives_ok('create extension if not exists plg3', 'install (if not exists)');
 select lives_ok('drop extension plg3', 'de-install');
@@ -689,6 +689,33 @@ create function f_jsonb_id(a jsonb) returns jsonb as 'a' language guile3;
 select ok(f_jsonb_id(t.jsonb)->'foo'->>0 = 'bar', 'jsonb: identity mapping test')
 from (select '{"foo": ["bar", 42]}'::jsonb) t(jsonb);
 
+create function f_x_jsonb_bad_object_1() returns jsonb as $$
+'("a") ;; '
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_jsonb_bad_object_1()',
+  'jsonb object expression must be an alist with string keys: ("a")',
+  'jsonb: bad object, wrong length');
+
+create function f_x_jsonb_bad_object_2() returns jsonb as $$
+'(2 "a") ;; '
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_jsonb_bad_object_2()',
+  'jsonb object expression must be an alist with string keys: (2 "a")',
+  'jsonb: bad object, bad key type');
+
+create function f_x_jsonb_bad_object_3() returns jsonb as $$
+(cons "a" 2)
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_jsonb_bad_object_3()',
+  'jsonb object expression must be an alist with string keys: ("a" . 2)',
+  'jsonb: bad object, improper list');
+
 --------------------------------------------------------------------------------
 --
 -- Type jsonpath
@@ -827,6 +854,24 @@ create function f_int4multirange_id(a int4multirange) returns int4multirange as 
 select ok(f_int4multirange_id(t.v) = t.v, 'int4multirange: identity mapping test')
 from (select '{[3,7), [8,9)}'::int4multirange) t(v);
 
+create function f_x_bad_multirange_1() returns int4multirange as $$
+(make-multirange (cons 1 2))
+$$ language guile3;
+
+create function f_x_bad_multirange_2() returns int4multirange as $$
+(make-multirange #f)
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_bad_multirange_1()',
+  'multirange must be a list of ranges: (1 . 2)',
+  'int4multirange: bad list 1');
+
+select throws_ok(
+  'select f_x_bad_multirange_2()',
+  'multirange must be a list of ranges: #f',
+  'int4multirange: bad list 2');
+
 --------------------------------------------------------------------------------
 --
 -- Domains
@@ -876,6 +921,32 @@ select throws_ok(
   'select f_setof_record()',
   'function returning setof record called in context that cannot accept type record',
   'setof: record');
+
+create function f_x_bad_record_types_1() returns setof record as $$
+(make-table (cons 'int4 0) ;; '
+            '() ;; '
+            '(a b) ;; '
+            #f)
+$$
+language guile3;
+
+select throws_ok(
+  'select f_x_bad_record_types_1()',
+  'Type description must be a list of symbols: (int4 . 0)',
+  'setof: x record bad types');
+
+create function f_x_bad_record_types_2() returns setof record as $$
+(make-table '(int4 0) ;; '
+            '() ;; '
+            '(a b) ;; '
+            #f)
+$$
+language guile3;
+
+select throws_ok(
+  'select f_x_bad_record_types_2()',
+  'Type description must be a list of symbols: (int4 0)',
+  'setof: x record bad types');
 
 --------------------------------------------------------------------------------
 --
@@ -1102,6 +1173,22 @@ create function f_execute_wrong_type_command() returns text as $$
 $$
 language guile3;
 
+create function f_execute_wrong_type_args_1() returns text as $$
+(with-exception-handler
+  (lambda (exc) "bad args")
+  (lambda () (execute "select 1" 5))
+  #:unwind? #t)
+$$
+language guile3;
+
+create function f_execute_wrong_type_args_2() returns text as $$
+(with-exception-handler
+  (lambda (exc) "bad args")
+  (lambda () (execute "select 1" (cons 1 2)))
+  #:unwind? #t)
+$$
+language guile3;
+
 select is(f_execute_with_args_int2(), 3::int2, 'execute: with args int2');
 select is(f_execute_with_args_int4(), 3::int4, 'execute: with args int4');
 select is(f_execute_with_args_int8(), 3::int8, 'execute: with args int8');
@@ -1156,6 +1243,8 @@ select is(f_execute_with_args_boolrange(), '[false, true]'::boolrange, 'execute:
 select is(f_execute_with_args_int4multirange(), '{[3,7), [8,9)}'::int4multirange, 'execute: with args int4multirange');
 
 select is(f_execute_wrong_type_command(), 'bad command', 'execute: wrong_type_command');
+select is(f_execute_wrong_type_args_1(), 'bad args', 'execute: wrong_type_args_1');
+select is(f_execute_wrong_type_args_2(), 'bad args', 'execute: wrong_type_args_2');
 
 create table things (id int, name text);
 insert into things values (1, 'foo'), (2, 'bar');
@@ -1168,7 +1257,37 @@ create function f_execute_with_receiver_simple() returns int as $$
                                   name))))
 $$ language guile3;
 
-select is(f_execute_with_receiver_simple(), 1, 'execute_with_receive: simple');
+select is(f_execute_with_receiver_simple(), 1, 'execute_with_receiver: simple');
+
+create function f_x_execute_with_receiver_wrong_type_command() returns int as $$
+(length (execute 5
+                 #:receiver (lambda (id name) (stop-command-execution))))
+$$ language guile3;
+
+create function f_x_execute_with_receiver_wrong_type_args_1() returns int as $$
+(length (execute "select * from things order by id" #f
+                 #:receiver (lambda (id name) (stop-command-execution))))
+$$ language guile3;
+
+create function f_x_execute_with_receiver_wrong_type_args_2() returns int as $$
+(length (execute "select * from things order by id" (cons 1 2)
+                 #:receiver (lambda (id name) (stop-command-execution))))
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_execute_with_receiver_wrong_type_command()',
+  'wrong-argument-type: (command "string" 5)',
+  'execute_with_receiver: wrong_type_command');
+
+select throws_ok(
+  'select f_x_execute_with_receiver_wrong_type_args_1()',
+  'wrong-argument-type: (args "list" #f)',
+  'execute_with_receiver: wrong_type_args_1');
+
+select throws_ok(
+  'select f_x_execute_with_receiver_wrong_type_args_2()',
+  'wrong-argument-type: (args "list" (1 . 2))',
+  'execute_with_receiver: wrong_type_args_2');
 
 create function f_cursor_simple() returns text as $$
 (let ((c (cursor-open "select * from things order by id")))
@@ -1176,6 +1295,36 @@ create function f_cursor_simple() returns text as $$
 $$ language guile3;
 
 select is(f_cursor_simple(), 'foo', 'cursor-open: simple');
+
+create function f_x_cursor_wrong_type_command() returns text as $$
+(let ((c (cursor-open 5)))
+  (record-ref (car (fetch c)) 'name)) ;; '
+$$ language guile3;
+
+create function f_x_cursor_wrong_type_args_1() returns text as $$
+(let ((c (cursor-open "select * from things order by id" #f)))
+  (record-ref (car (fetch c)) 'name)) ;; '
+$$ language guile3;
+
+create function f_x_cursor_wrong_type_args_2() returns text as $$
+(let ((c (cursor-open "select * from things order by id" (cons 1 2))))
+  (record-ref (car (fetch c)) 'name)) ;; '
+$$ language guile3;
+
+select throws_ok(
+  'select f_x_cursor_wrong_type_command()',
+  'wrong-argument-type: (command "string" 5)',
+  'cursor_open: wrong_type_command');
+
+select throws_ok(
+  'select f_x_cursor_wrong_type_args_1()',
+  'wrong-argument-type: (args "list" #f)',
+  'cursor_open: wrong_type_args_1');
+
+select throws_ok(
+  'select f_x_cursor_wrong_type_args_2()',
+  'wrong-argument-type: (args "list" (1 . 2))',
+  'cursor_open: wrong_type_args_2');
 
 create function f_tr_new() returns trigger as 'new' language guile3;
 create trigger tr_things_before_insert before insert on things
@@ -1223,40 +1372,12 @@ $$ language guile3;
 select ok((select count(*) from do_stuff) = 1, 'basic inline call test');
 
 create function f_x_nested() returns int as $$
- (execute "do ' begin raise exception ''nested error''; end; ' language plpgsql;")
+ (execute "do 'begin raise exception ''nested error''; end'")
 $$ language guile3;
 
 select throws_ok(
   'select f_x_nested()',
   'execute-error: ("P0001" "nested error" #f #f)',
   'nested error handling');
-
--- select is(plg3_get_default_forms(), '{}'::text[], 'default forms initial');
-
--- select plg3_set_default_forms('{a,b}'::text[]);
-
--- select is(plg3_get_default_forms(), '{a,b}'::text[], 'set default forms 1');
-
--- select plg3_set_default_forms('{b,c}'::text[]);
-
--- select is(plg3_get_default_forms(), '{b,c}'::text[], 'set default forms 2');
-
--- select plg3_add_default_forms('{d,e}'::text[]);
-
--- select is(plg3_get_default_forms(), '{b,c,d,e}'::text[], 'add set default forms');
-
--- select is(plg3_get_role_forms('postgres'), NULL, 'role forms initial');
-
--- select plg3_set_role_forms('postgres', '{a,b}'::text[]);
-
--- select is(plg3_get_role_forms('postgres'), '{a,b}'::text[], 'set role forms 1');
-
--- select plg3_set_role_forms('postgres', '{b,c}'::text[]);
-
--- select is(plg3_get_role_forms('postgres'), '{b,c}'::text[], 'set role forms 2');
-
--- select plg3_add_role_forms('postgres', '{d,e}'::text[]);
-
--- select is(plg3_get_role_forms('postgres'), '{b,c,d,e}'::text[], 'add set role forms');
 
 rollback;

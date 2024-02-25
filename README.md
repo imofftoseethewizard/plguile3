@@ -69,6 +69,10 @@ in event trigger handlers.
 - Guile 3.0
 - Ubuntu 22.04
 
+## Packaging
+
+https://tembo.io/blog/pgxn-ecosystem-jobs
+
 ## Development Setup
 
 Install docker.  To create the test image for Postgres 14

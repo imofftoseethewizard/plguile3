@@ -2,9 +2,7 @@
 
 #include <postgres.h>
 
-#include <fmgr.h>
-#include <funcapi.h>
-#include <miscadmin.h>
+// Postgres include files, in alphabetical order
 #include <access/genam.h>
 #include <access/heapam.h>
 #include <access/htup_details.h>
@@ -21,8 +19,11 @@
 #include <common/hashfn.h>
 #include <executor/spi.h>
 #include <executor/tuptable.h>
+#include <fmgr.h>
+#include <funcapi.h>
 #include <lib/stringinfo.h>
 #include <mb/pg_wchar.h>
+#include <miscadmin.h>
 #include <parser/parse_func.h>
 #include <tcop/dest.h>
 #include <tsearch/ts_type.h>
@@ -1376,7 +1377,7 @@ SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
 	return apply_0_with_handlers(
 		apply_with_limits_proc,
 		scm_list_4(proc, args, time_limit, allocation_limit),
-		8);
+		9);
 }
 
 SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
@@ -1391,6 +1392,10 @@ typedef struct {
 	SCM proc;
 	SCM args;
 	int internal_frame_count;
+	// Used to communicate between the pre-unwind handler, which
+	// captures the backtrace, and the error handler, which displays
+	// it.
+	SCM backtrace;
 } ApplyWithHandlersData;
 
 SCM apply_0_with_handlers(SCM proc, SCM args, int internal_backtrace_frame_count)
@@ -1399,19 +1404,15 @@ SCM apply_0_with_handlers(SCM proc, SCM args, int internal_backtrace_frame_count
 		proc,
 		args,
 		internal_backtrace_frame_count,
+		SCM_BOOL_F
 	};
-
-	// Used to communicate between the pre-unwind handler, which
-	// captures the backtrace, and the error handler, which displays
-	// it.
-	SCM backtrace = SCM_BOOL_F;
 
     return scm_c_catch(
         SCM_BOOL_T,
         apply_0_with_handlers_inner,
         (void *)&data,
-        apply_0_with_handlers_error_handler, &backtrace,
-        apply_0_with_handlers_pre_unwind_handler, &backtrace);
+        apply_0_with_handlers_error_handler, &data,
+        apply_0_with_handlers_pre_unwind_handler, &data);
 }
 
 SCM apply_0_with_handlers_inner(void *data)
@@ -1423,7 +1424,8 @@ SCM apply_0_with_handlers_inner(void *data)
 
 SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args)
 {
-	SCM backtrace = *(SCM *)data;
+	ApplyWithHandlersData *d = (ApplyWithHandlersData *)data;
+	SCM backtrace = d->backtrace;
 
 	if (backtrace == SCM_BOOL_F)
 		elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
@@ -1434,13 +1436,14 @@ SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args)
 
 SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args)
 {
+	ApplyWithHandlersData *d = (ApplyWithHandlersData *)data;
+
 	// The bottom of the stack contains frames for calls of protective
 	// procedures: with-exception-handler, call-with-time-limit, etc.
 	// Omit these from any backtrace shown to the user.
-	const int internal_frame_count = 8;
 
 	SCM stack = scm_make_stack(SCM_BOOL_T, SCM_EOL);
-	int frame_count = scm_to_int(scm_stack_length(stack)) - internal_frame_count;
+	int frame_count = scm_to_int(scm_stack_length(stack)) - d->internal_frame_count;
 
 	if (frame_count > 0) {
 
@@ -1448,7 +1451,7 @@ SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args)
 
 		scm_display_backtrace(stack, port, SCM_INUM1, scm_from_int(frame_count));
 
-		*(SCM *)data = scm_get_output_string(port);
+		d->backtrace = scm_get_output_string(port);
 		scm_close_port(port);
 	}
 
@@ -1731,7 +1734,6 @@ Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
 
     tupstore = tuplestore_begin_heap(true, false, work_mem);
 
-
     if (!is_table(x))
         rows = x;
 
@@ -1840,11 +1842,27 @@ TupleDesc table_tuple_desc(SCM x)
 
 TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list)
 {
-	int len = scm_to_int(scm_length(type_desc_list));
-	TupleDesc tupdesc = CreateTemplateTupleDesc(len);
+	SCM head;
+	long len = scm_ilength(type_desc_list);
+	TupleDesc tupdesc;
 
-	for (int i = 0; i < len; i++) {
-		SCM type_name = scm_car(type_desc_list);
+	if (len <= 0)
+		elog(ERROR, "Type description must be a list of symbols: %s", scm_to_string(type_desc_list));
+
+	head = type_desc_list;
+
+	while (head != SCM_EOL) {
+		SCM type_name = scm_car(head);
+		if (!scm_is_symbol(type_name))
+			elog(ERROR, "Type description must be a list of symbols: %s", scm_to_string(type_desc_list));
+		head = scm_cdr(head);
+	}
+
+	tupdesc = CreateTemplateTupleDesc(len);
+	head = type_desc_list;
+
+	for (long i = 0; i < len; i++) {
+		SCM type_name = scm_car(head);
 		char *type_name_cstr = scm_to_locale_string(scm_symbol_to_string(type_name));
 		Oid typeOid = TypenameGetTypid(type_name_cstr);
 
@@ -1862,7 +1880,7 @@ TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list)
 
 		TupleDescInitEntry(tupdesc, (AttrNumber)i+1, attr_name_cstr, typeOid, -1, 0);
 
-		type_desc_list = scm_cdr(type_desc_list);
+		head = scm_cdr(head);
 		free(type_name_cstr);
 	}
 
@@ -3457,6 +3475,7 @@ Datum scm_to_datum_inet(SCM x, Oid type_oid)
 		int family;
 
 		// Check family and address length
+
 		if (strcmp(family_str, "inet") == 0) {
 			if (addr_len != 4) {
 				free(family_str);
@@ -3830,16 +3849,15 @@ SCM jsb_scalar_to_scm(JsonbValue *jsb)
 
 Datum scm_to_datum_jsonb(SCM x, Oid type_oid)
 {
-	SCM expr = is_jsonb(x) ? call_1(jsonb_expr_proc, x) : x;
-
-	// call_1(validate_jsonb_proc, expr); TODO
-
-	return JsonbPGetDatum(jsonb_root_expr_to_jsonb(expr));
+	return JsonbPGetDatum(jsonb_root_expr_to_jsonb(x));
 }
 
 Jsonb *jsonb_root_expr_to_jsonb(SCM expr)
 {
 	JsonbValue jsbv;
+
+	while (is_jsonb(expr))
+		expr = call_1(jsonb_expr_proc, expr);
 
 	if (scm_is_vector(expr) || scm_is_pair(expr))
 		jsonb_expr_to_jsbv(expr, &jsbv);
@@ -3852,6 +3870,9 @@ Jsonb *jsonb_root_expr_to_jsonb(SCM expr)
 
 void jsonb_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
 {
+	while (is_jsonb(expr))
+		expr = call_1(jsonb_expr_proc, expr);
+
 	if (scm_is_vector(expr))
 		jsonb_array_expr_to_jsbv(expr, jsbv);
 
@@ -3878,17 +3899,32 @@ void jsonb_array_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
 
 void jsonb_object_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
 {
-	int i, len = scm_to_int(scm_length(expr))/2;
+	long count, i, len = scm_ilength(expr);
 	JsonbPair *pair;
 	SCM x = expr;
 
+	if (len < 0 || len % 2)
+		elog(ERROR, "jsonb object expression must be an alist with string keys: %s", scm_to_string(expr));
+
+	count = len / 2;
+
 	jsbv->type = jbvObject;
-	jsbv->val.object.nPairs = len;
-	jsbv->val.object.pairs = (JsonbPair *)palloc(sizeof(JsonbPair) * len);
+	jsbv->val.object.nPairs = count;
+	jsbv->val.object.pairs = (JsonbPair *)palloc(sizeof(JsonbPair) * count);
 
-	for (i = 0, pair = jsbv->val.object.pairs; i < len; i++, pair++) {
+	for (i = 0, pair = jsbv->val.object.pairs; i < count; i++, pair++) {
 
-		jsonb_scalar_expr_to_jsbv(scm_car(x), &pair->key);
+		SCM key;
+
+		key = scm_car(x);
+
+		while (is_jsonb(key))
+			key = call_1(jsonb_expr_proc, key);
+
+		if (!scm_is_string(key))
+			elog(ERROR, "jsonb object expression must be an alist with string keys: %s", scm_to_string(expr));
+
+		jsonb_scalar_expr_to_jsbv(key, &pair->key);
 
 		x = scm_cdr(x);
 
@@ -3934,6 +3970,9 @@ void jsonb_scalar_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
 		jsbv->type = jbvBool;
 		jsbv->val.boolean = scm_to_bool(expr);
 	}
+
+	else
+		elog(ERROR, "d");
 }
 
 SCM datum_jsonpath_to_scm(Datum x, Oid type_oid)
@@ -4468,7 +4507,7 @@ int scm_expr_to_jsp(StringInfo buf, SCM expr)
 		case jpiIndexArray: {
 
 			SCM indices = scm_c_list_ref(expr, 1);
-			SCM count = scm_length(indices);
+			SCM count = scm_length(indices); // TODO check -- guarded by validate-jsonpath
 			int32 offset;
 
 			scm_chained_expr_to_jsp(buf, scm_c_list_ref(expr, 2));
@@ -4938,11 +4977,10 @@ SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
 {
-
 	SCM n = call_1(normalize_tsvector_proc, x);
 	size_t buffer_size = calculate_tsvector_buffer_size(n);
 	SCM lexemes = call_1(tsvector_lexemes_proc, n);
-	long lexeme_count = scm_to_long(scm_length(lexemes));
+	long lexeme_count = scm_ilength(lexemes);
 	size_t alloc_size = CALCDATASIZE(lexeme_count, buffer_size);
 
 	TSVector result;
@@ -4983,7 +5021,7 @@ Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
 			entries[i].haspos = false;
 
 		else {
-			long position_count = scm_to_long(scm_length(positions));
+			long position_count = scm_ilength(positions);
 
 			if (position_count > 0xffff)
 				elog(ERROR, "too many positions");
@@ -5039,7 +5077,7 @@ size_t calculate_tsvector_buffer_size(SCM x)
 
 	while (lexemes != SCM_EOL) {
 		SCM lexeme = scm_car(lexemes);
-		long pos_count = scm_to_long(scm_length(call_1(tslexeme_positions_proc, lexeme)));
+		long pos_count = scm_ilength(call_1(tslexeme_positions_proc, lexeme));
 
 		buflen += scm_c_string_utf8_length(call_1(tslexeme_lexeme_proc, lexeme));
 		buflen = SHORTALIGN(buflen);
@@ -5200,13 +5238,17 @@ Datum scm_to_datum_multirange(SCM x, Oid type_oid)
 		TypeCacheEntry *rangetyp = lookup_type_cache(range_type_oid, TYPECACHE_RANGE_INFO);
 
 		SCM scm_ranges = call_1(multirange_ranges_proc, x);
-		int32 range_count = scm_to_int(scm_length(scm_ranges));
+		long range_count = scm_ilength(scm_ranges);
 
-		RangeType **ranges = palloc(range_count * sizeof(RangeType *));
-
+		RangeType **ranges;
 		MultirangeType *multirange;
 
-		for (int i = 0; i < range_count; i++) {
+		if (range_count <= 0)
+			elog(ERROR, "multirange must be a list of ranges: %s", scm_to_string(scm_ranges));
+
+		ranges = palloc(range_count * sizeof(RangeType *));
+
+		for (long i = 0; i < range_count; i++) {
 			Datum range = scm_to_datum_range(scm_car(scm_ranges), range_type_oid);
 			ranges[i] = DatumGetRangeTypeP(range);
 			scm_ranges = scm_cdr(scm_ranges);
@@ -5463,14 +5505,21 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 			ret = SPI_execute(
 				scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
 		else {
-			int nargs = scm_to_int(scm_length(args));
-			Oid *arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
-			Datum *arg_values = (Datum *)palloc(sizeof(Datum) * nargs);
-			char *arg_nulls = (char *)palloc0(sizeof(char) * nargs);
+			long nargs = scm_ilength(args);
+			Oid *arg_types;
+			Datum *arg_values;
+			char *arg_nulls;
 
 			SCM rest = args;
 
-			for (int i = 0; i < nargs; i++) {
+			if (nargs < 0)
+				throw_wrong_argument_type("args", "list", args);
+
+			arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
+			arg_values = (Datum *)palloc(sizeof(Datum) * nargs);
+			arg_nulls = (char *)palloc0(sizeof(char) * nargs);
+
+			for (long i = 0; i < nargs; i++) {
 				SCM arg = scm_car(rest);
 				Oid type_oid = infer_scm_type_oid(arg);
 
@@ -5616,11 +5665,14 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	ParamListInfo param_list;
 	ParamExternData *param_ptr;
 
-	int nargs = scm_to_int(scm_length(args));
+	long nargs = scm_ilength(args);
 	Oid *arg_types = NULL;
 
 	int ret;
 	SPIExecuteOptions options = {0};
+
+	if (nargs < 0)
+		throw_wrong_argument_type("args", "list", args);
 
 	if (scm_procedure_p(receiver_proc) == SCM_BOOL_F)
 		throw_wrong_argument_type("receiver-proc", "procedure", receiver_proc);
@@ -5644,7 +5696,7 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 
 		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
 
-		for (int i = 0; i < nargs; i++) {
+		for (long i = 0; i < nargs; i++) {
 			SCM arg = scm_car(rest);
 			Oid type_oid = infer_scm_type_oid(arg);
 
@@ -5749,11 +5801,14 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 
 	ParamExternData *param_ptr;
 
-	int nargs = scm_to_int(scm_length(args));
+	long nargs = scm_ilength(args);
 	Oid *arg_types = NULL;
 
 	int ret;
 	SCM cursor;
+
+	if (nargs < 0)
+		throw_wrong_argument_type("args", "list", args);
 
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
@@ -5771,7 +5826,7 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 
 		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
 
-		for (int i = 0; i < nargs; i++) {
+		for (long i = 0; i < nargs; i++) {
 			SCM arg = scm_car(rest);
 			Oid type_oid = infer_scm_type_oid(arg);
 
