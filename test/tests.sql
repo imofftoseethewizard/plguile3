@@ -1,6 +1,6 @@
 begin;
 
-select plan(236);
+select plan(245);
 
 select lives_ok('create extension if not exists plg3', 'install (if not exists)');
 select lives_ok('drop extension plg3', 'de-install');
@@ -1249,6 +1249,82 @@ select is(f_execute_wrong_type_args_2(), 'bad args', 'execute: wrong_type_args_2
 create table things (id int, name text);
 insert into things values (1, 'foo'), (2, 'bar');
 
+create function f_x_execute_insert_immutable() returns int as $$
+(scalar (execute "insert into things values (3, 'fish') returning id"))
+$$ language guile3 immutable;
+
+create function f_x_execute_insert_stable() returns int as $$
+(scalar (execute "insert into things values (3, 'fish') returning id"))
+$$ language guile3 stable;
+
+select throws_ok(
+  'select f_x_execute_insert_immutable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute: immutable cannot change the db');
+
+select throws_ok(
+  'select f_x_execute_insert_stable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute: stable cannot change the db');
+
+create function f_x_execute_with_args_insert_immutable() returns int as $$
+(scalar (execute "insert into things values (3, $1) returning id" '("fish"))) ;; '
+$$ language guile3 immutable;
+
+create function f_x_execute_with_args_insert_stable() returns int as $$
+(scalar (execute "insert into things values (3, $1) returning id" '("fish"))) ;; '
+$$ language guile3 stable;
+
+select throws_ok(
+  'select f_x_execute_with_args_insert_immutable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute with args: immutable cannot change the db');
+
+select throws_ok(
+  'select f_x_execute_with_args_insert_stable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute with args: stable cannot change the db');
+
+create function f_x_execute_with_receiver_insert_immutable() returns int as $$
+(scalar (execute "insert into things values (3, 'fish') returning id"
+                 #:receiver (lambda (id) id)))
+$$ language guile3 immutable;
+
+create function f_x_execute_with_receiver_insert_stable() returns int as $$
+(scalar (execute "insert into things values (3, 'fish') returning id"
+                 #:receiver (lambda (id) id)))
+$$ language guile3 stable;
+
+select throws_ok(
+  'select f_x_execute_with_receiver_insert_immutable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute with receiver: immutable cannot change the db');
+
+select throws_ok(
+  'select f_x_execute_with_receiver_insert_stable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute with receiver: stable cannot change the db');
+
+create function f_x_cursor_open_insert_immutable() returns int as $$
+(let ((c (cursor-open "insert into things values (3, 'fish') returning id")))
+  (record-ref (car (fetch c)) 'id)) ;; '
+$$ language guile3 immutable;
+
+create function f_x_cursor_open_insert_stable() returns int as $$
+(let ((c (cursor-open "insert into things values (3, 'fish') returning id")))
+  (record-ref (car (fetch c)) 'id)) ;; '
+$$ language guile3 stable;
+
+select throws_ok(
+  'select f_x_cursor_open_insert_immutable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute with receiver: immutable cannot change the db');
+
+select throws_ok(
+  'select f_x_cursor_open_insert_stable()',
+  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  'execute with receiver: stable cannot change the db');
+
 create function f_execute_with_receiver_simple() returns int as $$
 (length (execute "select * from things order by id"
                  #:receiver (lambda (id name)
@@ -1274,6 +1350,11 @@ create function f_x_execute_with_receiver_wrong_type_args_2() returns int as $$
                  #:receiver (lambda (id name) (stop-command-execution))))
 $$ language guile3;
 
+create function f_x_execute_with_receiver_wrong_type_receiver() returns int as $$
+(length (execute "select * from things order by id"
+                 #:receiver 'moo-cow)) ;; '
+$$ language guile3;
+
 select throws_ok(
   'select f_x_execute_with_receiver_wrong_type_command()',
   'wrong-argument-type: (command "string" 5)',
@@ -1288,6 +1369,11 @@ select throws_ok(
   'select f_x_execute_with_receiver_wrong_type_args_2()',
   'wrong-argument-type: (args "list" (1 . 2))',
   'execute_with_receiver: wrong_type_args_2');
+
+select throws_ok(
+  'select f_x_execute_with_receiver_wrong_type_receiver()',
+  'wrong-argument-type: (receiver "procedure" moo-cow)',
+  'execute_with_receiver: wrong_type_receiver');
 
 create function f_cursor_simple() returns text as $$
 (let ((c (cursor-open "select * from things order by id")))

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.9] - 2024-02-07
+
+This version supports immutable and stable functions and prohibits
+them from directly calling INSERT, UPDATE, or DELETE using the
+`read_only` option to the underlying SPI method.
+
 ## [0.19.8] - 2024-02-25
 
 This version checks that all lists received by plg3 from user code are

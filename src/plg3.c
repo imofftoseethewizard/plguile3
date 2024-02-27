@@ -318,7 +318,7 @@ static SCM range_flags_to_scm(char flags);
 static SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid);
 static char scm_range_flags_to_char(SCM range);
 static SCM stop_command_execution(void);
-static SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM read_only, SCM count);
+static SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM count);
 static char *scm_string_to_pstr(SCM s);
 static void throw_wrong_argument_type(const char *param_name, const char *type, SCM v);
 static void throw_runtime_error(const char *format, ...);
@@ -328,11 +328,12 @@ static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
-static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM read_only, SCM scroll);
+static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll);
 static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
 static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
 static FetchDirection scm_to_fetch_direction(SCM direction);
 static long scm_to_fetch_count(SCM count);
+static char set_current_volatility(char v);
 static SCM apply_in_sandbox(SCM proc, SCM args);
 static SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit);
 static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
@@ -575,8 +576,7 @@ static HTAB *range_cache;
 static HTAB *type_cache;
 
 static SCM unbox_datum(SCM x);
-static SCM spi_execute(SCM command, SCM args, SCM read_only, SCM count);
-static SCM spi_execute_with_receiver(SCM receiver, SCM command, SCM args, SCM read_only, SCM count);
+static SCM spi_execute(SCM command, SCM args, SCM count);
 
 static SCM plg3_base_module = SCM_UNDEFINED;
 
@@ -684,9 +684,9 @@ void _PG_init(void)
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
 
-	define_primitive("%cursor-open",           7, 0, 0, (SCM (*)()) spi_cursor_open);
-	define_primitive("%execute",               4, 0, 0, (SCM (*)()) spi_execute);
-	define_primitive("%execute-with-receiver", 5, 0, 0, (SCM (*)()) spi_execute_with_receiver);
+	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
+	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
+	define_primitive("%execute-with-receiver", 4, 0, 0, (SCM (*)()) spi_execute_with_receiver);
 	define_primitive("%fetch",                 3, 0, 0, (SCM (*)()) spi_cursor_fetch);
 	define_primitive("%move",                  3, 0, 0, (SCM (*)()) spi_cursor_move);
 	define_primitive("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
@@ -1348,15 +1348,28 @@ Datum call_ordinary(FunctionCallInfo fcinfo)
 	SCM proc = find_or_compile_proc(func_oid);
 	SCM args = prepare_ordinary_arguments(fcinfo);
 
+	char prior_volatility = set_current_volatility(func_volatile(func_oid));
+
 	SCM scm_result = apply_in_sandbox(proc, args);
 
 	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
 	Datum result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
 
+	set_current_volatility(prior_volatility);
+
 	ReleaseSysCache(proc_tuple);
 
 	return result;
+}
+
+static char current_volatility = 'v';
+
+char set_current_volatility(char v)
+{
+	char prior_volatility = current_volatility;
+	current_volatility = v;
+	return prior_volatility;
 }
 
 SCM apply_in_sandbox(SCM proc, SCM args)
@@ -5479,7 +5492,7 @@ void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datu
 // SPI Integration
 //
 
-SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
+SCM spi_execute(SCM command, SCM args, SCM count)
 {
 	int ret;
 	SCM rows_processed;
@@ -5487,9 +5500,6 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
-
-	if (!scm_is_bool(read_only))
-		throw_wrong_argument_type("read-only", "boolean", read_only);
 
 	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
 		throw_wrong_argument_type("count", "non-negative integer", count);
@@ -5503,7 +5513,9 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 	{
 		if (args == SCM_EOL)
 			ret = SPI_execute(
-				scm_to_locale_string(command), scm_to_bool(read_only), scm_to_long(count));
+				scm_to_locale_string(command),
+				current_volatility != PROVOLATILE_VOLATILE,
+				scm_to_long(count));
 		else {
 			long nargs = scm_ilength(args);
 			Oid *arg_types;
@@ -5535,7 +5547,7 @@ SCM spi_execute(SCM command, SCM args, SCM count, SCM read_only)
 
 			ret = SPI_execute_with_args(
 				scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
-				scm_to_bool(read_only), scm_to_long(count));
+				current_volatility != PROVOLATILE_VOLATILE, scm_to_long(count));
 		}
 	}
 	PG_CATCH();
@@ -5653,7 +5665,7 @@ SCM stop_command_execution()
 	return stop_marker;
 }
 
-SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM count, SCM read_only)
+SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM count)
 {
 	Receiver dest = {
 		{ dest_receive, dest_startup, dest_shutdown, dest_destroy, DestNone },
@@ -5675,13 +5687,10 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 		throw_wrong_argument_type("args", "list", args);
 
 	if (scm_procedure_p(receiver_proc) == SCM_BOOL_F)
-		throw_wrong_argument_type("receiver-proc", "procedure", receiver_proc);
+		throw_wrong_argument_type("receiver", "procedure", receiver_proc);
 
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
-
-	if (!scm_is_bool(read_only))
-		throw_wrong_argument_type("read-only", "boolean", read_only);
 
 	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
 		throw_wrong_argument_type("count", "non-negative integer", count);
@@ -5716,7 +5725,7 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	options.dest            = (DestReceiver *)&dest;
 	options.owner           = NULL;
 	options.params          = param_list;
-	options.read_only       = scm_to_bool(read_only);
+	options.read_only       = current_volatility != PROVOLATILE_VOLATILE;
 
 	dest.result = dest.tail = scm_cons(SCM_EOL, SCM_EOL);
 
@@ -5793,7 +5802,7 @@ void dest_destroy(DestReceiver *self)
 {
 }
 
-SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM read_only, SCM scroll)
+SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll)
 {
 	Portal portal;
 	ParamListInfo param_list;
@@ -5812,9 +5821,6 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
-
-	if (!scm_is_bool(read_only))
-		throw_wrong_argument_type("read-only", "boolean", read_only);
 
 	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
 	param_list->numParams = nargs;
@@ -5842,7 +5848,7 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM re
 	}
 
 	options.params        = param_list;
-	options.read_only     = scm_to_bool(read_only);
+	options.read_only     = current_volatility != PROVOLATILE_VOLATILE;
 	options.cursorOptions = CURSOR_OPT_BINARY;
 
 	ret = SPI_connect();
