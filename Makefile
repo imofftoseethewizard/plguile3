@@ -54,8 +54,5 @@ $(BUILD_DIR)/plg3.scm.h: src/plg3.scm
 $(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plg3.scm.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: src/%.c
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/%.bc : src/%.c
 	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ $<
