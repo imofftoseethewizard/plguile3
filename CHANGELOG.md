@@ -13,8 +13,9 @@ them from directly calling INSERT, UPDATE, or DELETE using the
 
 ## [0.19.8] - 2024-02-25
 
-This version checks that all lists received by plg3 from user code are
-proper lists and logs an error or raises an exception as appropriate.
+This version checks that all parameters and result conversions which
+expect lists actually receive proper lists, and it logs an error or
+raises an exception as appropriate when that is not true.
 
 ## [0.19.7] - 2024-02-19
 
