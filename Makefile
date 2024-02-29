@@ -12,10 +12,12 @@ EXTENSION_SO = plg3.so
 # The directory where the build artifacts will be placed
 BUILD_DIR = build
 
-# A wildcard expression to select all C source files in the src/ directory
+# A wildcard expression to select all C source files in the src/
+# directory
 SRC_FILES = $(wildcard src/*.c)
 
-# Generate the list of object files by replacing the .c extension with .o and prefixing with the build directory
+# Generate the list of object files by replacing the .c extension with
+# .o and prefixing with the build directory
 OBJS = $(SRC_FILES:src/%.c=$(BUILD_DIR)/%.o)
 
 # Include PGXS settings
@@ -37,7 +39,7 @@ override SHLIB_LINK += $(GUILE_LIBS)
 override CPPFLAGS += -I$(BUILD_DIR)
 
 # Compile llvm bitcode files for Postgres' JIT
-COMPILE.c.bc = $(CLANG) -Wno-ignored-attributes $(BITCODE_CFLAGS) $(CCFLAGS) $(CPPFLAGS) -emit-llvm -c
+COMPILE.c.bc = $(CLANG) -Wno-ignored-attributes $(BITCODE_CFLAGS) -emit-llvm
 
 # The object file depends on the build directory
 $(BUILD_DIR)/plg3.o: $(BUILD_DIR)
@@ -55,4 +57,4 @@ $(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plg3.scm.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.bc : src/%.c
-	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ $<
+	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -c $< -o $@
