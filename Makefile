@@ -8,7 +8,6 @@ SHLIB_LINK = -lguile-3.0
 CONTAINER_NAME = pg_plg3_test
 EXTENSION_CONTROL = plg3.control
 EXTENSION_SO = plg3.so
-DOCKER_EXTENSION_DIR = /usr/share/postgresql/14/extension/
 
 # The directory where the build artifacts will be placed
 BUILD_DIR = build
@@ -60,15 +59,3 @@ $(BUILD_DIR)/%.o: src/%.c
 
 $(BUILD_DIR)/%.bc : src/%.c
 	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ $<
-
-docker-install: all
-
-	# Copy necessary files to the Docker container
-	docker cp $(DATA) $(CONTAINER_NAME):$(DOCKER_EXTENSION_DIR)
-	docker cp $(EXTENSION_CONTROL) $(CONTAINER_NAME):$(DOCKER_EXTENSION_DIR)
-	docker cp $(EXTENSION_SO) $(CONTAINER_NAME):/usr/lib/postgresql/14/lib/
-
-	# Install the extension within the container's PostgreSQL instance
-	docker exec -it $(CONTAINER_NAME) psql -U postgres -c "CREATE EXTENSION plg3;"
-
-.PHONY: deploy-to-docker
