@@ -17,4 +17,4 @@ docker run \
        --name $CONTAINER_NAME \
        --mount "type=bind,src=$(pwd),dst=/repo" \
        $IMAGE_NAME \
-       bash -c "cd /repo/test && ./prepare-test-db $1 && ./build-monitor"
+       bash -c "cd /repo/test && ./prepare-test-db $1 && ./change-monitor"

@@ -1,0 +1,12 @@
+#! /usr/bin/env bash
+
+cd $(dirname $0)/..
+
+inotifywait -e modify \
+            Makefile \
+            plg3--1.0.sql \
+            src/plg3.c \
+            src/plg3.scm \
+            test/Makefile \
+            test/concurrent/user_env.sql \
+            test/tests.sql

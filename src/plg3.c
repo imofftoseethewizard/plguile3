@@ -10,6 +10,7 @@
 #include <catalog/namespace.h>
 #include <catalog/pg_cast.h>
 #include <catalog/pg_enum.h>
+#include "catalog/pg_language.h"
 #include <catalog/pg_namespace.h>
 #include <catalog/pg_operator.h>
 #include <catalog/pg_proc.h>
@@ -73,6 +74,8 @@ PG_FUNCTION_INFO_V1(plg3_compile);
 
 void _PG_init(void);
 void _PG_fini(void);
+
+static Oid owner_oid = InvalidOid;
 
 typedef struct {
 	Oid subtype_oid;
@@ -213,6 +216,7 @@ static bool is_time(SCM x);
 static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
 
+static Oid get_guile3_owner_oid(void);
 static SCM load_base_module(void);
 static SCM base_module_loader(void *data);
 static SCM load_base_module_error_handler(void *data, SCM key, SCM args);
@@ -674,9 +678,9 @@ void _PG_init(void)
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
 
-	elog(NOTICE, "evaluating plg3.scm");
+	//elog(NOTICE, "evaluating plg3.scm");
 	plg3_base_module = load_base_module();
-	elog(NOTICE, "done");
+	//elog(NOTICE, "done");
 
 	func_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(func_cache);
@@ -980,7 +984,32 @@ void _PG_init(void)
 	stop_marker = scm_cons(SCM_EOL, SCM_EOL);
 	scm_gc_protect_object(stop_marker);
 
-	elog(NOTICE, "initialization complete");
+	//elog(NOTICE, "initialization complete");
+}
+
+static inline Oid get_language_owner()
+{
+	return owner_oid != InvalidOid ? owner_oid : get_guile3_owner_oid();
+}
+
+Oid get_guile3_owner_oid(void)
+{
+	HeapTuple lang_tuple;
+	bool is_null;
+
+	lang_tuple = SearchSysCache1(LANGNAME, CStringGetDatum("guile3"));
+
+	if (lang_tuple == NULL)
+		elog(ERROR, "language guile3 not found");
+
+	owner_oid = SysCacheGetAttr(LANGOID, lang_tuple, Anum_pg_language_lanowner, &is_null);
+
+	if (is_null)
+		elog(ERROR, "language guile3 has no owner");
+
+	ReleaseSysCache(lang_tuple);
+
+	return owner_oid;
 }
 
 SCM load_base_module(void)
@@ -1474,19 +1503,27 @@ SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args)
 CallLimits *get_call_limits(CallLimits *limits)
 {
 	const char *command =
-		"select time, allocation from plg3.call_limit where role_id in (0, $1) order by role_id";
+		"select time, allocation from plguile3.call_limit where role_id in (0, $1) order by role_id";
 
 	Oid arg_type = OIDOID;
 	Datum role_datum = ObjectIdGetDatum(GetUserId());
 
 	int ret;
 
+	Oid prev_user_id;
+	int prev_sec_con;
+
 	ret = SPI_connect();
 
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
+	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
 	ret = SPI_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
+
+	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -1961,18 +1998,25 @@ SCM find_or_create_module_for_role(Oid role_oid)
 void fetch_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id)
 {
 	const char *command =
-		"select role_id, preamble_id from plg3.eval_env where role_id in (0, $1)";
+		"select role_id, preamble_id from plguile3.eval_env where role_id in (0, $1)";
 
 	int ret;
 	Oid arg_type = OIDOID;
 	Datum role_datum = ObjectIdGetDatum(role_oid);
+	Oid prev_user_id;
+	int prev_sec_con;
 
 	ret = SPI_connect();
 
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
+	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
 	ret = SPI_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
+
+	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2042,18 +2086,26 @@ SCM make_sandbox_module(int64 preamble_id)
 
 	if (preamble_id) {
 
-		const char *command = "select src from plg3.preamble where id = $1";
+		const char *command = "select src from plguile3.preamble where id = $1";
 
 		int ret;
 		Oid arg_type = INT8OID;
 		Datum preamble = Int64GetDatum(preamble_id);
+
+		Oid prev_user_id;
+		int prev_sec_con;
 
 		ret = SPI_connect();
 
 		if (ret != SPI_OK_CONNECT)
 			elog(ERROR, "spi_connect_error: %d", ret);
 
+		GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+		SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
 		ret = SPI_execute_with_args(command, 1, &arg_type, &preamble, NULL, true, 1);
+
+		SetUserIdAndSecContext(prev_user_id, prev_sec_con);
 
 		if (ret != SPI_OK_SELECT)
 			elog(ERROR, "spi_select_error: %d", ret);

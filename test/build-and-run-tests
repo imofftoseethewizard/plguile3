@@ -1,0 +1,7 @@
+#! /usr/bin/env bash
+
+cd $(dirname $0)/..
+
+make && make install && (cd test; make all) && \
+  pg_prove -U postgres test/tests.sql && \
+  pg_prove -f -j 3 -U postgres test/build/*.sql

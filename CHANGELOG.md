@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.11] - 2024-03-07
+
+This version adds tests for user isolation and user environments,
+verifying the correct behavior of per-role preambles and call time and
+allocation limits.  With this verification, the plguile3 is now a
+trusted language extension.  It also includes an improved local test
+script which allows modifications of the files watched and tests run
+without restarting the test container.
+
 ## [0.19.10] - 2024-03-01
 
 This version adds the basic structure for testing behavior between
