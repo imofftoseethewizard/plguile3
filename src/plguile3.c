@@ -59,18 +59,18 @@
 // convenience for calling one of these where the appropriate type oid is not available.
 #define OID_NOT_USED ((Oid)0)
 
-// Defines const char *src_plg3_scm.
-#include "plg3.scm.h"
+// Defines const char *src_plguile3_scm.
+#include "plguile3.scm.h"
 
 PG_MODULE_MAGIC;
 
-PGDLLEXPORT Datum plg3_call(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum plg3_call_inline(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum plg3_compile(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plguile3_call(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plguile3_call_inline(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plguile3_compile(PG_FUNCTION_ARGS);
 
-PG_FUNCTION_INFO_V1(plg3_call);
-PG_FUNCTION_INFO_V1(plg3_call_inline);
-PG_FUNCTION_INFO_V1(plg3_compile);
+PG_FUNCTION_INFO_V1(plguile3_call);
+PG_FUNCTION_INFO_V1(plguile3_call_inline);
+PG_FUNCTION_INFO_V1(plguile3_compile);
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -582,7 +582,7 @@ static HTAB *type_cache;
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM args, SCM count);
 
-static SCM plg3_base_module = SCM_UNDEFINED;
+static SCM base_module = SCM_UNDEFINED;
 
 void _PG_init(void)
 {
@@ -594,12 +594,12 @@ void _PG_init(void)
 	memset(&range_info, 0, sizeof(range_info));
 	range_info.keysize = sizeof(Oid);
 	range_info.entrysize = sizeof(RangeCacheEntry);
-	range_cache = hash_create("plg3 range cache", 128, &range_info, HASH_ELEM | HASH_BLOBS);
+	range_cache = hash_create("plguile3 range cache", 128, &range_info, HASH_ELEM | HASH_BLOBS);
 
 	memset(&type_info, 0, sizeof(type_info));
 	type_info.keysize = sizeof(Oid);
 	type_info.entrysize = sizeof(TypeConvCacheEntry);
-	type_cache = hash_create("plg3 type cache", 128, &type_info, HASH_ELEM | HASH_BLOBS);
+	type_cache = hash_create("plguile3 type cache", 128, &type_info, HASH_ELEM | HASH_BLOBS);
 
 	date_oid        = TypenameGetTypid("date");
 	int2_oid        = TypenameGetTypid("int2");
@@ -678,8 +678,8 @@ void _PG_init(void)
 	/* Initialize the Guile interpreter */
 	scm_init_guile();
 
-	//elog(NOTICE, "evaluating plg3.scm");
-	plg3_base_module = load_base_module();
+	//elog(NOTICE, "evaluating plguile3.scm");
+	base_module = load_base_module();
 	//elog(NOTICE, "done");
 
 	func_cache = scm_c_make_hash_table(16);
@@ -1022,20 +1022,20 @@ SCM load_base_module(void)
 
 SCM base_module_loader(void *data)
 {
-	SCM text = scm_from_locale_string((const char *)src_plg3_scm);
+	SCM text = scm_from_locale_string((const char *)src_plguile3_scm);
 	scm_eval_string_in_module(text, scm_current_module());
-	return scm_c_resolve_module("plg3 base");
+	return scm_c_resolve_module("plguile3 base");
 }
 
 SCM load_base_module_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "Unable to load plg3 base module: %s %s", scm_to_string(key),
+	elog(ERROR, "Unable to load plguile3 base module: %s %s", scm_to_string(key),
 	     scm_to_string(args));
 }
 
 void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
 {
-	scm_c_module_define(plg3_base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
+	scm_c_module_define(base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
 }
 
 SCM call_1(SCM func, SCM arg1)
@@ -1134,7 +1134,7 @@ void _PG_fini(void)
 	hash_destroy(type_cache);
 }
 
-Datum plg3_call(PG_FUNCTION_ARGS)
+Datum plguile3_call(PG_FUNCTION_ARGS)
 {
 	if (CALLED_AS_TRIGGER(fcinfo))
 		return call_trigger(fcinfo);
@@ -1266,13 +1266,13 @@ SCM eval_string_in_base_module(const char *text)
 
 SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "internal error: failed to evaluate \"%s\" in plg3 base module: %s %s",
+	elog(ERROR, "internal error: failed to evaluate \"%s\" in base module: %s %s",
 	     (const char *)data, scm_to_string(key), scm_to_string(args));
 }
 
 SCM base_module_evaluator(void *data)
 {
-	return scm_eval_string_in_module((SCM)data, plg3_base_module);
+	return scm_eval_string_in_module((SCM)data, base_module);
 }
 
 SCM prepare_trigger_arguments(TriggerData *trigger_data)
@@ -1945,7 +1945,7 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 	return call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
 }
 
-Datum plg3_call_inline(PG_FUNCTION_ARGS)
+Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 {
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
 	char *source_text = codeblock->source_text;
@@ -2140,13 +2140,13 @@ void cache_module(Oid role_oid, int64 preamble_id, SCM module)
 	scm_hash_set_x(module_cache, role, scm_cons(preamble, module));
 }
 
-Datum plg3_compile(PG_FUNCTION_ARGS)
+Datum plguile3_compile(PG_FUNCTION_ARGS)
 {
 	Oid func_oid = PG_GETARG_OID(0);
 	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
 	if (!HeapTupleIsValid(proc_tuple))
-		elog(ERROR, "plg3_compile: Failed to fetch function details.");
+		elog(ERROR, "plguile3_compile: Failed to fetch function details.");
 
 	compile_and_cache_proc(proc_tuple);
 

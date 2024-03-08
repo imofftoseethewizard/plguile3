@@ -1,13 +1,12 @@
 # Variables
-EXTENSION = plg3
+EXTENSION = plguile3
 
 MODULE_big = $(EXTENSION)
 DATA = $(EXTENSION)--1.0.sql
 PG_CONFIG = pg_config
 SHLIB_LINK = -lguile-3.0
-CONTAINER_NAME = pg_plg3_test
-EXTENSION_CONTROL = plg3.control
-EXTENSION_SO = plg3.so
+EXTENSION_CONTROL = plguile3.control
+EXTENSION_SO = plguile3.so
 
 # The directory where the build artifacts will be placed
 BUILD_DIR = build
@@ -35,14 +34,14 @@ GUILE_LIBS = $(shell pkg-config --libs guile-3.0)
 override CPPFLAGS += $(GUILE_CFLAGS)
 override SHLIB_LINK += $(GUILE_LIBS)
 
-# Update to include build dir, so that plg3.scm.h is reachable
+# Update to include build dir, so that plguile3.scm.h is reachable
 override CPPFLAGS += -I$(BUILD_DIR)
 
 # Compile llvm bitcode files for Postgres' JIT
 COMPILE.c.bc = $(CLANG) -Wno-ignored-attributes $(BITCODE_CFLAGS) -emit-llvm
 
 # The object file depends on the build directory
-$(BUILD_DIR)/plg3.o: $(BUILD_DIR)
+$(BUILD_DIR)/plguile3.o: $(BUILD_DIR)
 
 # Compile rules
 all: $(BUILD_DIR) $(OBJS)
@@ -50,10 +49,10 @@ all: $(BUILD_DIR) $(OBJS)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/plg3.scm.h: src/plg3.scm
+$(BUILD_DIR)/plguile3.scm.h: src/plguile3.scm
 	xxd -i $< > $@
 
-$(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plg3.scm.h
+$(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plguile3.scm.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.bc : src/%.c

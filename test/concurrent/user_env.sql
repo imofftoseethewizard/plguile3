@@ -13,7 +13,7 @@ end $$ language plpgsql;
 create table if not exists test_event (event text primary key, at timestamptz);
 truncate test_event;
 
-create extension if not exists plg3;
+create extension if not exists plguile3;
 
 create or replace function set_test_event(event text) returns void as $$
 begin
@@ -340,4 +340,4 @@ drop table test_event;
 drop function set_test_event;
 drop function wait_for_test_event;
 
-drop extension plg3 cascade;
+drop extension plguile3 cascade;

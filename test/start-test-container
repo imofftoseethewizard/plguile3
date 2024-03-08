@@ -2,13 +2,13 @@
 
 cd $(dirname $0)/..
 
-IMAGE_NAME=plg3-test-$1
-CONTAINER_NAME=plg3-test-$1
+IMAGE_NAME=plguile3-test-$1
+CONTAINER_NAME=plguile3-test-$1
 
 docker stop $CONTAINER_NAME >/dev/null 2>&1 || true
 docker rm $CONTAINER_NAME >/dev/null 2>&1 || true
 
-# Path to plg3 repo inside of the container
+# Path to plguile3 repo inside of the container
 
 docker run \
        -t \

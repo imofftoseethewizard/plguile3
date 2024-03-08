@@ -5,7 +5,7 @@ language.
 
 ## Status
 
-Early alpha. Plg3 is feature-complete. The latest release of the
+Early alpha. Plguile3 is feature-complete. The latest release of the
 0.19.x series is the most stable. There are still crashing code paths,
 but there are fewer in each successive commit.
 
@@ -36,7 +36,7 @@ At version 0.20.0 the extension will be functionally complete. This
 will be the alpha release.
 
 The 0.21.x versions will reorganize, refactor, refine, and document
-plg3.c and plg3.scm.
+plguile3.c and plguile3.scm.
 
 The 0.23.x versions will include an extensive test campaign covering
 load, concurrency, session isolation, memory correctness, fuzzing,
@@ -81,12 +81,12 @@ Install docker.  To create the test image for Postgres 14
 
 To start a test monitor running that image
 
-    test/start-test-container 14 && docker logs -f plg3-test-14
+    test/start-test-container 14 && docker logs -f plguile3-test-14
 
 That starts the Postgres cluster, builds and installs `pgTAP`
-and `plg3` and then enters an infinite loop containing
+and `plguile3` and then enters an infinite loop containing
 `inotifywait` watching a few key dependencies. When one of those
-changes, it rebuilds and reinstalls `plg3` and then calls
+changes, it rebuilds and reinstalls `plguile3` and then calls
 `pg_prove` on the tests in `test/tests.sql`.
 
 ## Installation
@@ -94,8 +94,8 @@ changes, it rebuilds and reinstalls `plg3` and then calls
 For now, it's just a source install.
 
 ```bash
-git clone https://github.com/imofftoseethewizard/plg3.git
-cd plg3
+git clone https://github.com/imofftoseethewizard/plguile3.git
+cd plguile3
 make
 sudo make install
 ```

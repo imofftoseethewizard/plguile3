@@ -1,9 +1,9 @@
-(define-module (plg3 base)
+(define-module (plguile3 base)
   #:use-module (ice-9 sandbox)
   #:use-module (srfi srfi-1)  ; fold-right
   #:use-module (srfi srfi-9)  ; define-record-type
   #:use-module (srfi srfi-11) ; let-values
-  #:use-module (srfi srfi-19) ; date, time, etc (used in plg3.c)
+  #:use-module (srfi srfi-19) ; date, time, etc (used in plguile3.c)
   #:export (%cursor-open
             %execute
             %execute-with-receiver
@@ -863,10 +863,10 @@
      date->string
      string->date)))
 
-(define plg3-bindings
+(define plguile3-bindings
   '(((guile)
      with-exception-handler)
-    ((plg3 base)
+    ((plguile3 base)
      %cursor-open
      %execute
      %execute-with-receiver
@@ -1016,4 +1016,4 @@
   (append all-pure-and-impure-bindings
           bytevector-bindings
           srfi-19-bindings
-          plg3-bindings))
+          plguile3-bindings))

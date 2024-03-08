@@ -4,9 +4,9 @@ cd $(dirname $0)/..
 
 inotifywait -e modify \
             Makefile \
-            plg3--1.0.sql \
-            src/plg3.c \
-            src/plg3.scm \
+            plguile3--1.0.sql \
+            src/plguile3.c \
+            src/plguile3.scm \
             test/Makefile \
             test/concurrent/user_env.sql \
             test/tests.sql

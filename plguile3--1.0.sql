@@ -1,4 +1,4 @@
--- plg3--1.0.sql
+-- plguile3--1.0.sql
 
 create schema plguile3;
 
@@ -93,25 +93,25 @@ create function set_role_call_allocation_limit(id oid, allocation_limit bigint) 
 $$
 language sql;
 
-create function plg3_call()
+create function plguile3_call()
 returns language_handler
 as 'MODULE_PATHNAME'
 language c strict;
 
-create function plg3_call_inline(internal)
+create function plguile3_call_inline(internal)
 returns language_handler
 as 'MODULE_PATHNAME'
 language c strict;
 
-create function plg3_compile(oid)
+create function plguile3_compile(oid)
 returns void
 as 'MODULE_PATHNAME'
 language c strict;
 
 create trusted language guile3
-    handler plg3_call
-    inline plg3_call_inline
-    validator plg3_compile;
+    handler plguile3_call
+    inline plguile3_call_inline
+    validator plguile3_compile;
 
 set search_path to public;
 

@@ -13,6 +13,6 @@ make install
 psql -U postgres <<EOF
 
 create extension if not exists pgtap;
-create extension if not exists plg3;
+create extension if not exists plguile3;
 
 EOF

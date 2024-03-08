@@ -1,4 +1,4 @@
 #! /usr/bin/env bash
 
-docker rmi -f plg3-test-$1 || true
-docker build --build-arg=PGVERSION=$1 -t plg3-test-$1 $(dirname $0)
+docker rmi -f plguile3-test-$1 || true
+docker build --build-arg=PGVERSION=$1 -t plguile3-test-$1 $(dirname $0)

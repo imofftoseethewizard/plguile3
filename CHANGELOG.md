@@ -99,14 +99,14 @@ a trusted language extension.
 
 ## [0.17.1] - 2024-01-09
 
-This versions fills in the exports from the `(plg3 base)` module
+This versions fills in the exports from the `(plguile3 base)` module
 and provides a much more complete binding list for the sandbox.
 
 ## [0.17.0] - 2024-01-08
 
 This version adds a roughed-in sandbox for scheme code and two server
-configs to support it: `plg3.call_time_limit` and
-`plg3.call_allocation_limit`.
+configs to support it: `plguile3.call_time_limit` and
+`plguile3.call_allocation_limit`.
 
 ## [0.16.0] - 2024-01-06
 
@@ -307,9 +307,9 @@ This version includes more tests of the conversion of values between
 Postgres and Guile. There are still code paths which will cause a
 crash and connection reset due to an unexpected value type returned by
 the scheme code, but rather than handling these explicitly in C, a
-later version of plg3 will handle them generically by capturing
+later version of plguile3 will handle them generically by capturing
 Guile exceptions and reporting those instead. Additionally, the module
-plg3.scm will be improved to prevent the formation of records with
+plguile3.scm will be improved to prevent the formation of records with
 invalid fields.
 
 ## [0.3.4] - 2023-09-17
@@ -353,9 +353,9 @@ This is so far about 26 hours of work.
 ## [0.3.0] - 2023-09-09
 
 This version introduces a file to hold auxiliary scheme code used in
-type conversions -- `src/plg3.scm` -- and the tooling to build that
-into `plg3.so` as a static string.  It also includes support for
-floating point types `float4` / `real` and `float8` / `double
+type conversions -- `src/plguile3.scm` -- and the tooling to build
+that into `plguile3.so` as a static string.  It also includes support
+for floating point types `float4` / `real` and `float8` / `double
 precision`.  The `build-monitor` tool was updated to include the new
 file and to watch the make file as well.
 
@@ -386,12 +386,12 @@ This version includes docker-based local test tooling. To set up
 
 To start a test monitor running Postgres 14
 
-    test/start-test-container 14 && docker logs -f plg3-test-14
+    test/start-test-container 14 && docker logs -f plguile3-test-14
 
-That runs `pg-start` builds and installs `pgTAP` and `plg3` and
+That runs `pg-start` builds and installs `pgTAP` and `plguile3` and
 then enters an infinite loop containing `inotifywait` watching
-`src/plg3.c` and `test/tests.sql`. When either of those changes, it
-rebuilds and reinstalls `plg3` and then calls `pg_prove` on the
+`src/plguile3.c` and `test/tests.sql`. When either of those changes,
+it rebuilds and reinstalls `plguile3` and then calls `pg_prove` on the
 tests in `test/tests.sql`.
 
 ChatGPT helped in some minor bash and docker nuances and led me to
@@ -410,7 +410,7 @@ Also included in this version is a partial implementation of some test
 tooling.  It is based on the `pgxn/pgxn-tools` dockerfile, but
 extended to include the build dependencies for guile and pgtap.  Yet
 to be done is the integration with `pg-start` to install pgtap, and
-with `pg_prove` to do setup/teardown of plg3.
+with `pg_prove` to do setup/teardown of plguile3.
 
 This is so far about 18 hours of work.
 
