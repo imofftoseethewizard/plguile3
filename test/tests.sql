@@ -1,6 +1,6 @@
 begin;
 
-select plan(245);
+select plan(248);
 
 select lives_ok('create extension if not exists plguile3', 'install (if not exists)');
 select lives_ok('drop extension plguile3 cascade', 'de-install');
@@ -1465,5 +1465,20 @@ select throws_ok(
   'select f_x_nested()',
   'execute-error: ("P0001" "nested error" #f #f)',
   'nested error handling');
+
+select throws_ok(
+  'create function f1("x) 1) (define (f x" int) returns int as ''(+ x 1)'' language guile3',
+  NULL,
+  'pathological function 1');
+
+select throws_ok(
+  'create function f2("x) 1)" int) returns int as ''(+ x 1)'' language guile3',
+  NULL,
+  'pathological function 2');
+
+select throws_ok(
+  'create function f3(x int) returns int as ''('' language guile3',
+  NULL,
+  'pathological function 3');
 
 rollback;

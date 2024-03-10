@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.13] - 2024-03-10
+
+This version guards against pathological function definitions,
+ensuring that the defining lambda is the only readable value in the
+source assembled from the function body and its formal parameters.
+
 ## [0.19.12] - 2024-03-10
 
 This version adds `notice` and `warning` primitives to Guile as an

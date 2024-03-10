@@ -1,3 +1,4 @@
+// ! $ % & * + - . / : < = > ? @ ^ _ ~ a-z 0-9
 #include <libguile.h>
 
 #include <postgres.h>
@@ -227,6 +228,8 @@ static SCM base_module_evaluator(void *data);
 static SCM eval_string_in_base_module(const char *text);
 static SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args);
 static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
+static SCM eval_lambda_expr(const char *src, SCM module);
+static SCM read_error_handler(void *data, SCM key, SCM args);
 static SCM untrusted_eval(SCM expr, SCM env);
 static SCM find_or_create_module_for_role(Oid role_oid);
 static SCM call_1_executor(void *data);
@@ -253,6 +256,7 @@ static SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo);
 static SCM find_or_compile_proc(Oid func_oid);
 static SCM prepare_trigger_arguments(TriggerData *trigger_data);
 static SCM compile_proc(HeapTuple proc_tuple, SCM module);
+static void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
@@ -1425,7 +1429,7 @@ SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
 	return apply_0_with_handlers(
 		apply_with_limits_proc,
 		scm_list_4(proc, args, time_limit, allocation_limit),
-		8);
+		9);
 }
 
 SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
@@ -2202,31 +2206,38 @@ void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
 
 SCM compile_proc(HeapTuple proc_tuple, SCM module)
 {
-	Datum prosrc_datum;
-	char *prosrc;
+	StringInfoData buf;
+
+	assemble_lambda_expr(&buf, proc_tuple);
+
+	return eval_lambda_expr(buf.data, module);
+}
+
+void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple)
+{
 	bool is_null;
 
-	Datum argnames_datum, argmodes_datum;
+	Datum prosrc_datum;
+	char *prosrc;
 
-	ArrayType *argnames_array, *argmodes_array;
-	int num_args, num_modes, i;
+	initStringInfo(buf);
 
-	char *argmodes;
-
-	StringInfoData buf;
-	SCM scm_proc;
-	SCM port;
-
-	initStringInfo(&buf);
-	appendStringInfo(&buf, "(lambda (");
+	appendStringInfo(buf, "(lambda (");
 
 	if (is_event_trigger_handler(proc_tuple))
-		appendStringInfo(&buf, " event parse-tree tag");
+		appendStringInfo(buf, " event parse-tree tag");
 
 	else if (is_trigger_handler(proc_tuple))
-		appendStringInfo(&buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
+		appendStringInfo(buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
 
 	else {
+		Datum argnames_datum, argmodes_datum;
+
+		ArrayType *argnames_array, *argmodes_array;
+		int num_args, num_modes, i;
+
+		char *argmodes;
+
 		argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
 
 		if (!is_null) {
@@ -2254,7 +2265,7 @@ SCM compile_proc(HeapTuple proc_tuple, SCM module)
 					if (!is_null) {
 						char *name = TextDatumGetCString(name_datum);
 						// TODO check that the parameter name is a proper scheme identifier
-						appendStringInfo(&buf, " %s", name);
+						appendStringInfo(buf, " %s", name);
 					}
 					else {
 						elog(NOTICE, "compile_proc: %d: name_datum is null", i);
@@ -2270,13 +2281,39 @@ SCM compile_proc(HeapTuple proc_tuple, SCM module)
 	if (is_null)
 		elog(ERROR, "compile_proc: source datum is null.");
 
-	appendStringInfo(&buf, ")\n%s)", prosrc);
+	appendStringInfo(buf, ")\n%s)", prosrc);
+}
 
-	port = scm_open_input_string(scm_from_locale_string(buf.data));
+SCM eval_lambda_expr(const char *src, SCM module)
+{
+	SCM scm_proc;
+	SCM port = scm_open_input_string(scm_from_locale_string(src));
 
-	scm_proc = untrusted_eval(scm_read(port), module);
+	SCM lambda_expr = scm_internal_catch(
+        SCM_BOOL_T,
+        (scm_t_catch_body)scm_read,
+        (void *)port,
+        read_error_handler, (void *)src);
+
+	SCM expected_eof = scm_internal_catch(
+        SCM_BOOL_T,
+        (scm_t_catch_body)scm_read,
+        (void *)port,
+        read_error_handler, (void *)src);
+
+	if (!SCM_EOF_OBJECT_P(expected_eof))
+		elog(ERROR, "syntax error: object read after end of lambda expr: %s\n%s",
+		     scm_to_string(expected_eof), src);
+
+	scm_proc = untrusted_eval(lambda_expr, module);
 
 	return scm_proc;
+}
+
+SCM read_error_handler(void *data, SCM key, SCM args)
+{
+	elog(ERROR, "%s %s \nfunction body: \n%s", scm_to_string(key),
+	     scm_to_string(args), (char *)data);
 }
 
 SCM untrusted_eval(SCM expr, SCM module)
