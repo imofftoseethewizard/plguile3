@@ -67,10 +67,12 @@ PG_MODULE_MAGIC;
 PGDLLEXPORT Datum plguile3_call(PG_FUNCTION_ARGS);
 PGDLLEXPORT Datum plguile3_call_inline(PG_FUNCTION_ARGS);
 PGDLLEXPORT Datum plguile3_compile(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plguile3_check_preamble(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(plguile3_call);
 PG_FUNCTION_INFO_V1(plguile3_call_inline);
 PG_FUNCTION_INFO_V1(plguile3_compile);
+PG_FUNCTION_INFO_V1(plguile3_check_preamble);
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -579,6 +581,8 @@ static SCM module_cache;
 static HTAB *range_cache;
 static HTAB *type_cache;
 
+static SCM raise_notice(SCM x);
+static SCM raise_warning(SCM x);
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM args, SCM count);
 
@@ -695,6 +699,8 @@ void _PG_init(void)
 	define_primitive("%move",                  3, 0, 0, (SCM (*)()) spi_cursor_move);
 	define_primitive("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
 	define_primitive("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
+	define_primitive("notice",                 1, 0, 0, (SCM (*)()) raise_notice);
+	define_primitive("warning",                1, 0, 0, (SCM (*)()) raise_warning);
 
 	/* Define names in our scheme module for the type oids we work with. */
 
@@ -1121,7 +1127,7 @@ SCM call_8_executor(void *data)
 
 SCM call_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "Unable to call %s base module: %s %s", scm_to_string(*(SCM *)data),
+	elog(ERROR, "Unable to call %s in base module: \n        %s %s", scm_to_string(*(SCM *)data),
 	     scm_to_string(key), scm_to_string(args));
 }
 
@@ -1419,7 +1425,7 @@ SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
 	return apply_0_with_handlers(
 		apply_with_limits_proc,
 		scm_list_4(proc, args, time_limit, allocation_limit),
-		9);
+		8);
 }
 
 SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
@@ -2276,6 +2282,20 @@ SCM compile_proc(HeapTuple proc_tuple, SCM module)
 SCM untrusted_eval(SCM expr, SCM module)
 {
 	return call_2(untrusted_eval_proc, expr, module);
+}
+
+Datum plguile3_check_preamble(PG_FUNCTION_ARGS)
+{
+ 	Datum src = PG_GETARG_DATUM(0);
+	SCM port = scm_open_input_string(datum_text_to_scm(src, InvalidOid));
+	SCM x;
+
+	SCM module = call_1(make_sandbox_module_proc, trusted_bindings);
+
+	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
+		untrusted_eval(x, module);
+
+	return BoolGetDatum(true);
 }
 
 SCM unbox_datum(SCM x)
@@ -6387,4 +6407,16 @@ Oid unify_range_subtype_oid(Oid t1, Oid t2)
 		return t1;
 
 	return unify_type_oid(t1, t2);
+}
+
+SCM raise_notice(SCM message)
+{
+	elog(NOTICE, "%s", scm_string_to_pstr(message));
+	return SCM_UNDEFINED;
+}
+
+SCM raise_warning(SCM message)
+{
+	elog(WARNING, "%s", scm_string_to_pstr(message));
+	return SCM_UNDEFINED;
 }

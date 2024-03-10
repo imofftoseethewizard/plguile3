@@ -9,8 +9,10 @@
             %execute-with-receiver
             %fetch
             %move
+            notice
             stop-command-execution
             unbox-datum
+            warning
 
             execute
             cursor-open
@@ -872,8 +874,10 @@
      %execute-with-receiver
      %fetch
      %move
+     notice
      stop-command-execution
      unbox-datum
+     warning
 
      execute
      cursor-open

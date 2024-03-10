@@ -4,6 +4,11 @@ create schema plguile3;
 
 set search_path to plguile3;
 
+create function plguile3_check_preamble(src text)
+returns void
+as 'MODULE_PATHNAME'
+language c strict;
+
 create table call_limit (
   role_id oid primary key,
   time float4,
@@ -37,6 +42,8 @@ language plpgsql stable;
 create function set_role_preamble(id oid, src text) returns void as $$
 declare preamble_id bigint;
 begin
+
+  perform plguile3.plguile3_check_preamble(src);
 
   perform plguile3.remove_role_preamble(id);
 

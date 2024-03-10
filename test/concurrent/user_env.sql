@@ -14,6 +14,8 @@ create table if not exists test_event (event text primary key, at timestamptz);
 truncate test_event;
 
 create extension if not exists plguile3;
+drop extension plguile3 cascade;
+create extension plguile3;
 
 create or replace function set_test_event(event text) returns void as $$
 begin

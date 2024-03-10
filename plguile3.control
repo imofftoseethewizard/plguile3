@@ -1,5 +1,5 @@
 # plguile3 extension
-comment = 'procedural language extension for Guile 3'
+comment = 'Guile 3 procedural language'
 default_version = '1.0'
 module_pathname = '$libdir/plguile3'
 relocatable = true
