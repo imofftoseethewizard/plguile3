@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.14] - 2024-03-11
+
+This version adds support for `start-transaction`, `commit`,
+`commit-and-chain`, `rollback`, and `rollback-and-chain`.
+
 ## [0.19.13] - 2024-03-10
 
 This version guards against pathological function definitions,

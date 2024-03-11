@@ -589,6 +589,11 @@ static SCM raise_notice(SCM x);
 static SCM raise_warning(SCM x);
 static SCM unbox_datum(SCM x);
 static SCM spi_execute(SCM command, SCM args, SCM count);
+static SCM spi_start_transaction(void);
+static SCM spi_commit(void);
+static SCM spi_commit_and_chain(void);
+static SCM spi_rollback(void);
+static SCM spi_rollback_and_chain(void);
 
 static SCM base_module = SCM_UNDEFINED;
 
@@ -705,6 +710,11 @@ void _PG_init(void)
 	define_primitive("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
 	define_primitive("notice",                 1, 0, 0, (SCM (*)()) raise_notice);
 	define_primitive("warning",                1, 0, 0, (SCM (*)()) raise_warning);
+	define_primitive("start-transaction",      0, 0, 0, (SCM (*)()) spi_start_transaction);
+	define_primitive("commit",                 0, 0, 0, (SCM (*)()) spi_commit);
+	define_primitive("commit-and-chain",       0, 0, 0, (SCM (*)()) spi_commit_and_chain);
+	define_primitive("rollback",               0, 0, 0, (SCM (*)()) spi_rollback);
+	define_primitive("rollback-and-chain",     0, 0, 0, (SCM (*)()) spi_rollback_and_chain);
 
 	/* Define names in our scheme module for the type oids we work with. */
 
@@ -2264,7 +2274,6 @@ void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple)
 					Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
 					if (!is_null) {
 						char *name = TextDatumGetCString(name_datum);
-						// TODO check that the parameter name is a proper scheme identifier
 						appendStringInfo(buf, " %s", name);
 					}
 					else {
@@ -6114,6 +6123,76 @@ long scm_to_fetch_count(SCM count)
 		return FETCH_ALL;
 
 	return scm_to_long(count);
+}
+
+SCM spi_start_transaction(void)
+{
+	int ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	SPI_start_transaction();
+
+	SPI_finish();
+
+	return SCM_UNDEFINED;
+}
+
+SCM spi_commit(void)
+{
+	int ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	SPI_commit();
+
+	SPI_finish();
+
+	return SCM_UNDEFINED;
+}
+
+SCM spi_commit_and_chain(void)
+{
+	int ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	SPI_commit_and_chain();
+
+	SPI_finish();
+
+	return SCM_UNDEFINED;
+}
+
+SCM spi_rollback(void)
+{
+	int ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	SPI_rollback();
+
+	SPI_finish();
+
+	return SCM_UNDEFINED;
+}
+
+SCM spi_rollback_and_chain(void)
+{
+	int ret = SPI_connect();
+
+	if (ret < 0)
+		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	SPI_rollback_and_chain();
+
+	SPI_finish();
+
+	return SCM_UNDEFINED;
 }
 
 Oid infer_scm_type_oid(SCM x)

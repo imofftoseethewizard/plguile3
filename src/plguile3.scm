@@ -13,6 +13,11 @@
             stop-command-execution
             unbox-datum
             warning
+            start-transaction
+            commit
+            commit-and-chain
+            rollback
+            rollback-and-chain
 
             execute
             cursor-open
@@ -878,6 +883,11 @@
      stop-command-execution
      unbox-datum
      warning
+     start-transaction
+     commit
+     commit-and-chain
+     rollback
+     rollback-and-chain
 
      execute
      cursor-open

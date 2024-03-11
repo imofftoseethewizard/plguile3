@@ -40,7 +40,7 @@ plguile3.c and plguile3.scm.
 
 The 0.23.x versions will include an extensive test campaign covering
 load, concurrency, session isolation, memory correctness, fuzzing,
-etc.
+etc.  Tests will also be extended to Postgres version 12-16.
 
 Version 0.24.0 will be the pre-1.0 beta release.
 
