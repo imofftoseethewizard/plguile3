@@ -329,6 +329,7 @@ static SCM range_bound_to_scm(const RangeBound *bound, Oid subtype_oid);
 static char scm_range_flags_to_char(SCM range);
 static SCM stop_command_execution(void);
 static SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM count);
+static Oid *prepare_execute_options(SPIExecuteOptions *options, SCM args, SCM count);
 static char *scm_string_to_pstr(SCM s);
 static void throw_wrong_argument_type(const char *param_name, const char *type, SCM v);
 static void throw_runtime_error(const char *format, ...);
@@ -5629,44 +5630,9 @@ SCM spi_execute(SCM command, SCM args, SCM count)
 
 	PG_TRY();
 	{
-		if (args == SCM_EOL)
-			ret = SPI_execute(
-				scm_to_locale_string(command),
-				current_volatility != PROVOLATILE_VOLATILE,
-				scm_to_long(count));
-		else {
-			long nargs = scm_ilength(args);
-			Oid *arg_types;
-			Datum *arg_values;
-			char *arg_nulls;
-
-			SCM rest = args;
-
-			if (nargs < 0)
-				throw_wrong_argument_type("args", "list", args);
-
-			arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
-			arg_values = (Datum *)palloc(sizeof(Datum) * nargs);
-			arg_nulls = (char *)palloc0(sizeof(char) * nargs);
-
-			for (long i = 0; i < nargs; i++) {
-				SCM arg = scm_car(rest);
-				Oid type_oid = infer_scm_type_oid(arg);
-
-				if (type_oid == InvalidOid)
-					elog(ERROR, "spi_execute: unable to infer result type");
-
-				arg_types[i] = type_oid;
-				arg_values[i] = scm_to_datum(arg, type_oid);
-				// TODO support NULL specification
-				// arg_nulls[i] = 1; set to 'n' for null
-				rest = scm_cdr(rest);
-			}
-
-			ret = SPI_execute_with_args(
-				scm_to_locale_string(command), nargs, arg_types, arg_values, arg_nulls,
-				current_volatility != PROVOLATILE_VOLATILE, scm_to_long(count));
-		}
+		SPIExecuteOptions options = {0};
+		prepare_execute_options(&options, args, count);
+		ret = SPI_execute_extended(scm_to_locale_string(command), &options);
 	}
 	PG_CATCH();
 	{
@@ -5792,17 +5758,11 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 		SCM_EOL,
 	};
 
-	ParamListInfo param_list;
-	ParamExternData *param_ptr;
-
-	long nargs = scm_ilength(args);
-	Oid *arg_types = NULL;
-
 	int ret;
 	SPIExecuteOptions options = {0};
 
-	if (nargs < 0)
-		throw_wrong_argument_type("args", "list", args);
+	long nargs = scm_ilength(args);
+	Oid *arg_types = NULL;
 
 	if (scm_procedure_p(receiver_proc) == SCM_BOOL_F)
 		throw_wrong_argument_type("receiver", "procedure", receiver_proc);
@@ -5810,40 +5770,9 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
 
-	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
-		throw_wrong_argument_type("count", "non-negative integer", count);
+	arg_types = prepare_execute_options(&options, args, count);
 
-	param_list = (ParamListInfo)palloc0(sizeof(ParamListInfoData) + nargs * sizeof(ParamExternData));
-	param_list->numParams = nargs;
-	param_ptr = (ParamExternData *)&param_list->params;
-
-	if (nargs) {
-
-		SCM rest = args;
-
-		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
-
-		for (long i = 0; i < nargs; i++) {
-			SCM arg = scm_car(rest);
-			Oid type_oid = infer_scm_type_oid(arg);
-
-			if (type_oid == InvalidOid)
-				elog(ERROR, "spi_execute_with_receiver: unable to infer result type");
-
-			arg_types[i] = type_oid;
-			param_ptr->value = scm_to_datum(arg, type_oid);
-			param_ptr->isnull = 0; // set to 'n' for null
-			rest = scm_cdr(rest);
-			param_ptr++;
-		}
-	}
-
-	options.allow_nonatomic = true;
-	options.tcount          = scm_to_long(count);
-	options.dest            = (DestReceiver *)&dest;
-	options.owner           = NULL;
-	options.params          = param_list;
-	options.read_only       = current_volatility != PROVOLATILE_VOLATILE;
+	options.dest = (DestReceiver *)&dest;
 
 	dest.result = dest.tail = scm_cons(SCM_EOL, SCM_EOL);
 
@@ -5866,6 +5795,59 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 	SPI_finish();
 
 	return scm_cdr(dest.result);
+}
+
+Oid *prepare_execute_options(SPIExecuteOptions *options, SCM args, SCM count)
+{
+	ParamListInfo param_list;
+	ParamExternData *param_ptr;
+
+	long nargs = scm_ilength(args);
+	Oid *arg_types = NULL;
+
+	if (nargs < 0)
+		throw_wrong_argument_type("args", "list", args);
+
+	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
+		throw_wrong_argument_type("count", "non-negative integer", count);
+
+	param_list = makeParamList(nargs);
+
+	if (nargs) {
+
+		SCM rest = args;
+
+		arg_types = (Oid *)palloc(sizeof(Oid) * nargs);
+		param_ptr = (ParamExternData *)&param_list->params;
+
+		for (long i = 0; i < nargs; i++) {
+			SCM arg = scm_car(rest);
+			Oid type_oid = infer_scm_type_oid(arg);
+
+			if (type_oid == InvalidOid)
+				elog(ERROR, "prepare_execute_options: unable to infer result type");
+
+			arg_types[i] = type_oid;
+
+			param_ptr->isnull = arg == SCM_EOL;
+			param_ptr->ptype = type_oid;
+			param_ptr->pflags = PARAM_FLAG_CONST;
+
+			if (!param_ptr->isnull)
+				param_ptr->value = scm_to_datum(arg, type_oid);
+
+
+			rest = scm_cdr(rest);
+			param_ptr++;
+		}
+	}
+
+	options->allow_nonatomic = true;
+	options->tcount          = scm_to_long(count);
+	options->params          = param_list;
+	options->read_only       = current_volatility != PROVOLATILE_VOLATILE;
+
+	return arg_types;
 }
 
 void handle_execute_error(void)

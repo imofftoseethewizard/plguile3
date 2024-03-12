@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.15] - 2024-03-12
+
+This version allows nonatomic queries to be executed with `(execute
+"command" ...)`.  It also unifies parameter handling between
+applications of `execute` with a receiver and without.
+
 ## [0.19.14] - 2024-03-11
 
 This version adds support for `start-transaction`, `commit`,

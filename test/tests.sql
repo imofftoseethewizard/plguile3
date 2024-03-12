@@ -1,6 +1,6 @@
 begin;
 
-select plan(248);
+select plan(249);
 
 select lives_ok('create extension if not exists plguile3', 'install (if not exists)');
 select lives_ok('drop extension plguile3 cascade', 'de-install');
@@ -1334,6 +1334,17 @@ create function f_execute_with_receiver_simple() returns int as $$
 $$ language guile3;
 
 select is(f_execute_with_receiver_simple(), 1, 'execute_with_receiver: simple');
+
+create function f_execute_with_receiver_with_args(n int) returns int as $$
+(length (execute "select * from things where id >= $1 order by id"
+                 (list n)
+                 #:receiver (lambda (id name)
+                              (if (= id 2)
+                                  (stop-command-execution)
+                                  name))))
+$$ language guile3;
+
+select is(f_execute_with_receiver_with_args(1), 1, 'execute_with_receiver: with args');
 
 create function f_x_execute_with_receiver_wrong_type_command() returns int as $$
 (length (execute 5
