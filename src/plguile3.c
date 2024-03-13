@@ -5617,11 +5617,15 @@ SCM spi_execute(SCM command, SCM args, SCM count)
 	SCM rows_processed;
 	SCM table;
 
+	SPIExecuteOptions options = {0};
+
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
 
 	if (!scm_is_integer(count) || scm_to_bool(scm_negative_p(count)))
 		throw_wrong_argument_type("count", "non-negative integer", count);
+
+	prepare_execute_options(&options, args, count);
 
 	ret = SPI_connect();
 
@@ -5630,8 +5634,6 @@ SCM spi_execute(SCM command, SCM args, SCM count)
 
 	PG_TRY();
 	{
-		SPIExecuteOptions options = {0};
-		prepare_execute_options(&options, args, count);
 		ret = SPI_execute_extended(scm_to_locale_string(command), &options);
 	}
 	PG_CATCH();
@@ -5724,7 +5726,6 @@ void throw_runtime_error(const char *format, ...)
 
 	va_start(vargs, format);
 	vsnprintf(buffer, sizeof(buffer), format, vargs);
-	elog(NOTICE, "throw_runtime_error: %s", buffer);
 
 	message = scm_from_locale_string(buffer);
 	args = scm_list_1(message);
@@ -5821,21 +5822,33 @@ Oid *prepare_execute_options(SPIExecuteOptions *options, SCM args, SCM count)
 		param_ptr = (ParamExternData *)&param_list->params;
 
 		for (long i = 0; i < nargs; i++) {
+
 			SCM arg = scm_car(rest);
 			Oid type_oid = infer_scm_type_oid(arg);
-
-			if (type_oid == InvalidOid)
-				elog(ERROR, "prepare_execute_options: unable to infer result type");
 
 			arg_types[i] = type_oid;
 
 			param_ptr->isnull = arg == SCM_EOL;
-			param_ptr->ptype = type_oid;
 			param_ptr->pflags = PARAM_FLAG_CONST;
 
-			if (!param_ptr->isnull)
-				param_ptr->value = scm_to_datum(arg, type_oid);
+			if (param_ptr->isnull) {
+				// The value is null, so it doesn't really matter what
+				// the type oid is.  It does, however, need to be a
+				// valid type oid to let the SPI system know that a
+				// valid value is present.  If a type oid is not
+				// provided, then we'll get an error like "there is no
+				// parameter $1".
+				param_ptr->ptype = int4_oid;
+				param_ptr->value = (Datum)0;
+			}
+			else {
 
+				if (type_oid == InvalidOid)
+					throw_runtime_error("execute: unable to infer type of argument $%ld", i+1);
+
+				param_ptr->ptype = type_oid;
+				param_ptr->value = scm_to_datum(arg, type_oid);
+			}
 
 			rest = scm_cdr(rest);
 			param_ptr++;

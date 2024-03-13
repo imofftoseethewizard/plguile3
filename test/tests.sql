@@ -1,6 +1,6 @@
 begin;
 
-select plan(249);
+select plan(253);
 
 select lives_ok('create extension if not exists plguile3', 'install (if not exists)');
 select lives_ok('drop extension plguile3 cascade', 'de-install');
@@ -1491,5 +1491,26 @@ select throws_ok(
   'create function f3(x int) returns int as ''('' language guile3',
   NULL,
   'pathological function 3');
+
+create function f_execute_with_null_arg(x int) returns int as $$
+  (scalar (execute "select coalesce($1, $2)" (list '() x))) ; '
+$$ language guile3;
+
+select is(f_execute_with_null_arg(5), 5, 'execute with null arg');
+
+select throws_ok(
+  'do $$ (execute "select * from pg_user" (list ''bogus)) $$ language guile3',
+  NULL,
+  'check unable to infer type in execute');
+
+select throws_ok(
+  'do $$ (execute "select * from pg_user" #:count -1) $$ language guile3',
+  NULL,
+  'check invalid result count');
+
+select throws_ok(
+  'do $$ (execute ''("select 1")) $$ language guile3',
+  NULL,
+  'check invalid command string');
 
 rollback;
