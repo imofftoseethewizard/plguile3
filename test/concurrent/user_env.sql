@@ -47,16 +47,16 @@ begin
 
   grant execute
     on routine
-      g3_get_call_allocation_limit,
-      g3_get_call_time_limit,
-      g3_get_default_call_allocation_limit,
-      g3_get_default_call_time_limit,
-      g3_get_default_preamble,
-      g3_get_preamble,
-      g3_get_session_user_call_allocation_limit,
-      g3_get_session_user_call_time_limit,
-      g3_get_session_user_preamble,
-      g3_set_session_user_preamble
+      guile3_get_call_allocation_limit,
+      guile3_get_call_time_limit,
+      guile3_get_default_call_allocation_limit,
+      guile3_get_default_call_time_limit,
+      guile3_get_default_preamble,
+      guile3_get_preamble,
+      guile3_get_session_user_call_allocation_limit,
+      guile3_get_session_user_call_time_limit,
+      guile3_get_session_user_preamble,
+      guile3_set_session_user_preamble
     to bob, carol;
 
 end
@@ -74,13 +74,13 @@ select plan(24);
 
 		select plan(19);
 
-select g3_set_default_preamble('(define the-owner "anyone")');
+select guile3_set_default_preamble('(define the-owner "anyone")');
 
-select g3_remove_role_preamble('alice');
-select g3_remove_role_preamble('bob');
-select g3_remove_role_preamble('carol');
+select guile3_remove_role_preamble('alice');
+select guile3_remove_role_preamble('bob');
+select guile3_remove_role_preamble('carol');
 
-select is(g3_get_default_preamble(), '(define the-owner "anyone")');
+select is(guile3_get_default_preamble(), '(define the-owner "anyone")');
 
 create or replace function who_owns_this() returns text as 'the-owner' language guile3;
 
@@ -115,7 +115,7 @@ select is(who_owns_this(), 'anyone', 'alice no preamble');
 select wait_for_test_event('b.1 done');
 select wait_for_test_event('c.1 done');
 
-select g3_set_default_preamble('(define the-owner "someone")');
+select guile3_set_default_preamble('(define the-owner "someone")');
 
 select is(who_owns_this(), 'someone', 'alice no preamble 2');
 
@@ -136,10 +136,10 @@ select set_test_event('someone-ready');
 select wait_for_test_event('b.2 done');
 select wait_for_test_event('c.2 done');
 
-select g3_set_role_preamble('bob', '(define the-owner "bob")');
+select guile3_set_role_preamble('bob', '(define the-owner "bob")');
 
-select is(g3_get_default_preamble(), '(define the-owner "someone")');
-select is(g3_get_role_preamble('bob'), '(define the-owner "bob")');
+select is(guile3_get_default_preamble(), '(define the-owner "someone")');
+select is(guile3_get_role_preamble('bob'), '(define the-owner "bob")');
 
 select is(who_owns_this(), 'someone', 'alice no preamble 3');
 
@@ -147,7 +147,7 @@ select set_test_event('bob-ready');
 
 	select wait_for_test_event('bob-ready');
 
-	select is(g3_get_preamble(), '(define the-owner "bob")');
+	select is(guile3_get_preamble(), '(define the-owner "bob")');
 
 	select is(who_owns_this(), 'someone', 'bob with preamble');
 
@@ -185,7 +185,7 @@ select set_test_event('bob-the-owner');
 select wait_for_test_event('b.4 done');
 select wait_for_test_event('c.4 done');
 
-select g3_set_role_preamble('bob', '(define the-owner "robert")');
+select guile3_set_role_preamble('bob', '(define the-owner "robert")');
 
 select is(who_owns_this(), 'robert', 'alice no preamble 4');
 
@@ -203,36 +203,36 @@ select set_test_event('robert-the-owner');
 
 		select set_test_event('c.5 done');
 
-	select throws_ok('g3_set_role_preamble(''carol'', ''bogus'')');
+	select throws_ok('guile3_set_role_preamble(''carol'', ''bogus'')');
 
-select g3_set_default_call_time_limit(1);
-select g3_set_role_call_time_limit('alice', NULL);
-select g3_set_role_call_time_limit('bob', NULL);
-select g3_set_role_call_time_limit('carol', NULL);
+select guile3_set_default_call_time_limit(1);
+select guile3_set_role_call_time_limit('alice', NULL);
+select guile3_set_role_call_time_limit('bob', NULL);
+select guile3_set_role_call_time_limit('carol', NULL);
 
-select is(g3_get_default_call_time_limit(), 1.0::float4, 'alice: get default call time limit');
-select is(g3_get_call_time_limit(), 1.0::float4, 'alice: get call time limit');
-select is(g3_get_session_user_call_time_limit(), NULL, 'alice: get session user call time limit');
+select is(guile3_get_default_call_time_limit(), 1.0::float4, 'alice: get default call time limit');
+select is(guile3_get_call_time_limit(), 1.0::float4, 'alice: get call time limit');
+select is(guile3_get_session_user_call_time_limit(), NULL, 'alice: get session user call time limit');
 
-select is(g3_get_role_call_time_limit('alice'), NULL, 'alice: get role call time limit 1');
-select is(g3_get_role_call_time_limit('bob'), NULL, 'alice: get role call time limit 2');
-select is(g3_get_role_call_time_limit('carol'), NULL, 'alice: get role call time limit 3');
+select is(guile3_get_role_call_time_limit('alice'), NULL, 'alice: get role call time limit 1');
+select is(guile3_get_role_call_time_limit('bob'), NULL, 'alice: get role call time limit 2');
+select is(guile3_get_role_call_time_limit('carol'), NULL, 'alice: get role call time limit 3');
 
 select set_test_event('time limit 1');
 
 	select wait_for_test_event('time limit 1');
 
-	select is(g3_get_default_call_time_limit(), 1.0::float4, 'bob: get default call time limit');
-	select is(g3_get_call_time_limit(), 1.0::float4, 'bob: get call time limit');
-	select is(g3_get_session_user_call_time_limit(), NULL, 'bob: get session user call time limit');
+	select is(guile3_get_default_call_time_limit(), 1.0::float4, 'bob: get default call time limit');
+	select is(guile3_get_call_time_limit(), 1.0::float4, 'bob: get call time limit');
+	select is(guile3_get_session_user_call_time_limit(), NULL, 'bob: get session user call time limit');
 
 	select set_test_event('bob time limit 1 done');
 
 		select wait_for_test_event('time limit 1');
 
-		select is(g3_get_default_call_time_limit(), 1.0::float4, 'carol: get default call time limit');
-		select is(g3_get_call_time_limit(), 1.0::float4, 'carol: get call time limit');
-		select is(g3_get_session_user_call_time_limit(), NULL, 'carol: get session user call time limit');
+		select is(guile3_get_default_call_time_limit(), 1.0::float4, 'carol: get default call time limit');
+		select is(guile3_get_call_time_limit(), 1.0::float4, 'carol: get call time limit');
+		select is(guile3_get_session_user_call_time_limit(), NULL, 'carol: get session user call time limit');
 
 		select set_test_event('carol time limit 1 done');
 
@@ -240,59 +240,59 @@ select set_test_event('time limit 1');
 select wait_for_test_event('bob time limit 1 done');
 select wait_for_test_event('carol time limit 1 done');
 
-select g3_set_role_call_time_limit('alice', 10);
-select g3_set_role_call_time_limit('bob', 2);
-select g3_set_role_call_time_limit('carol', 0.01);
+select guile3_set_role_call_time_limit('alice', 10);
+select guile3_set_role_call_time_limit('bob', 2);
+select guile3_set_role_call_time_limit('carol', 0.01);
 
-select is(g3_get_role_call_time_limit('alice'), 10::float4, 'alice: get role call time limit @10');
-select is(g3_get_session_user_call_time_limit(), 10::float4, 'alice: get session user call time limit @10');
+select is(guile3_get_role_call_time_limit('alice'), 10::float4, 'alice: get role call time limit @10');
+select is(guile3_get_session_user_call_time_limit(), 10::float4, 'alice: get session user call time limit @10');
 
 select set_test_event('time limit 2');
 
 	select wait_for_test_event('time limit 2');
 
-	select is(g3_get_default_call_time_limit(), 1.0::float4, 'bob: get default call time limit 2');
-	select is(g3_get_call_time_limit(), 2.0::float4, 'bob: get call time limit 2');
-	select is(g3_get_session_user_call_time_limit(), 2.0::float4, 'bob: get session user call time limit 2');
+	select is(guile3_get_default_call_time_limit(), 1.0::float4, 'bob: get default call time limit 2');
+	select is(guile3_get_call_time_limit(), 2.0::float4, 'bob: get call time limit 2');
+	select is(guile3_get_session_user_call_time_limit(), 2.0::float4, 'bob: get session user call time limit 2');
 
 	select lives_ok('select sleep(0.05)');
 
 		select wait_for_test_event('time limit 2');
 
-		select is(g3_get_default_call_time_limit(), 1.0::float4, 'carol: get default call time limit 2');
-		select is(g3_get_call_time_limit(), 0.01::float4, 'carol: get call time limit 2');
-		select is(g3_get_session_user_call_time_limit(), 0.01::float4, 'carol: get session user call time limit 2');
+		select is(guile3_get_default_call_time_limit(), 1.0::float4, 'carol: get default call time limit 2');
+		select is(guile3_get_call_time_limit(), 0.01::float4, 'carol: get call time limit 2');
+		select is(guile3_get_session_user_call_time_limit(), 0.01::float4, 'carol: get session user call time limit 2');
 
 		select throws_ok('select sleep(0.05)');
 
-select g3_set_default_call_allocation_limit(1000000);
-select g3_set_role_call_allocation_limit('alice', NULL);
-select g3_set_role_call_allocation_limit('bob', NULL);
-select g3_set_role_call_allocation_limit('carol', NULL);
+select guile3_set_default_call_allocation_limit(1000000);
+select guile3_set_role_call_allocation_limit('alice', NULL);
+select guile3_set_role_call_allocation_limit('bob', NULL);
+select guile3_set_role_call_allocation_limit('carol', NULL);
 
-select is(g3_get_default_call_allocation_limit(), 1000000::bigint, 'alice: get default call allocation limit');
-select is(g3_get_call_allocation_limit(), 1000000::bigint, 'alice: get call allocation limit');
-select is(g3_get_session_user_call_allocation_limit(), NULL, 'alice: get session user call allocation limit');
+select is(guile3_get_default_call_allocation_limit(), 1000000::bigint, 'alice: get default call allocation limit');
+select is(guile3_get_call_allocation_limit(), 1000000::bigint, 'alice: get call allocation limit');
+select is(guile3_get_session_user_call_allocation_limit(), NULL, 'alice: get session user call allocation limit');
 
-select is(g3_get_role_call_allocation_limit('alice'), NULL, 'alice: get role call allocation limit 1');
-select is(g3_get_role_call_allocation_limit('bob'), NULL, 'alice: get role call allocation limit 2');
-select is(g3_get_role_call_allocation_limit('carol'), NULL, 'alice: get role call allocation limit 3');
+select is(guile3_get_role_call_allocation_limit('alice'), NULL, 'alice: get role call allocation limit 1');
+select is(guile3_get_role_call_allocation_limit('bob'), NULL, 'alice: get role call allocation limit 2');
+select is(guile3_get_role_call_allocation_limit('carol'), NULL, 'alice: get role call allocation limit 3');
 
 select set_test_event('allocation limit 1');
 
 	select wait_for_test_event('allocation limit 1');
 
-	select is(g3_get_default_call_allocation_limit(), 1000000::bigint, 'bob: get default call allocation limit');
-	select is(g3_get_call_allocation_limit(), 1000000::bigint, 'bob: get call allocation limit');
-	select is(g3_get_session_user_call_allocation_limit(), NULL, 'bob: get session user call allocation limit');
+	select is(guile3_get_default_call_allocation_limit(), 1000000::bigint, 'bob: get default call allocation limit');
+	select is(guile3_get_call_allocation_limit(), 1000000::bigint, 'bob: get call allocation limit');
+	select is(guile3_get_session_user_call_allocation_limit(), NULL, 'bob: get session user call allocation limit');
 
 	select set_test_event('bob allocation limit 1 done');
 
 		select wait_for_test_event('allocation limit 1');
 
-		select is(g3_get_default_call_allocation_limit(), 1000000::bigint, 'carol: get default call allocation limit');
-		select is(g3_get_call_allocation_limit(), 1000000::bigint, 'carol: get call allocation limit');
-		select is(g3_get_session_user_call_allocation_limit(), NULL, 'carol: get session user call allocation limit');
+		select is(guile3_get_default_call_allocation_limit(), 1000000::bigint, 'carol: get default call allocation limit');
+		select is(guile3_get_call_allocation_limit(), 1000000::bigint, 'carol: get call allocation limit');
+		select is(guile3_get_session_user_call_allocation_limit(), NULL, 'carol: get session user call allocation limit');
 
 		select set_test_event('carol allocation limit 1 done');
 
@@ -300,28 +300,28 @@ select set_test_event('allocation limit 1');
 select wait_for_test_event('bob allocation limit 1 done');
 select wait_for_test_event('carol allocation limit 1 done');
 
-select g3_set_role_call_allocation_limit('alice', 10000000);
-select g3_set_role_call_allocation_limit('bob', 2000000);
-select g3_set_role_call_allocation_limit('carol', 10000);
+select guile3_set_role_call_allocation_limit('alice', 10000000);
+select guile3_set_role_call_allocation_limit('bob', 2000000);
+select guile3_set_role_call_allocation_limit('carol', 10000);
 
-select is(g3_get_role_call_allocation_limit('alice'), 10000000::bigint, 'alice: get role call allocation limit @10');
-select is(g3_get_session_user_call_allocation_limit(), 10000000::bigint, 'alice: get session user call allocation limit @10');
+select is(guile3_get_role_call_allocation_limit('alice'), 10000000::bigint, 'alice: get role call allocation limit @10');
+select is(guile3_get_session_user_call_allocation_limit(), 10000000::bigint, 'alice: get session user call allocation limit @10');
 
 select set_test_event('allocation limit 2');
 
 	select wait_for_test_event('allocation limit 2');
 
-	select is(g3_get_default_call_allocation_limit(), 1000000::bigint, 'bob: get default call allocation limit 2');
-	select is(g3_get_call_allocation_limit(), 2000000::bigint, 'bob: get call allocation limit 2');
-	select is(g3_get_session_user_call_allocation_limit(), 2000000::bigint, 'bob: get session user call allocation limit 2');
+	select is(guile3_get_default_call_allocation_limit(), 1000000::bigint, 'bob: get default call allocation limit 2');
+	select is(guile3_get_call_allocation_limit(), 2000000::bigint, 'bob: get call allocation limit 2');
+	select is(guile3_get_session_user_call_allocation_limit(), 2000000::bigint, 'bob: get session user call allocation limit 2');
 
 	select lives_ok('select sleep(0.05)');
 
 		select wait_for_test_event('allocation limit 2');
 
-		select is(g3_get_default_call_allocation_limit(), 1000000::bigint, 'carol: get default call allocation limit 2');
-		select is(g3_get_call_allocation_limit(), 10000::bigint, 'carol: get call allocation limit 2');
-		select is(g3_get_session_user_call_allocation_limit(), 10000::bigint, 'carol: get session user call allocation limit 2');
+		select is(guile3_get_default_call_allocation_limit(), 1000000::bigint, 'carol: get default call allocation limit 2');
+		select is(guile3_get_call_allocation_limit(), 10000::bigint, 'carol: get call allocation limit 2');
+		select is(guile3_get_session_user_call_allocation_limit(), 10000::bigint, 'carol: get session user call allocation limit 2');
 
 		select throws_ok('select sleep(0.05)');
 

@@ -122,156 +122,156 @@ create trusted language guile3
 
 set search_path to public;
 
-create function g3_get_default_preamble() returns text as $$
+create function guile3_get_default_preamble() returns text as $$
   select plguile3.get_role_preamble(0);
 $$
 language sql security definer stable;
-revoke all on function g3_get_default_preamble from public;
+revoke all on function guile3_get_default_preamble from public;
 
-create function g3_get_default_call_time_limit() returns float4 as $$
+create function guile3_get_default_call_time_limit() returns float4 as $$
   select plguile3.get_role_call_time_limit(0);
 $$
 language sql security definer stable;
-revoke all on function g3_get_default_call_time_limit from public;
+revoke all on function guile3_get_default_call_time_limit from public;
 
-create function g3_get_default_call_allocation_limit() returns bigint as $$
+create function guile3_get_default_call_allocation_limit() returns bigint as $$
   select plguile3.get_role_call_allocation_limit(0);
 $$
 language sql security definer stable;
-revoke all on function g3_get_default_call_allocation_limit from public;
+revoke all on function guile3_get_default_call_allocation_limit from public;
 
-create function g3_set_default_preamble(src text) returns void as $$
+create function guile3_set_default_preamble(src text) returns void as $$
   select plguile3.set_role_preamble(0, src);
 $$
 language sql security definer;
-revoke all on function g3_set_default_preamble from public;
+revoke all on function guile3_set_default_preamble from public;
 
-create function g3_set_default_call_time_limit(time_limit float4) returns void as $$
+create function guile3_set_default_call_time_limit(time_limit float4) returns void as $$
   select plguile3.set_role_call_time_limit(0, time_limit);
 $$
 language sql security definer;
-revoke all on function g3_set_default_call_time_limit from public;
+revoke all on function guile3_set_default_call_time_limit from public;
 
-create function g3_set_default_call_allocation_limit(allocation_limit bigint) returns void as $$
+create function guile3_set_default_call_allocation_limit(allocation_limit bigint) returns void as $$
   select plguile3.set_role_call_allocation_limit(0, allocation_limit);
 $$
 language sql security definer;
-revoke all on function g3_set_default_call_allocation_limit from public;
+revoke all on function guile3_set_default_call_allocation_limit from public;
 
-create function g3_get_role_preamble(role_name text) returns text as $$
+create function guile3_get_role_preamble(role_name text) returns text as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.get_role_preamble(r.oid) from r;
 $$
 language sql security definer stable;
-revoke all on function g3_get_role_preamble from public;
+revoke all on function guile3_get_role_preamble from public;
 
-create function g3_get_role_call_allocation_limit(role_name text) returns bigint as $$
+create function guile3_get_role_call_allocation_limit(role_name text) returns bigint as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.get_role_call_allocation_limit(r.oid) from r;
 $$
 language sql security definer stable;
-revoke all on function g3_get_role_call_allocation_limit from public;
+revoke all on function guile3_get_role_call_allocation_limit from public;
 
-create function g3_get_role_call_time_limit(role_name text) returns float4 as $$
+create function guile3_get_role_call_time_limit(role_name text) returns float4 as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.get_role_call_time_limit(r.oid) from r;
 $$
 language sql security definer stable;
-revoke all on function g3_get_role_call_time_limit from public;
+revoke all on function guile3_get_role_call_time_limit from public;
 
-create function g3_set_role_preamble(role_name text, src text) returns void as $$
+create function guile3_set_role_preamble(role_name text, src text) returns void as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.set_role_preamble(r.oid, src) from r;
 $$
 language sql security definer;
-revoke all on function g3_set_role_preamble from public;
+revoke all on function guile3_set_role_preamble from public;
 
-create function g3_remove_role_preamble(role_name text) returns void as $$
+create function guile3_remove_role_preamble(role_name text) returns void as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.remove_role_preamble(r.oid) from r;
 $$
 language sql security definer;
-revoke all on function g3_remove_role_preamble from public;
+revoke all on function guile3_remove_role_preamble from public;
 
-create function g3_set_role_call_time_limit(role_name text, time_limit float4) returns void as $$
+create function guile3_set_role_call_time_limit(role_name text, time_limit float4) returns void as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.set_role_call_time_limit(r.oid, time_limit) from r;
 $$
 language sql security definer;
-revoke all on function g3_set_role_call_time_limit from public;
+revoke all on function guile3_set_role_call_time_limit from public;
 
-create function g3_set_role_call_allocation_limit(role_name text, allocation_limit bigint) returns void as $$
+create function guile3_set_role_call_allocation_limit(role_name text, allocation_limit bigint) returns void as $$
   with r as (select * from pg_roles where rolname = role_name)
   select plguile3.set_role_call_allocation_limit(r.oid, allocation_limit) from r;
 $$
 language sql security definer;
-revoke all on function g3_set_role_call_allocation_limit from public;
+revoke all on function guile3_set_role_call_allocation_limit from public;
 
-create function g3_get_preamble() returns text as $$
+create function guile3_get_preamble() returns text as $$
   select coalesce(
-    g3_get_session_user_preamble(),
-    g3_get_default_preamble()
+    guile3_get_session_user_preamble(),
+    guile3_get_default_preamble()
   );
 $$
 language sql security definer stable;
-revoke all on function g3_get_preamble from public;
+revoke all on function guile3_get_preamble from public;
 
-create function g3_get_call_allocation_limit() returns bigint as $$
+create function guile3_get_call_allocation_limit() returns bigint as $$
   select coalesce(
-    g3_get_session_user_call_allocation_limit(),
-    g3_get_default_call_allocation_limit()
+    guile3_get_session_user_call_allocation_limit(),
+    guile3_get_default_call_allocation_limit()
   );
 $$
 language sql security definer stable;
-revoke all on function g3_get_call_allocation_limit from public;
+revoke all on function guile3_get_call_allocation_limit from public;
 
-create function g3_get_call_time_limit() returns float4 as $$
+create function guile3_get_call_time_limit() returns float4 as $$
   select coalesce(
-    g3_get_session_user_call_time_limit(),
-    g3_get_default_call_time_limit()
+    guile3_get_session_user_call_time_limit(),
+    guile3_get_default_call_time_limit()
   );
 $$
 language sql security definer stable;
-revoke all on function g3_get_call_time_limit from public;
+revoke all on function guile3_get_call_time_limit from public;
 
-create function g3_get_session_user_preamble() returns text as $$
-  select g3_get_role_preamble(session_user);
+create function guile3_get_session_user_preamble() returns text as $$
+  select guile3_get_role_preamble(session_user);
 $$
 language sql security definer stable;
-revoke all on function g3_get_session_user_preamble from public;
+revoke all on function guile3_get_session_user_preamble from public;
 
-create function g3_get_session_user_call_allocation_limit() returns bigint as $$
-  select g3_get_role_call_allocation_limit(session_user);
+create function guile3_get_session_user_call_allocation_limit() returns bigint as $$
+  select guile3_get_role_call_allocation_limit(session_user);
 $$
 language sql security definer stable;
-revoke all on function g3_get_session_user_call_allocation_limit from public;
+revoke all on function guile3_get_session_user_call_allocation_limit from public;
 
-create function g3_get_session_user_call_time_limit() returns float4 as $$
-  select g3_get_role_call_time_limit(session_user);
+create function guile3_get_session_user_call_time_limit() returns float4 as $$
+  select guile3_get_role_call_time_limit(session_user);
 $$
 language sql security definer stable;
-revoke all on function g3_get_session_user_call_time_limit from public;
+revoke all on function guile3_get_session_user_call_time_limit from public;
 
-create function g3_set_session_user_preamble(src text) returns void as $$
-  select g3_set_role_preamble(session_user, src);
+create function guile3_set_session_user_preamble(src text) returns void as $$
+  select guile3_set_role_preamble(session_user, src);
 $$
 language sql security definer;
-revoke all on function g3_set_session_user_preamble from public;
+revoke all on function guile3_set_session_user_preamble from public;
 
-create function g3_remove_session_user_preamble() returns void as $$
-  select g3_remove_role_preamble(session_user);
+create function guile3_remove_session_user_preamble() returns void as $$
+  select guile3_remove_role_preamble(session_user);
 $$
 language sql security definer;
-revoke all on function g3_remove_session_user_preamble from public;
+revoke all on function guile3_remove_session_user_preamble from public;
 
-create function g3_set_session_user_call_time_limit(time_limit float4) returns void as $$
-  select g3_set_role_call_time_limit(session_user, time_limit);
+create function guile3_set_session_user_call_time_limit(time_limit float4) returns void as $$
+  select guile3_set_role_call_time_limit(session_user, time_limit);
 $$
 language sql security definer;
-revoke all on function g3_set_session_user_call_time_limit from public;
+revoke all on function guile3_set_session_user_call_time_limit from public;
 
-create function g3_set_session_user_call_allocation_limit(allocation_limit bigint) returns void as $$
-  select g3_set_role_call_allocation_limit(session_user, allocation_limit);
+create function guile3_set_session_user_call_allocation_limit(allocation_limit bigint) returns void as $$
+  select guile3_set_role_call_allocation_limit(session_user, allocation_limit);
 $$
 language sql security definer;
-revoke all on function g3_set_session_user_call_allocation_limit from public;
+revoke all on function guile3_set_session_user_call_allocation_limit from public;
