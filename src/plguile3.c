@@ -1255,7 +1255,7 @@ SCM find_cached_proc(HeapTuple proc_tuple)
 		return SCM_BOOL_F;
 	}
 
-	if (src_hash != scm_cddr(entry)) {
+	if (scm_is_eq(src_hash, scm_cddr(entry))) {
 		// An ALTER FUNCTION statement was executed, changing the
 		// function's source.
 		scm_hash_remove_x(func_cache, func);

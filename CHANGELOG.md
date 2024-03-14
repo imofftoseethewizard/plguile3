@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.17] - 2024-03-14
+
+This version fixes a defect in the compiled function cache, where
+equality was not correctly evaluated between the source hash of the
+current version of the function body and the source hash in the cache.
+
 ## [0.19.16] - 2024-03-13
 
 This version fixes null `'()` arguments in the arguments list of
