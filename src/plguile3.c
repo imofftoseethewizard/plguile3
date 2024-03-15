@@ -1187,6 +1187,8 @@ SCM prepare_event_trigger_arguments(EventTriggerData *event_trigger_data)
 	return scm_list_3(event, parse_tree, tag);
 }
 
+static TriggerData *current_trigger_data = NULL;
+
 Datum call_trigger(FunctionCallInfo fcinfo)
 {
 	TriggerData	*trigger_data = (TriggerData *)fcinfo->context;
@@ -1195,7 +1197,20 @@ Datum call_trigger(FunctionCallInfo fcinfo)
 	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
 	SCM args = prepare_trigger_arguments(trigger_data);
 
-	SCM scm_result = apply_in_sandbox(proc, args);
+	SCM scm_result;
+
+	TriggerData *prior_trigger_data = current_trigger_data;
+	current_trigger_data = trigger_data;
+
+	PG_TRY();
+	{
+		scm_result = apply_in_sandbox(proc, args);
+	}
+	PG_FINALLY();
+	{
+		current_trigger_data = prior_trigger_data;
+	}
+	PG_END_TRY();
 
 	if (scm_result != SCM_BOOL_F && TRIGGER_FIRED_FOR_ROW(event)) {
 
@@ -1300,11 +1315,9 @@ SCM prepare_trigger_arguments(TriggerData *trigger_data)
 {
 	Relation rel = trigger_data->tg_relation;
 	TriggerEvent event = trigger_data->tg_event;
-	TupleDesc tuple_desc = CreateTupleDescCopy(trigger_data->tg_trigslot->tts_tupleDescriptor);
-	TupleDesc new_tuple_desc = TRIGGER_FIRED_BY_UPDATE(event) ? CreateTupleDescCopy(trigger_data->tg_newslot->tts_tupleDescriptor) : NULL;
 
-	SCM new = SCM_EOL;
-	SCM old = SCM_EOL;
+	SCM new = SCM_BOOL_F;
+	SCM old = SCM_BOOL_F;
 	SCM tg_name = scm_from_locale_string(trigger_data->tg_trigger->tgname);
 	SCM tg_when = TRIGGER_FIRED_BEFORE(event) ? before_symbol : after_symbol;
 	SCM tg_level = TRIGGER_FIRED_FOR_ROW(event) ? row_symbol : statement_symbol;
@@ -1328,15 +1341,21 @@ SCM prepare_trigger_arguments(TriggerData *trigger_data)
 		: TRIGGER_FIRED_BY_TRUNCATE(event) ? truncate_symbol
 		: SCM_BOOL_F;
 
-	if (TRIGGER_FIRED_BY_INSERT(event))
-		new = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+	if (TRIGGER_FIRED_FOR_ROW(event)) {
 
-	else if (TRIGGER_FIRED_BY_DELETE(event))
-		old = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+		TupleDesc tuple_desc = CreateTupleDescCopy(trigger_data->tg_trigslot->tts_tupleDescriptor);
+		TupleDesc new_tuple_desc = TRIGGER_FIRED_BY_UPDATE(event) ? CreateTupleDescCopy(trigger_data->tg_newslot->tts_tupleDescriptor) : NULL;
 
-	else if (TRIGGER_FIRED_BY_UPDATE(event)) {
-		new = heap_tuple_to_scm(trigger_data->tg_newtuple, new_tuple_desc);
-		old = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+		if (TRIGGER_FIRED_BY_INSERT(event))
+			new = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+
+		else if (TRIGGER_FIRED_BY_DELETE(event))
+			old = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+
+		else if (TRIGGER_FIRED_BY_UPDATE(event)) {
+			new = heap_tuple_to_scm(trigger_data->tg_newtuple, new_tuple_desc);
+			old = heap_tuple_to_scm(trigger_data->tg_trigtuple, tuple_desc);
+		}
 	}
 
 	// scm_list_n crashed with an equivalent usage
@@ -5632,6 +5651,9 @@ SCM spi_execute(SCM command, SCM args, SCM count)
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
+	if (current_trigger_data)
+		SPI_register_trigger_data(current_trigger_data);
+
 	PG_TRY();
 	{
 		ret = SPI_execute_extended(scm_to_locale_string(command), &options);
@@ -5781,6 +5803,9 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	if (current_trigger_data)
+		SPI_register_trigger_data(current_trigger_data);
 
 	PG_TRY();
 	{
@@ -5969,6 +5994,9 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM sc
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
 
+	if (current_trigger_data)
+		SPI_register_trigger_data(current_trigger_data);
+
 	PG_TRY();
 	{
 		portal = SPI_cursor_parse_open(
@@ -6017,6 +6045,9 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 
 	if (ret < 0)
 		throw_runtime_error("SPI_connect failed: %s", SPI_result_code_string(ret));
+
+	if (current_trigger_data)
+		SPI_register_trigger_data(current_trigger_data);
 
 	portal = SPI_cursor_find(name);
 

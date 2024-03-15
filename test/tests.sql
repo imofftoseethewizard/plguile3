@@ -1,6 +1,6 @@
 begin;
 
-select plan(253);
+select plan(254);
 
 select lives_ok('create extension if not exists plguile3', 'install (if not exists)');
 select lives_ok('drop extension plguile3 cascade', 'de-install');
@@ -1447,6 +1447,20 @@ create trigger tr_things_before_insert before insert on things
   for each row execute function f_tr_modify_id();
 
 select is(insert_thing(5, 'again'), 6, 'modifying before trigger test');
+
+create table thing_history (id int, name text);
+create function f_tr_register_trigger_data_test() returns trigger as $$
+  (execute "insert into thing_history select * from new_things")
+$$ language guile3;
+
+create trigger tr_register_trigger_data_test
+  after insert on things
+  referencing new table as new_things
+  for each statement
+  execute function f_tr_register_trigger_data_test();
+
+insert into things values (14, 'pez'), (27, 'main');
+select is((select count(*) from thing_history)::int, 2, 'register trigger data');
 
 create table ddl_record (event text, tag text);
 
