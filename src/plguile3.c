@@ -247,7 +247,7 @@ static void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid mu
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
-static Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static Datum scm_to_setof_datum(SCM x, Oid type_oid, ReturnSetInfo *rsinfo);
 static Datum call_event_trigger(FunctionCallInfo fcinfo);
 static Datum call_trigger(FunctionCallInfo fcinfo);
 static Datum call_ordinary(FunctionCallInfo fcinfo);
@@ -260,8 +260,8 @@ static void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
-static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo);
-static Datum scm_to_setof_record_datum(SCM result, MemoryContext ctx, ReturnSetInfo *rsinfo);
+static Datum scm_to_setof_composite_datum(SCM result, TupleDesc tuple_desc, ReturnSetInfo *rsinfo);
+static Datum scm_to_setof_record_datum(SCM result, ReturnSetInfo *rsinfo);
 static SCM heap_tuple_to_scm(HeapTuple heap_tuple, TupleDesc tuple_desc);
 static HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc);
 static SCM datum_heap_tuple_to_scm(Datum x, TupleDesc tuple_desc);
@@ -1423,9 +1423,13 @@ Datum call_ordinary(FunctionCallInfo fcinfo)
 
 	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
+	MemoryContext prior_ctx = MemoryContextSwitchTo(TopTransactionContext);
+
 	Datum result = convert_result_to_datum(scm_result, proc_tuple, fcinfo);
 
 	set_current_volatility(prior_volatility);
+
+	MemoryContextSwitchTo(prior_ctx);
 
 	ReleaseSysCache(proc_tuple);
 
@@ -1627,18 +1631,17 @@ Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo
 	if (is_set_returning(proc_tuple)) {
 
 		ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-		MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 
 		switch (typefunc_class) {
 
 		case TYPEFUNC_SCALAR:
-			return scm_to_setof_datum(result, rettype_oid, per_query_ctx, rsinfo);
+			return scm_to_setof_datum(result, rettype_oid, rsinfo);
 
 		case TYPEFUNC_COMPOSITE:
-			return scm_to_setof_composite_datum(result, tuple_desc, per_query_ctx, rsinfo);
+			return scm_to_setof_composite_datum(result, tuple_desc, rsinfo);
 
 		case TYPEFUNC_RECORD:   /* indeterminate rowtype result      */
-			return scm_to_setof_record_datum(result, per_query_ctx, rsinfo);
+			return scm_to_setof_record_datum(result, rsinfo);
 
 		case TYPEFUNC_COMPOSITE_DOMAIN: /* domain over determinable rowtype result */
 		case TYPEFUNC_OTHER:   /* bogus type, eg pseudotype      */
@@ -1733,18 +1736,13 @@ Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc)
 	return result_datum;
 }
 
-Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, MemoryContext ctx, ReturnSetInfo *rsinfo)
+Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, ReturnSetInfo *rsinfo)
 {
     SCM rows;
     Datum result;
     Tuplestorestate *tupstore;
-    MemoryContext prior_ctx;
     Datum *attrs;
     bool *is_null;
-
-    // Put tuplestore in context of the result, not the context of the function call. It will
-    // otherwise be reclaimed and cause a crash when Postgres attempts to use the result.
-    prior_ctx = MemoryContextSwitchTo(ctx);
 
     tupstore = tuplestore_begin_heap(true, false, work_mem);
 
@@ -1802,12 +1800,10 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, MemoryContext ct
     // Create a result tuplestore to be returned
     result = PointerGetDatum(tupstore);
 
-    MemoryContextSwitchTo(prior_ctx);
-
     return result;
 }
 
-Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
+Datum scm_to_setof_record_datum(SCM x, ReturnSetInfo *rsinfo)
 {
     SCM rows;
     SCM default_types = SCM_BOOL_F;
@@ -1816,11 +1812,6 @@ Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
 	TupleDesc default_tuple_desc = NULL;
 	TupleDesc prior_item_tuple_desc = NULL;
     Tuplestorestate *tupstore;
-    MemoryContext prior_ctx;
-
-    // Put tuplestore in context of the result, not the context of the function call. It will
-    // otherwise be reclaimed and cause a crash when Postgres attempts to use the result.
-    prior_ctx = MemoryContextSwitchTo(ctx);
 
     tupstore = tuplestore_begin_heap(true, false, work_mem);
 
@@ -1908,8 +1899,6 @@ Datum scm_to_setof_record_datum(SCM x, MemoryContext ctx, ReturnSetInfo *rsinfo)
 
     // Create a result tuplestore to be returned
     result = PointerGetDatum(tupstore);
-
-    MemoryContextSwitchTo(prior_ctx);
 
     return result;
 }
@@ -2455,17 +2444,12 @@ Datum scm_to_datum(SCM scm, Oid type_oid)
 	return (Datum)0;
 }
 
-Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *rsinfo)
+Datum scm_to_setof_datum(SCM x, Oid type_oid, ReturnSetInfo *rsinfo)
 {
     SCM rows;
     Datum result;
     Tuplestorestate *tupstore;
     TupleDesc tupdesc;
-    MemoryContext prior_ctx;
-
-    // Put tuplestore in context of the result, not the context of the function call. It will
-    // otherwise be reclaimed and cause a crash when Postgres attempts to use the result.
-    prior_ctx = MemoryContextSwitchTo(ctx);
 
     tupstore = tuplestore_begin_heap(true, false, work_mem);
 
@@ -2501,8 +2485,6 @@ Datum scm_to_setof_datum(SCM x, Oid type_oid, MemoryContext ctx, ReturnSetInfo *
 
     // Create a result tuplestore to be returned
     result = PointerGetDatum(tupstore);
-
-    MemoryContextSwitchTo(prior_ctx);
 
     return result;
 }
@@ -5580,17 +5562,14 @@ SCM scm_c_list_ref(SCM obj, size_t k)
 
 char *scm_to_string(SCM obj)
 {
-	MemoryContext context = CurrentMemoryContext;
-
 	SCM proc = scm_eval_string(scm_from_locale_string("(lambda (x) (format #f \"~s\" x))"));
 	SCM str_scm = call_1(proc, obj);
 
-	// Convert SCM string to C string and allocate it in the given memory context
 	size_t len;
 	char *c_str = scm_to_locale_stringn(str_scm, &len);
-	char *result = MemoryContextStrdup(context, c_str);
+	char *result = pstrdup(c_str);
 
-	free(c_str);  // Free temporary string
+	free(c_str);
 
 	return result;
 }
@@ -5751,6 +5730,7 @@ void throw_runtime_error(const char *format, ...)
 
 	message = scm_from_locale_string(buffer);
 	args = scm_list_1(message);
+
 	scm_throw(error_symbol, args);
 }
 
