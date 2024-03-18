@@ -1218,7 +1218,13 @@ Datum call_trigger(FunctionCallInfo fcinfo)
 			? trigger_data->tg_newslot->tts_tupleDescriptor
 			: trigger_data->tg_trigslot->tts_tupleDescriptor;
 
-		return PointerGetDatum(scm_record_to_heap_tuple(scm_result, tuple_desc));
+		MemoryContext prior_ctx = MemoryContextSwitchTo(TopTransactionContext);
+
+		Datum result = PointerGetDatum(scm_record_to_heap_tuple(scm_result, tuple_desc));
+
+		MemoryContextSwitchTo(prior_ctx);
+
+		return result;
 	}
 
 	return PointerGetDatum(NULL);

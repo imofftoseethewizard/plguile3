@@ -5,9 +5,10 @@ language.
 
 ## Status
 
-Early alpha. Plguile3 is feature-complete. The latest release of the
-0.19.x series is the most stable. There are still crashing code paths,
-but there are fewer in each successive commit.
+Alpha.  Plguile3 is feature complete.  It has a full functional test
+suite and there are no known functional defects.  The latest version
+will generally be the most stable.  Current work is focusing on
+refinement and documentation of the code.
 
 ## Overview
 
@@ -27,13 +28,6 @@ enables the creation of database functions using Guile Scheme 3.0.
 ## Roadmap
 
 The scope of the 1.0 release is detailed below.
-
-The 0.19.x versions will normalize error messages and properly trap
-and report errors from Guile. Testing will be expanded from just the
-happy path to include corner, edge, and adversarial cases.
-
-At version 0.20.0 the extension will be functionally complete. This
-will be the alpha release.
 
 The 0.21.x versions will reorganize, refactor, refine, and document
 plguile3.c and plguile3.scm.
