@@ -1,4 +1,3 @@
-// ! $ % & * + - . / : < = > ? @ ^ _ ~ a-z 0-9
 #include <libguile.h>
 
 #include <postgres.h>
@@ -243,7 +242,6 @@ static SCM call_4(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4);
 static SCM call_8_executor(void *data);
 static SCM call_8(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4, SCM arg5, SCM arg6, SCM arg7, SCM arg8);
 static SCM call_error_handler(void *data, SCM key, SCM args);
-static void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid multirange_type_oid);
 static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
@@ -272,7 +270,6 @@ static Oid infer_multirange_type_oid(SCM x);
 static Oid unify_type_oid(Oid t1, Oid t2);
 static Oid unify_range_subtype_oid(Oid t1, Oid t2);
 static Oid find_enum_datum_type(SCM type_name);
-static bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_type_oid);
 static TupleDesc record_tuple_desc(SCM x);
 static TupleDesc table_tuple_desc(SCM x);
 static TupleDesc build_tuple_desc(SCM attr_names, SCM type_desc_list);
@@ -583,7 +580,6 @@ static SCM stop_marker;
 static SCM func_cache;
 static SCM module_cache;
 
-static HTAB *range_cache;
 static HTAB *type_cache;
 
 static SCM raise_notice(SCM x);
@@ -598,17 +594,13 @@ static SCM spi_rollback_and_chain(void);
 
 static SCM base_module = SCM_UNDEFINED;
 
+static void init_range_type_cache(void);
+
 void _PG_init(void)
 {
-	HASHCTL range_info;
 	HASHCTL type_info;
 
 	// TODO: check that `SHOW server_encoding` is 'UTF8'
-
-	memset(&range_info, 0, sizeof(range_info));
-	range_info.keysize = sizeof(Oid);
-	range_info.entrysize = sizeof(RangeCacheEntry);
-	range_cache = hash_create("plguile3 range cache", 128, &range_info, HASH_ELEM | HASH_BLOBS);
 
 	memset(&type_info, 0, sizeof(type_info));
 	type_info.keysize = sizeof(Oid);
@@ -626,13 +618,12 @@ void _PG_init(void)
 	timestamp_oid   = TypenameGetTypid("timestamp");
 	timestamptz_oid = TypenameGetTypid("timestamptz");
 
-	insert_range_cache_entry(date_oid,        TypenameGetTypid("daterange"), TypenameGetTypid("datemultirange"));
-	insert_range_cache_entry(int2_oid,        TypenameGetTypid("int4range"), TypenameGetTypid("int4multirange"));
-	insert_range_cache_entry(int4_oid,        TypenameGetTypid("int4range"), TypenameGetTypid("int4multirange"));
-	insert_range_cache_entry(int8_oid,        TypenameGetTypid("int8range"), TypenameGetTypid("int8multirange"));
-	insert_range_cache_entry(numeric_oid,     TypenameGetTypid("numrange"),  TypenameGetTypid("nummultirange"));
-	insert_range_cache_entry(timestamp_oid,   TypenameGetTypid("tsrange"),   TypenameGetTypid("tsmultirange"));
-	insert_range_cache_entry(timestamptz_oid, TypenameGetTypid("tstzrange"), TypenameGetTypid("tstzmultirange"));
+	/* The range type cache is used in the `(execute ...)` procedure.  When inferring
+	 * appropriate PG type to use for an argument, if the argument is a range or multirange
+	 * record type, then this cache will be consulted to find the OID that can represent the
+	 * value faithfully.
+	 */
+	init_range_type_cache();
 
 	/* Fill type cache with to_scm and to_datum functions for known types */
 	insert_type_cache_entry(TypenameGetTypid("bit"),            datum_bit_string_to_scm,     scm_to_datum_bit_string);
@@ -759,10 +750,10 @@ void _PG_init(void)
 
 	/* Procedures defined by define-record-type are inlinable, meaning that instead of being
 	   procedures, they are actually syntax transformers.  In non-call contexts, they refer to
-	   the original procedure, but in call contexts, they interpolate the body of the
-	   procedure. The upshot to this is that using scm_c_lookup gets the syntax transfomer
-	   procedure, not the inlined procedure. To fix this, we just eval the name, inducing the
-	   syntax transformer to give us proc we need.
+	   the original procedure, but in call contexts, they interpolate the body of the procedure.
+	   The upshot to this is that using scm_c_lookup gets the syntax transfomer procedure, not
+	   the inlined procedure.  To fix this, we just eval the name, inducing the syntax
+	   transformer to give us proc we need.
 	*/
 
 	apply_with_limits_proc      = eval_string_in_base_module("apply-with-limits");
@@ -1001,7 +992,7 @@ void _PG_init(void)
 	scm_hash_set_x(jsp_op_types_hash, var_symbol,              scm_from_int(jpiVariable));
 
 	// unique object used to signal desired end of processing
-	// during execute-with-receiver
+	// during `execute` with a `#:receiver` argument.
 	stop_marker = scm_cons(SCM_EOL, SCM_EOL);
 	scm_gc_protect_object(stop_marker);
 
@@ -1144,15 +1135,6 @@ SCM call_error_handler(void *data, SCM key, SCM args)
 {
 	elog(ERROR, "Unable to call %s in base module: \n        %s %s", scm_to_string(*(SCM *)data),
 	     scm_to_string(key), scm_to_string(args));
-}
-
-void _PG_fini(void)
-{
-	scm_gc_unprotect_object(func_cache);
-
-	/* Clean up hash tables */
-	hash_destroy(range_cache);
-	hash_destroy(type_cache);
 }
 
 Datum plguile3_call(PG_FUNCTION_ARGS)
@@ -5580,21 +5562,6 @@ char *scm_to_string(SCM obj)
 	return result;
 }
 
-void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid multirange_type_oid)
-{
-	bool found;
-	RangeCacheEntry *entry;
-
-	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_ENTER, &found);
-
-	if (found)
-		elog(ERROR, "Unexpected duplicate in range cache: %d", subtype_oid);
-
-	entry->subtype_oid = subtype_oid;
-	entry->range_type_oid = range_type_oid;
-	entry->multirange_type_oid = multirange_type_oid;
-}
-
 void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum)
 {
 	bool found;
@@ -6207,6 +6174,20 @@ SCM spi_rollback_and_chain(void)
 	return SCM_UNDEFINED;
 }
 
+/*-----------------------------------------------------------------------------*
+ *
+ * Execute Argument Type Inference
+ *
+ *-----------------------------------------------------------------------------*/
+
+static bool search_range_cache(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_type_oid);
+static bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_type_oid);
+
+static void insert_range_cache_entry(
+	Oid subtype_oid,
+	Oid range_type_oid,
+	Oid multirange_type_oid);
+
 Oid infer_scm_type_oid(SCM x)
 {
 	if (scm_is_number(x)) {
@@ -6390,9 +6371,6 @@ Oid infer_range_type_oid(SCM x)
 	Oid lower_oid, upper_oid;
 	Oid multirange_type_oid, range_type_oid, subtype_oid;
 
-	RangeCacheEntry *entry;
-	bool found;
-
 	lower = call_1(range_lower_proc, x);
 	upper = call_1(range_upper_proc, x);
 
@@ -6418,10 +6396,8 @@ Oid infer_range_type_oid(SCM x)
 	if (subtype_oid == InvalidOid)
 		elog(ERROR, "infer_range_type_oid: unable to infer range type for %s", scm_to_string(x));
 
-	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_FIND, &found);
-
-	if (found)
-		return entry->range_type_oid;
+	if (search_range_cache(subtype_oid, &range_type_oid, &multirange_type_oid))
+		return range_type_oid;
 
 	if (!find_range_type_oid(subtype_oid, &range_type_oid, &multirange_type_oid))
 		elog(ERROR, "infer_range_type_oid: unable to infer range type for %s", scm_to_string(x));
@@ -6431,44 +6407,11 @@ Oid infer_range_type_oid(SCM x)
 	return range_type_oid;
 }
 
-bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_type_oid)
-{
-    Relation rel;
-    TableScanDesc scan;
-    HeapTuple tup;
-    bool found = false;
-
-    rel = table_open(RangeRelationId, AccessShareLock);
-
-    scan = table_beginscan_catalog(rel, 0, NULL);
-
-    while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
-    {
-        Form_pg_range range_form = (Form_pg_range) GETSTRUCT(tup);
-        if (range_form->rngsubtype == subtype_oid)
-        {
-            *range_type_oid = range_form->rngtypid;
-            *multirange_type_oid = range_form->rngmultitypid;
-
-            found = true;
-            break;
-        }
-    }
-
-    table_endscan(scan);
-    table_close(rel, AccessShareLock);
-
-    return found;
-}
-
 Oid infer_multirange_type_oid(SCM x)
 {
 	SCM ranges = call_1(multirange_ranges_proc, x);
 
 	Oid subtype_oid = InvalidOid;
-
-	RangeCacheEntry *entry;
-	bool found;
 
 	Oid multirange_type_oid, range_type_oid;
 
@@ -6513,10 +6456,8 @@ Oid infer_multirange_type_oid(SCM x)
 	if (subtype_oid == InvalidOid)
 		subtype_oid = int4_oid;
 
-	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_FIND, &found);
-
-	if (found)
-		return entry->multirange_type_oid;
+	if (search_range_cache(subtype_oid, &range_type_oid, &multirange_type_oid))
+		return multirange_type_oid;
 
 	if (!find_range_type_oid(subtype_oid, &range_type_oid, &multirange_type_oid))
 		elog(ERROR, "infer_multirange_type_oid: unable to infer multirange type for %s", scm_to_string(x));
@@ -6537,6 +6478,106 @@ Oid unify_range_subtype_oid(Oid t1, Oid t2)
 	return unify_type_oid(t1, t2);
 }
 
+/*-----------------------------------------------------------------------------*
+ *
+ * Range Cache
+ *
+ *-----------------------------------------------------------------------------*/
+
+static HTAB *range_cache;
+
+static void init_range_cache_entry(
+	const char *subtype_name,
+	const char *range_type_name,
+	const char *multirange_type_name);
+
+void init_range_type_cache(void)
+{
+	HASHCTL range_info;
+
+	memset(&range_info, 0, sizeof(range_info));
+	range_info.keysize = sizeof(Oid);
+	range_info.entrysize = sizeof(RangeCacheEntry);
+	range_cache = hash_create("plguile3 range cache", 128, &range_info, HASH_ELEM | HASH_BLOBS);
+
+	init_range_cache_entry("date",        "daterange", "datemultirange");
+	init_range_cache_entry("int2",        "int4range", "int4multirange");
+	init_range_cache_entry("int4",        "int4range", "int4multirange");
+	init_range_cache_entry("int8",        "int8range", "int8multirange");
+	init_range_cache_entry("numeric",     "numrange",  "nummultirange");
+	init_range_cache_entry("timestamp",   "tsrange",   "tsmultirange");
+	init_range_cache_entry("timestamptz", "tstzrange", "tstzmultirange");
+}
+
+void init_range_cache_entry(
+	const char *subtype_name, const char *range_type_name, const char *multirange_type_name)
+{
+	insert_range_cache_entry(
+		TypenameGetTypid(subtype_name),
+		TypenameGetTypid(range_type_name),
+		TypenameGetTypid(multirange_type_name));
+}
+
+void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid multirange_type_oid)
+{
+	bool found;
+	RangeCacheEntry *entry;
+
+	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_ENTER, &found);
+
+	if (found)
+		elog(ERROR, "Unexpected duplicate in range cache: %d", subtype_oid);
+
+	entry->subtype_oid = subtype_oid;
+	entry->range_type_oid = range_type_oid;
+	entry->multirange_type_oid = multirange_type_oid;
+}
+
+bool search_range_cache(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_type_oid)
+{
+	RangeCacheEntry *entry;
+	bool found;
+
+	entry = (RangeCacheEntry *)hash_search(range_cache, &subtype_oid, HASH_FIND, &found);
+
+	if (found) {
+		*range_type_oid = entry->range_type_oid;
+		*multirange_type_oid = entry->multirange_type_oid;
+	}
+
+	return found;
+}
+
+bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_type_oid)
+{
+    Relation rel;
+    TableScanDesc scan;
+    HeapTuple tup;
+    bool found = false;
+
+    rel = table_open(RangeRelationId, AccessShareLock);
+
+    scan = table_beginscan_catalog(rel, 0, NULL);
+
+    while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    {
+        Form_pg_range range_form = (Form_pg_range) GETSTRUCT(tup);
+        if (range_form->rngsubtype == subtype_oid)
+        {
+            *range_type_oid = range_form->rngtypid;
+            *multirange_type_oid = range_form->rngmultitypid;
+
+            found = true;
+            break;
+        }
+    }
+
+    table_endscan(scan);
+    table_close(rel, AccessShareLock);
+
+    return found;
+}
+
 SCM raise_notice(SCM message)
 {
 	elog(NOTICE, "%s", scm_string_to_pstr(message));
@@ -6547,4 +6588,13 @@ SCM raise_warning(SCM message)
 {
 	elog(WARNING, "%s", scm_string_to_pstr(message));
 	return SCM_UNDEFINED;
+}
+
+void _PG_fini(void)
+{
+	scm_gc_unprotect_object(func_cache);
+
+	/* Clean up hash tables */
+	hash_destroy(range_cache);
+	hash_destroy(type_cache);
 }

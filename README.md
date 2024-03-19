@@ -38,13 +38,13 @@ etc.  Tests will also be extended to Postgres version 12-16.
 
 Version 0.24.0 will be the pre-1.0 beta release.
 
-The 0.24.x versions will include
+The 0.24.x versions will add
 
 - documentation and examples
 - support for Postgres 12, 13, 15, and 16
 - packaging for pgxn, deb, rpm, and apk.
 
-The 0.25.x releases will include extensions and usability updates
+The 0.25.x versions will include extensions and usability updates
 after use in at least one large project.
 
 Post 1.0 improvements:
