@@ -242,7 +242,6 @@ static SCM call_4(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4);
 static SCM call_8_executor(void *data);
 static SCM call_8(SCM func, SCM arg1, SCM arg2, SCM arg3, SCM arg4, SCM arg5, SCM arg6, SCM arg7, SCM arg8);
 static SCM call_error_handler(void *data, SCM key, SCM args);
-static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
 static SCM datum_to_scm(Datum datum, Oid type_oid);
 static Datum scm_to_datum(SCM scm, Oid type_oid);
 static Datum scm_to_setof_datum(SCM x, Oid type_oid, ReturnSetInfo *rsinfo);
@@ -361,7 +360,6 @@ static SCM make_sandbox_module(int64 preamble_id);
 static void cache_module(Oid role_oid, int64 preamble_id, SCM module);
 static void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc);
 
-static Oid date_oid;
 static Oid float4_oid;
 static Oid float8_oid;
 static Oid int2_oid;
@@ -369,8 +367,6 @@ static Oid int4_oid;
 static Oid int4range_oid;
 static Oid int8_oid;
 static Oid numeric_oid;
-static Oid timestamp_oid;
-static Oid timestamptz_oid;
 
 static SCM apply_with_limits_proc;
 static SCM bit_string_data_proc;
@@ -580,8 +576,6 @@ static SCM stop_marker;
 static SCM func_cache;
 static SCM module_cache;
 
-static HTAB *type_cache;
-
 static SCM raise_notice(SCM x);
 static SCM raise_warning(SCM x);
 static SCM unbox_datum(SCM x);
@@ -594,98 +588,55 @@ static SCM spi_rollback_and_chain(void);
 
 static SCM base_module = SCM_UNDEFINED;
 
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Initialization
+//
+
+static void init_type_conversion(void);
+static void init_type_cache(void);
 static void init_range_type_cache(void);
+static void init_guile(void);
 
 void _PG_init(void)
 {
-	HASHCTL type_info;
-
 	// TODO: check that `SHOW server_encoding` is 'UTF8'
 
-	memset(&type_info, 0, sizeof(type_info));
-	type_info.keysize = sizeof(Oid);
-	type_info.entrysize = sizeof(TypeConvCacheEntry);
-	type_cache = hash_create("plguile3 type cache", 128, &type_info, HASH_ELEM | HASH_BLOBS);
+	init_type_conversion();
+	init_guile();
+}
 
-	date_oid        = TypenameGetTypid("date");
-	int2_oid        = TypenameGetTypid("int2");
-	int4_oid        = TypenameGetTypid("int4");
-	int4range_oid   = TypenameGetTypid("int4range");
-	int8_oid        = TypenameGetTypid("int8");
-	float4_oid      = TypenameGetTypid("float4");
-	float8_oid      = TypenameGetTypid("float8");
-	numeric_oid     = TypenameGetTypid("numeric");
-	timestamp_oid   = TypenameGetTypid("timestamp");
-	timestamptz_oid = TypenameGetTypid("timestamptz");
+void init_type_conversion(void)
+{
+	// These types are used explicitly in type inference.
 
-	/* The range type cache is used in the `(execute ...)` procedure.  When inferring
-	 * appropriate PG type to use for an argument, if the argument is a range or multirange
-	 * record type, then this cache will be consulted to find the OID that can represent the
-	 * value faithfully.
-	 */
+	int2_oid      = TypenameGetTypid("int2");
+	int4_oid      = TypenameGetTypid("int4");
+	int4range_oid = TypenameGetTypid("int4range");
+	int8_oid      = TypenameGetTypid("int8");
+	float4_oid    = TypenameGetTypid("float4");
+	float8_oid    = TypenameGetTypid("float8");
+	numeric_oid   = TypenameGetTypid("numeric");
+
+	// The type cache maps between type oids and a pair of conversion functions, one from SCM
+	// values to Datum values, the other for the reverse.
+
+	init_type_cache();
+
+	// The range type cache is used in the `(execute ...)` procedure.  When inferring
+	// appropriate type oid to use for an argument, if the argument is a range or multirange
+	// record type, then this cache will be consulted to find a type oid that can represent the
+	// value faithfully.
+
 	init_range_type_cache();
+}
 
-	/* Fill type cache with to_scm and to_datum functions for known types */
-	insert_type_cache_entry(TypenameGetTypid("bit"),            datum_bit_string_to_scm,     scm_to_datum_bit_string);
-	insert_type_cache_entry(TypenameGetTypid("bool"),           datum_bool_to_scm,           scm_to_datum_bool);
-	insert_type_cache_entry(TypenameGetTypid("box"),            datum_box_to_scm,            scm_to_datum_box);
-	insert_type_cache_entry(TypenameGetTypid("bpchar"),         datum_text_to_scm,           scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("bytea"),          datum_bytea_to_scm,          scm_to_datum_bytea);
-	insert_type_cache_entry(TypenameGetTypid("char"),           datum_text_to_scm,           scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("cidr"),           datum_inet_to_scm,           scm_to_datum_inet);
-	insert_type_cache_entry(TypenameGetTypid("circle"),         datum_circle_to_scm,         scm_to_datum_circle);
-	insert_type_cache_entry(TypenameGetTypid("date"),           datum_date_to_scm,           scm_to_datum_date);
-	insert_type_cache_entry(TypenameGetTypid("datemultirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
-	insert_type_cache_entry(TypenameGetTypid("daterange"),      datum_range_to_scm,          scm_to_datum_range);
-	insert_type_cache_entry(TypenameGetTypid("float4"),         datum_float4_to_scm,         scm_to_datum_float4);
-	insert_type_cache_entry(TypenameGetTypid("float8"),         datum_float8_to_scm,         scm_to_datum_float8);
-	insert_type_cache_entry(TypenameGetTypid("inet"),           datum_inet_to_scm,           scm_to_datum_inet);
-	insert_type_cache_entry(TypenameGetTypid("int2"),           datum_int2_to_scm,           scm_to_datum_int2);
-	insert_type_cache_entry(TypenameGetTypid("int4"),           datum_int4_to_scm,           scm_to_datum_int4);
-	insert_type_cache_entry(TypenameGetTypid("int4multirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
-	insert_type_cache_entry(TypenameGetTypid("int4range"),      datum_range_to_scm,          scm_to_datum_range);
-	insert_type_cache_entry(TypenameGetTypid("int8"),           datum_int8_to_scm,           scm_to_datum_int8);
-	insert_type_cache_entry(TypenameGetTypid("int8multirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
-	insert_type_cache_entry(TypenameGetTypid("int8range"),      datum_range_to_scm,          scm_to_datum_range);
-	insert_type_cache_entry(TypenameGetTypid("interval"),       datum_interval_to_scm,       scm_to_datum_interval);
-	insert_type_cache_entry(TypenameGetTypid("json"),           datum_json_to_scm,           scm_to_datum_json);
-	insert_type_cache_entry(TypenameGetTypid("jsonb"),          datum_jsonb_to_scm,          scm_to_datum_jsonb);
-	insert_type_cache_entry(TypenameGetTypid("jsonpath"),       datum_jsonpath_to_scm,       scm_to_datum_jsonpath);
-	insert_type_cache_entry(TypenameGetTypid("line"),           datum_line_to_scm,           scm_to_datum_line);
-	insert_type_cache_entry(TypenameGetTypid("lseg"),           datum_lseg_to_scm,           scm_to_datum_lseg);
-	insert_type_cache_entry(TypenameGetTypid("macaddr"),        datum_macaddr_to_scm,        scm_to_datum_macaddr);
-	insert_type_cache_entry(TypenameGetTypid("macaddr8"),       datum_macaddr8_to_scm,       scm_to_datum_macaddr8);
-	insert_type_cache_entry(TypenameGetTypid("money"),          datum_int8_to_scm,           scm_to_datum_int8);
-	insert_type_cache_entry(TypenameGetTypid("numeric"),        datum_numeric_to_scm,        scm_to_datum_numeric);
-	insert_type_cache_entry(TypenameGetTypid("nummultirange"),  datum_multirange_to_scm,     scm_to_datum_multirange);
-	insert_type_cache_entry(TypenameGetTypid("numrange"),       datum_range_to_scm,          scm_to_datum_range);
-	insert_type_cache_entry(TypenameGetTypid("path"),           datum_path_to_scm,           scm_to_datum_path);
-	insert_type_cache_entry(TypenameGetTypid("point"),          datum_point_to_scm,          scm_to_datum_point);
-	insert_type_cache_entry(TypenameGetTypid("polygon"),        datum_polygon_to_scm,        scm_to_datum_polygon);
-	insert_type_cache_entry(TypenameGetTypid("record"),         datum_composite_to_scm,      scm_to_datum_record);
-	insert_type_cache_entry(TypenameGetTypid("text"),           datum_text_to_scm,           scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("time"),           datum_time_to_scm,           scm_to_datum_time);
-	insert_type_cache_entry(TypenameGetTypid("timestamp"),      datum_timestamptz_to_scm,    scm_to_datum_timestamptz);
-	insert_type_cache_entry(TypenameGetTypid("timestamptz"),    datum_timestamptz_to_scm,    scm_to_datum_timestamptz);
-	insert_type_cache_entry(TypenameGetTypid("timetz"),         datum_timetz_to_scm,         scm_to_datum_timetz);
-	insert_type_cache_entry(TypenameGetTypid("tsmultirange"),   datum_multirange_to_scm,     scm_to_datum_multirange);
-	insert_type_cache_entry(TypenameGetTypid("tsquery"),        datum_tsquery_to_scm,        scm_to_datum_tsquery);
-	insert_type_cache_entry(TypenameGetTypid("tsrange"),        datum_range_to_scm,          scm_to_datum_range);
-	insert_type_cache_entry(TypenameGetTypid("tstzmultirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
-	insert_type_cache_entry(TypenameGetTypid("tstzrange"),      datum_range_to_scm,          scm_to_datum_range);
-	insert_type_cache_entry(TypenameGetTypid("tsvector"),       datum_tsvector_to_scm,       scm_to_datum_tsvector);
-	insert_type_cache_entry(TypenameGetTypid("uuid"),           datum_uuid_to_scm,           scm_to_datum_uuid);
-	insert_type_cache_entry(TypenameGetTypid("varbit"),         datum_bit_string_to_scm,     scm_to_datum_bit_string);
-	insert_type_cache_entry(TypenameGetTypid("varchar"),        datum_text_to_scm,           scm_to_datum_text);
-	insert_type_cache_entry(TypenameGetTypid("void"),           datum_void_to_scm,           scm_to_datum_void);
-	insert_type_cache_entry(TypenameGetTypid("xml"),            datum_xml_to_scm,            scm_to_datum_xml);
-
-	/* Initialize the Guile interpreter */
+void init_guile(void)
+{
 	scm_init_guile();
 
-	//elog(NOTICE, "evaluating plguile3.scm");
+	// Load plguile3.scm
 	base_module = load_base_module();
-	//elog(NOTICE, "done");
 
 	func_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(func_cache);
@@ -707,46 +658,6 @@ void _PG_init(void)
 	define_primitive("commit-and-chain",       0, 0, 0, (SCM (*)()) spi_commit_and_chain);
 	define_primitive("rollback",               0, 0, 0, (SCM (*)()) spi_rollback);
 	define_primitive("rollback-and-chain",     0, 0, 0, (SCM (*)()) spi_rollback_and_chain);
-
-	/* Define names in our scheme module for the type oids we work with. */
-
-	// scm_c_define("bit-type-oid",         scm_from_int(TypenameGetTypid("bit")));
-	// scm_c_define("bool-type-oid",        scm_from_int(TypenameGetTypid("bool")));
-	// scm_c_define("box-type-oid",         scm_from_int(TypenameGetTypid("box")));
-	// scm_c_define("bpchar-type-oid",      scm_from_int(TypenameGetTypid("bpchar")));
-	// scm_c_define("bytea-type-oid",       scm_from_int(TypenameGetTypid("bytea")));
-	// scm_c_define("char-type-oid",        scm_from_int(TypenameGetTypid("char")));
-	// scm_c_define("cidr-type-oid",        scm_from_int(TypenameGetTypid("cidr")));
-	// scm_c_define("circle-type-oid",      scm_from_int(TypenameGetTypid("circle")));
-	// scm_c_define("date-type-oid",        scm_from_int(TypenameGetTypid("date")));
-	// scm_c_define("float4-type-oid",      scm_from_int(TypenameGetTypid("float4")));
-	// scm_c_define("float8-type-oid",      scm_from_int(TypenameGetTypid("float8")));
-	// scm_c_define("inet-type-oid",        scm_from_int(TypenameGetTypid("inet")));
-	// scm_c_define("int2-type-oid",        scm_from_int(TypenameGetTypid("int2")));
-	// scm_c_define("int4-type-oid",        scm_from_int(TypenameGetTypid("int4")));
-	// scm_c_define("int8-type-oid",        scm_from_int(TypenameGetTypid("int8")));
-	// scm_c_define("interval-type-oid",    scm_from_int(TypenameGetTypid("interval")));
-	// scm_c_define("json-type-oid",        scm_from_int(TypenameGetTypid("json")));
-	// scm_c_define("jsonb-type-oid",       scm_from_int(TypenameGetTypid("jsonb")));
-	// scm_c_define("line-type-oid",        scm_from_int(TypenameGetTypid("line")));
-	// scm_c_define("lseg-type-oid",        scm_from_int(TypenameGetTypid("lseg")));
-	// scm_c_define("macaddr-type-oid",     scm_from_int(TypenameGetTypid("macaddr")));
-	// scm_c_define("macaddr8-type-oid",    scm_from_int(TypenameGetTypid("macaddr8")));
-	// scm_c_define("money-type-oid",       scm_from_int(TypenameGetTypid("money")));
-	// scm_c_define("numeric-type-oid",     scm_from_int(TypenameGetTypid("numeric")));
-	// scm_c_define("path-type-oid",        scm_from_int(TypenameGetTypid("path")));
-	// scm_c_define("point-type-oid",       scm_from_int(TypenameGetTypid("point")));
-	// scm_c_define("polygon-type-oid",     scm_from_int(TypenameGetTypid("polygon")));
-	// scm_c_define("text-type-oid",        scm_from_int(TypenameGetTypid("text")));
-	// scm_c_define("time-type-oid",        scm_from_int(TypenameGetTypid("time")));
-	// scm_c_define("timetz-type-oid",      scm_from_int(TypenameGetTypid("timetz")));
-	// scm_c_define("timestamp-type-oid",   scm_from_int(TypenameGetTypid("timestamp")));
-	// scm_c_define("timestamptz-type-oid", scm_from_int(TypenameGetTypid("timestamptz")));
-	// scm_c_define("uuid-type-oid",        scm_from_int(TypenameGetTypid("uuid")));
-	// scm_c_define("varbit-type-oid",      scm_from_int(TypenameGetTypid("varbit")));
-	// scm_c_define("varchar-type-oid",     scm_from_int(TypenameGetTypid("varchar")));
-	// scm_c_define("void-type-oid",        scm_from_int(TypenameGetTypid("void")));
-	// scm_c_define("xml-type-oid",         scm_from_int(TypenameGetTypid("xml")));
 
 	/* Procedures defined by define-record-type are inlinable, meaning that instead of being
 	   procedures, they are actually syntax transformers.  In non-call contexts, they refer to
@@ -995,8 +906,6 @@ void _PG_init(void)
 	// during `execute` with a `#:receiver` argument.
 	stop_marker = scm_cons(SCM_EOL, SCM_EOL);
 	scm_gc_protect_object(stop_marker);
-
-	//elog(NOTICE, "initialization complete");
 }
 
 static inline Oid get_language_owner()
@@ -2348,6 +2257,100 @@ SCM unbox_datum(SCM x)
 
 	return datum_to_scm(value, type_oid);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Type Cache
+//
+
+static HTAB *type_cache;
+
+static void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum);
+
+void init_type_cache(void)
+{
+	HASHCTL type_info;
+
+	memset(&type_info, 0, sizeof(type_info));
+	type_info.keysize = sizeof(Oid);
+	type_info.entrysize = sizeof(TypeConvCacheEntry);
+	type_cache = hash_create("plguile3 type cache", 128, &type_info, HASH_ELEM | HASH_BLOBS);
+
+	/* Fill type cache with to_scm and to_datum functions for known types */
+	insert_type_cache_entry(TypenameGetTypid("bit"),            datum_bit_string_to_scm,     scm_to_datum_bit_string);
+	insert_type_cache_entry(TypenameGetTypid("bool"),           datum_bool_to_scm,           scm_to_datum_bool);
+	insert_type_cache_entry(TypenameGetTypid("box"),            datum_box_to_scm,            scm_to_datum_box);
+	insert_type_cache_entry(TypenameGetTypid("bpchar"),         datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("bytea"),          datum_bytea_to_scm,          scm_to_datum_bytea);
+	insert_type_cache_entry(TypenameGetTypid("char"),           datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("cidr"),           datum_inet_to_scm,           scm_to_datum_inet);
+	insert_type_cache_entry(TypenameGetTypid("circle"),         datum_circle_to_scm,         scm_to_datum_circle);
+	insert_type_cache_entry(TypenameGetTypid("date"),           datum_date_to_scm,           scm_to_datum_date);
+	insert_type_cache_entry(TypenameGetTypid("datemultirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
+	insert_type_cache_entry(TypenameGetTypid("daterange"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("float4"),         datum_float4_to_scm,         scm_to_datum_float4);
+	insert_type_cache_entry(TypenameGetTypid("float8"),         datum_float8_to_scm,         scm_to_datum_float8);
+	insert_type_cache_entry(TypenameGetTypid("inet"),           datum_inet_to_scm,           scm_to_datum_inet);
+	insert_type_cache_entry(TypenameGetTypid("int2"),           datum_int2_to_scm,           scm_to_datum_int2);
+	insert_type_cache_entry(TypenameGetTypid("int4"),           datum_int4_to_scm,           scm_to_datum_int4);
+	insert_type_cache_entry(TypenameGetTypid("int4multirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
+	insert_type_cache_entry(TypenameGetTypid("int4range"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("int8"),           datum_int8_to_scm,           scm_to_datum_int8);
+	insert_type_cache_entry(TypenameGetTypid("int8multirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
+	insert_type_cache_entry(TypenameGetTypid("int8range"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("interval"),       datum_interval_to_scm,       scm_to_datum_interval);
+	insert_type_cache_entry(TypenameGetTypid("json"),           datum_json_to_scm,           scm_to_datum_json);
+	insert_type_cache_entry(TypenameGetTypid("jsonb"),          datum_jsonb_to_scm,          scm_to_datum_jsonb);
+	insert_type_cache_entry(TypenameGetTypid("jsonpath"),       datum_jsonpath_to_scm,       scm_to_datum_jsonpath);
+	insert_type_cache_entry(TypenameGetTypid("line"),           datum_line_to_scm,           scm_to_datum_line);
+	insert_type_cache_entry(TypenameGetTypid("lseg"),           datum_lseg_to_scm,           scm_to_datum_lseg);
+	insert_type_cache_entry(TypenameGetTypid("macaddr"),        datum_macaddr_to_scm,        scm_to_datum_macaddr);
+	insert_type_cache_entry(TypenameGetTypid("macaddr8"),       datum_macaddr8_to_scm,       scm_to_datum_macaddr8);
+	insert_type_cache_entry(TypenameGetTypid("money"),          datum_int8_to_scm,           scm_to_datum_int8);
+	insert_type_cache_entry(TypenameGetTypid("numeric"),        datum_numeric_to_scm,        scm_to_datum_numeric);
+	insert_type_cache_entry(TypenameGetTypid("nummultirange"),  datum_multirange_to_scm,     scm_to_datum_multirange);
+	insert_type_cache_entry(TypenameGetTypid("numrange"),       datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("path"),           datum_path_to_scm,           scm_to_datum_path);
+	insert_type_cache_entry(TypenameGetTypid("point"),          datum_point_to_scm,          scm_to_datum_point);
+	insert_type_cache_entry(TypenameGetTypid("polygon"),        datum_polygon_to_scm,        scm_to_datum_polygon);
+	insert_type_cache_entry(TypenameGetTypid("record"),         datum_composite_to_scm,      scm_to_datum_record);
+	insert_type_cache_entry(TypenameGetTypid("text"),           datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("time"),           datum_time_to_scm,           scm_to_datum_time);
+	insert_type_cache_entry(TypenameGetTypid("timestamp"),      datum_timestamptz_to_scm,    scm_to_datum_timestamptz);
+	insert_type_cache_entry(TypenameGetTypid("timestamptz"),    datum_timestamptz_to_scm,    scm_to_datum_timestamptz);
+	insert_type_cache_entry(TypenameGetTypid("timetz"),         datum_timetz_to_scm,         scm_to_datum_timetz);
+	insert_type_cache_entry(TypenameGetTypid("tsmultirange"),   datum_multirange_to_scm,     scm_to_datum_multirange);
+	insert_type_cache_entry(TypenameGetTypid("tsquery"),        datum_tsquery_to_scm,        scm_to_datum_tsquery);
+	insert_type_cache_entry(TypenameGetTypid("tsrange"),        datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("tstzmultirange"), datum_multirange_to_scm,     scm_to_datum_multirange);
+	insert_type_cache_entry(TypenameGetTypid("tstzrange"),      datum_range_to_scm,          scm_to_datum_range);
+	insert_type_cache_entry(TypenameGetTypid("tsvector"),       datum_tsvector_to_scm,       scm_to_datum_tsvector);
+	insert_type_cache_entry(TypenameGetTypid("uuid"),           datum_uuid_to_scm,           scm_to_datum_uuid);
+	insert_type_cache_entry(TypenameGetTypid("varbit"),         datum_bit_string_to_scm,     scm_to_datum_bit_string);
+	insert_type_cache_entry(TypenameGetTypid("varchar"),        datum_text_to_scm,           scm_to_datum_text);
+	insert_type_cache_entry(TypenameGetTypid("void"),           datum_void_to_scm,           scm_to_datum_void);
+	insert_type_cache_entry(TypenameGetTypid("xml"),            datum_xml_to_scm,            scm_to_datum_xml);
+}
+
+void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum)
+{
+	bool found;
+	TypeConvCacheEntry *entry;
+
+	entry = (TypeConvCacheEntry *)hash_search(type_cache, &type_oid, HASH_ENTER, &found);
+
+	if (found)
+		elog(ERROR, "Unexpected duplicate in type cache: %d", type_oid);
+
+	entry->type_oid = type_oid;
+	entry->to_scm = to_scm;
+	entry->to_datum = to_datum;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Type Conversion
+//
 
 SCM datum_to_scm(Datum datum, Oid type_oid)
 {
@@ -5562,21 +5565,6 @@ char *scm_to_string(SCM obj)
 	return result;
 }
 
-void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datum)
-{
-	bool found;
-	TypeConvCacheEntry *entry;
-
-	entry = (TypeConvCacheEntry *)hash_search(type_cache, &type_oid, HASH_ENTER, &found);
-
-	if (found)
-		elog(ERROR, "Unexpected duplicate in type cache: %d", type_oid);
-
-	entry->type_oid = type_oid;
-	entry->to_scm = to_scm;
-	entry->to_datum = to_datum;
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // SPI Integration
@@ -6478,18 +6466,12 @@ Oid unify_range_subtype_oid(Oid t1, Oid t2)
 	return unify_type_oid(t1, t2);
 }
 
-/*-----------------------------------------------------------------------------*
- *
- * Range Cache
- *
- *-----------------------------------------------------------------------------*/
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Range Type Cache
+//
 
 static HTAB *range_cache;
-
-static void init_range_cache_entry(
-	const char *subtype_name,
-	const char *range_type_name,
-	const char *multirange_type_name);
 
 void init_range_type_cache(void)
 {
@@ -6499,23 +6481,6 @@ void init_range_type_cache(void)
 	range_info.keysize = sizeof(Oid);
 	range_info.entrysize = sizeof(RangeCacheEntry);
 	range_cache = hash_create("plguile3 range cache", 128, &range_info, HASH_ELEM | HASH_BLOBS);
-
-	init_range_cache_entry("date",        "daterange", "datemultirange");
-	init_range_cache_entry("int2",        "int4range", "int4multirange");
-	init_range_cache_entry("int4",        "int4range", "int4multirange");
-	init_range_cache_entry("int8",        "int8range", "int8multirange");
-	init_range_cache_entry("numeric",     "numrange",  "nummultirange");
-	init_range_cache_entry("timestamp",   "tsrange",   "tsmultirange");
-	init_range_cache_entry("timestamptz", "tstzrange", "tstzmultirange");
-}
-
-void init_range_cache_entry(
-	const char *subtype_name, const char *range_type_name, const char *multirange_type_name)
-{
-	insert_range_cache_entry(
-		TypenameGetTypid(subtype_name),
-		TypenameGetTypid(range_type_name),
-		TypenameGetTypid(multirange_type_name));
 }
 
 void insert_range_cache_entry(Oid subtype_oid, Oid range_type_oid, Oid multirange_type_oid)
