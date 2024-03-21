@@ -64,16 +64,6 @@
 
 PG_MODULE_MAGIC;
 
-PGDLLEXPORT Datum plguile3_call(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum plguile3_call_inline(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum plguile3_compile(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum plguile3_check_preamble(PG_FUNCTION_ARGS);
-
-PG_FUNCTION_INFO_V1(plguile3_call);
-PG_FUNCTION_INFO_V1(plguile3_call_inline);
-PG_FUNCTION_INFO_V1(plguile3_compile);
-PG_FUNCTION_INFO_V1(plguile3_check_preamble);
-
 void _PG_init(void);
 void _PG_fini(void);
 
@@ -226,11 +216,8 @@ static void role_remove_func_oid(SCM old_owner, SCM func);
 static SCM base_module_evaluator(void *data);
 static SCM eval_string_in_base_module(const char *text);
 static SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args);
-static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
 static SCM eval_lambda_expr(const char *src, SCM module);
 static SCM read_error_handler(void *data, SCM key, SCM args);
-static SCM untrusted_eval(SCM expr, SCM env);
-static SCM find_or_create_module_for_role(Oid role_oid);
 static SCM call_1_executor(void *data);
 static SCM call_1(SCM func, SCM arg);
 static SCM call_2_executor(void *data);
@@ -349,15 +336,8 @@ static SCM apply_0_with_handlers_inner(void *data);
 static SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args);
 static SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args);
 static SCM find_cached_proc(HeapTuple proc_tuple);
-static SCM compile_and_cache_proc(HeapTuple proc_tuple);
 static SCM hash_proc_source(HeapTuple proc_tuple);
 static CallLimits *get_call_limits(CallLimits *limits);
-static void fetch_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id);
-static void flush_module_cache_for_role(Oid role_oid);
-static int64 get_cached_preamble_id(Oid role_oid);
-static SCM get_cached_module(Oid role_oid);
-static SCM make_sandbox_module(int64 preamble_id);
-static void cache_module(Oid role_oid, int64 preamble_id, SCM module);
 static void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc);
 
 static Oid float4_oid;
@@ -449,7 +429,6 @@ static SCM make_point_proc;
 static SCM make_polygon_proc;
 static SCM make_range_proc;
 static SCM make_record_proc;
-static SCM make_sandbox_module_proc;
 static SCM make_table_proc;
 static SCM make_time_proc;
 static SCM make_tslexeme_proc;
@@ -487,7 +466,6 @@ static SCM tsposition_index_proc;
 static SCM tsposition_weight_proc;
 static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
-static SCM untrusted_eval_proc;
 static SCM validate_tsquery_proc;
 //static SCM validate_jsonb_proc;
 static SCM validate_jsonpath_proc;
@@ -631,6 +609,13 @@ void init_type_conversion(void)
 	init_range_type_cache();
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Guile Initialization
+//
+
+static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
+
 void init_guile(void)
 {
 	scm_init_guile();
@@ -743,7 +728,6 @@ void init_guile(void)
 	make_polygon_proc           = eval_string_in_base_module("make-polygon");
 	make_range_proc             = eval_string_in_base_module("make-range");
 	make_record_proc            = eval_string_in_base_module("make-record");
-	make_sandbox_module_proc    = eval_string_in_base_module("make-sandbox-module");
 	make_table_proc             = eval_string_in_base_module("make-table");
 	make_time_proc              = eval_string_in_base_module("make-time");
 	make_tslexeme_proc          = eval_string_in_base_module("make-tslexeme");
@@ -780,7 +764,6 @@ void init_guile(void)
 	tsposition_weight_proc      = eval_string_in_base_module("tsposition-weight");
 	tsquery_expr_proc           = eval_string_in_base_module("tsquery-expr");
 	tsvector_lexemes_proc       = eval_string_in_base_module("tsvector-lexemes");
-	untrusted_eval_proc         = eval_string_in_base_module("untrusted-eval");
 	validate_jsonpath_proc      = eval_string_in_base_module("validate-jsonpath");
 	validate_tsquery_proc       = eval_string_in_base_module("validate-tsquery");
 
@@ -908,6 +891,198 @@ void init_guile(void)
 	scm_gc_protect_object(stop_marker);
 }
 
+void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
+{
+	scm_c_module_define(base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Validator
+//
+
+PGDLLEXPORT Datum plguile3_compile(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_compile);
+
+static SCM compile_and_cache_proc(HeapTuple proc_tuple);
+static SCM find_or_create_module_for_role(Oid role_oid);
+static SCM untrusted_eval(SCM expr, SCM env);
+
+Datum plguile3_compile(PG_FUNCTION_ARGS)
+{
+	Oid func_oid = PG_GETARG_OID(0);
+	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
+
+	if (!HeapTupleIsValid(proc_tuple))
+		elog(ERROR, "plguile3_compile: Failed to fetch function details.");
+
+	compile_and_cache_proc(proc_tuple);
+
+	ReleaseSysCache(proc_tuple);
+
+	return (Datum) 1;
+}
+
+SCM compile_and_cache_proc(HeapTuple proc_tuple)
+{
+	Form_pg_proc pg_proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
+	Oid owner_oid = pg_proc->proowner;
+	SCM module = find_or_create_module_for_role(owner_oid);
+	SCM proc = compile_proc(proc_tuple, module);
+
+	cache_proc(pg_proc->oid, owner_oid, hash_proc_source(proc_tuple), proc);
+
+	return proc;
+}
+
+SCM hash_proc_source(HeapTuple proc_tuple)
+{
+	bool is_null;
+	Datum src_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
+	char *src = TextDatumGetCString(src_datum);
+	return scm_from_uint64(hash_bytes_extended((unsigned char *)src, strlen(src), 0));
+}
+
+void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
+{
+	SCM func = scm_from_int(func_oid);
+	SCM owner = scm_from_int(owner_oid);
+
+	SCM entry = scm_hash_ref(func_cache, func, SCM_BOOL_F);
+
+	if (entry != SCM_BOOL_F) {
+
+		SCM old_owner = scm_cadr(entry);
+
+		if (owner != old_owner)
+			role_remove_func_oid(old_owner, func);
+	}
+
+	call_2(role_add_func_oid_proc, owner, func);
+	scm_hash_set_x(func_cache, func, scm_cons(proc, scm_cons(owner, src_hash)));
+}
+
+SCM compile_proc(HeapTuple proc_tuple, SCM module)
+{
+	StringInfoData buf;
+
+	assemble_lambda_expr(&buf, proc_tuple);
+
+	return eval_lambda_expr(buf.data, module);
+}
+
+void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple)
+{
+	bool is_null;
+
+	Datum prosrc_datum;
+	char *prosrc;
+
+	initStringInfo(buf);
+
+	appendStringInfo(buf, "(lambda (");
+
+	if (is_event_trigger_handler(proc_tuple))
+		appendStringInfo(buf, " event parse-tree tag");
+
+	else if (is_trigger_handler(proc_tuple))
+		appendStringInfo(buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
+
+	else {
+		Datum argnames_datum, argmodes_datum;
+
+		ArrayType *argnames_array, *argmodes_array;
+		int num_args, num_modes, i;
+
+		char *argmodes;
+
+		argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
+
+		if (!is_null) {
+			argnames_array = DatumGetArrayTypeP(argnames_datum);
+			num_args = ARR_DIMS(argnames_array)[0];
+
+			argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
+
+			if (is_null) {
+				argmodes = NULL;
+			}
+			else {
+				argmodes_array = DatumGetArrayTypeP(argmodes_datum);
+				argmodes = (char *) ARR_DATA_PTR(argmodes_array);
+				num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
+
+				if (num_modes != num_args) {
+					elog(ERROR, "compile_proc: num arg modes %d and num args %d differ", num_modes, num_args);
+				}
+			}
+
+			for (i = 1; i <= num_args; i++) {
+				if (argmodes == NULL || argmodes[i-1] != 'o') {
+					Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
+					if (!is_null) {
+						char *name = TextDatumGetCString(name_datum);
+						appendStringInfo(buf, " %s", name);
+					}
+					else {
+						elog(NOTICE, "compile_proc: %d: name_datum is null", i);
+					}
+				}
+			}
+		}
+	}
+
+	prosrc_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
+	prosrc = TextDatumGetCString(prosrc_datum);
+
+	if (is_null)
+		elog(ERROR, "compile_proc: source datum is null.");
+
+	appendStringInfo(buf, ")\n%s)", prosrc);
+}
+
+SCM eval_lambda_expr(const char *src, SCM module)
+{
+	SCM scm_proc;
+	SCM port = scm_open_input_string(scm_from_locale_string(src));
+
+	SCM lambda_expr = scm_internal_catch(
+        SCM_BOOL_T,
+        (scm_t_catch_body)scm_read,
+        (void *)port,
+        read_error_handler, (void *)src);
+
+	SCM expected_eof = scm_internal_catch(
+        SCM_BOOL_T,
+        (scm_t_catch_body)scm_read,
+        (void *)port,
+        read_error_handler, (void *)src);
+
+	if (!SCM_EOF_OBJECT_P(expected_eof))
+		elog(ERROR, "syntax error: object read after end of lambda expr: %s\n%s",
+		     scm_to_string(expected_eof), src);
+
+	scm_proc = untrusted_eval(lambda_expr, module);
+
+	return scm_proc;
+}
+
+SCM read_error_handler(void *data, SCM key, SCM args)
+{
+	elog(ERROR, "%s %s \nfunction body: \n%s", scm_to_string(key),
+	     scm_to_string(args), (char *)data);
+}
+
+SCM untrusted_eval(SCM expr, SCM module)
+{
+	static SCM untrusted_eval_proc = SCM_UNDEFINED;
+
+	if (untrusted_eval_proc == SCM_UNDEFINED)
+		untrusted_eval_proc = eval_string_in_base_module("untrusted-eval");
+
+	return call_2(untrusted_eval_proc, expr, module);
+}
+
 static inline Oid get_language_owner()
 {
 	return owner_oid != InvalidOid ? owner_oid : get_guile3_owner_oid();
@@ -952,11 +1127,6 @@ SCM load_base_module_error_handler(void *data, SCM key, SCM args)
 {
 	elog(ERROR, "Unable to load plguile3 base module: %s %s", scm_to_string(key),
 	     scm_to_string(args));
-}
-
-void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
-{
-	scm_c_module_define(base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
 }
 
 SCM call_1(SCM func, SCM arg1)
@@ -1045,6 +1215,9 @@ SCM call_error_handler(void *data, SCM key, SCM args)
 	elog(ERROR, "Unable to call %s in base module: \n        %s %s", scm_to_string(*(SCM *)data),
 	     scm_to_string(key), scm_to_string(args));
 }
+
+PGDLLEXPORT Datum plguile3_call(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_call);
 
 Datum plguile3_call(PG_FUNCTION_ARGS)
 {
@@ -1871,6 +2044,9 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 	return call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
 }
 
+PGDLLEXPORT Datum plguile3_call_inline(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_call_inline);
+
 Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 {
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
@@ -1894,6 +2070,42 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	return (Datum)0;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Preamble Validation
+//
+
+PGDLLEXPORT Datum plguile3_check_preamble(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_check_preamble);
+
+static SCM make_sandbox_module(void);
+
+Datum plguile3_check_preamble(PG_FUNCTION_ARGS)
+{
+ 	Datum src = PG_GETARG_DATUM(0);
+	SCM port = scm_open_input_string(datum_text_to_scm(src, InvalidOid));
+	SCM x;
+
+	SCM module = make_sandbox_module();
+
+	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
+		untrusted_eval(x, module);
+
+	return BoolGetDatum(true);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Sandboxed Modules
+//
+
+static void cache_module(Oid role_oid, int64 preamble_id, SCM module);
+static void fetch_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id);
+static void flush_module_cache_for_role(Oid role_oid);
+static SCM get_cached_module(Oid role_oid);
+static int64 get_cached_preamble_id(Oid role_oid);
+static SCM prepare_sandbox_module(int64 preamble_id);
+
 SCM find_or_create_module_for_role(Oid role_oid)
 {
 	int64 default_preamble_id, preamble_id, role_preamble_id;
@@ -1914,7 +2126,7 @@ SCM find_or_create_module_for_role(Oid role_oid)
 	module = get_cached_module(role_oid);
 
 	if (module == SCM_BOOL_F) {
-		module = make_sandbox_module(preamble_id);
+		module = prepare_sandbox_module(preamble_id);
 		cache_module(role_oid, preamble_id, module);
 	}
 
@@ -2006,9 +2218,9 @@ SCM get_cached_module(Oid role_oid)
 	return scm_cdr(obj);
 }
 
-SCM make_sandbox_module(int64 preamble_id)
+SCM prepare_sandbox_module(int64 preamble_id)
 {
-	SCM module = call_1(make_sandbox_module_proc, trusted_bindings);
+	SCM module = make_sandbox_module();
 
 	if (preamble_id) {
 
@@ -2059,203 +2271,21 @@ SCM make_sandbox_module(int64 preamble_id)
 	return module;
 }
 
+SCM make_sandbox_module(void)
+{
+	static SCM make_sandbox_module_proc = SCM_UNDEFINED;
+
+	if (make_sandbox_module_proc == SCM_UNDEFINED)
+		make_sandbox_module_proc = eval_string_in_base_module("make-sandbox-module");
+
+	return call_1(make_sandbox_module_proc, trusted_bindings);
+}
+
 void cache_module(Oid role_oid, int64 preamble_id, SCM module)
 {
 	SCM role = scm_from_int(role_oid);
 	SCM preamble = scm_from_int64(preamble_id);
 	scm_hash_set_x(module_cache, role, scm_cons(preamble, module));
-}
-
-Datum plguile3_compile(PG_FUNCTION_ARGS)
-{
-	Oid func_oid = PG_GETARG_OID(0);
-	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
-
-	if (!HeapTupleIsValid(proc_tuple))
-		elog(ERROR, "plguile3_compile: Failed to fetch function details.");
-
-	compile_and_cache_proc(proc_tuple);
-
-	ReleaseSysCache(proc_tuple);
-
-	return (Datum) 1;
-}
-
-SCM compile_and_cache_proc(HeapTuple proc_tuple)
-{
-	Form_pg_proc pg_proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
-	Oid owner_oid = pg_proc->proowner;
-	SCM module = find_or_create_module_for_role(owner_oid);
-	SCM proc = compile_proc(proc_tuple, module);
-
-	cache_proc(pg_proc->oid, owner_oid, hash_proc_source(proc_tuple), proc);
-
-	return proc;
-}
-
-SCM hash_proc_source(HeapTuple proc_tuple)
-{
-	bool is_null;
-	Datum src_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
-	char *src = TextDatumGetCString(src_datum);
-	return scm_from_uint64(hash_bytes_extended((unsigned char *)src, strlen(src), 0));
-}
-
-void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
-{
-	SCM func = scm_from_int(func_oid);
-	SCM owner = scm_from_int(owner_oid);
-
-	SCM entry = scm_hash_ref(func_cache, func, SCM_BOOL_F);
-
-	if (entry != SCM_BOOL_F) {
-
-		SCM old_owner = scm_cadr(entry);
-
-		if (owner != old_owner)
-			role_remove_func_oid(old_owner, func);
-	}
-
-	call_2(role_add_func_oid_proc, owner, func);
-	scm_hash_set_x(func_cache, func, scm_cons(proc, scm_cons(owner, src_hash)));
-}
-
-SCM compile_proc(HeapTuple proc_tuple, SCM module)
-{
-	StringInfoData buf;
-
-	assemble_lambda_expr(&buf, proc_tuple);
-
-	return eval_lambda_expr(buf.data, module);
-}
-
-void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple)
-{
-	bool is_null;
-
-	Datum prosrc_datum;
-	char *prosrc;
-
-	initStringInfo(buf);
-
-	appendStringInfo(buf, "(lambda (");
-
-	if (is_event_trigger_handler(proc_tuple))
-		appendStringInfo(buf, " event parse-tree tag");
-
-	else if (is_trigger_handler(proc_tuple))
-		appendStringInfo(buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
-
-	else {
-		Datum argnames_datum, argmodes_datum;
-
-		ArrayType *argnames_array, *argmodes_array;
-		int num_args, num_modes, i;
-
-		char *argmodes;
-
-		argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
-
-		if (!is_null) {
-			argnames_array = DatumGetArrayTypeP(argnames_datum);
-			num_args = ARR_DIMS(argnames_array)[0];
-
-			argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
-
-			if (is_null) {
-				argmodes = NULL;
-			}
-			else {
-				argmodes_array = DatumGetArrayTypeP(argmodes_datum);
-				argmodes = (char *) ARR_DATA_PTR(argmodes_array);
-				num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
-
-				if (num_modes != num_args) {
-					elog(ERROR, "compile_proc: num arg modes %d and num args %d differ", num_modes, num_args);
-				}
-			}
-
-			for (i = 1; i <= num_args; i++) {
-				if (argmodes == NULL || argmodes[i-1] != 'o') {
-					Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
-					if (!is_null) {
-						char *name = TextDatumGetCString(name_datum);
-						appendStringInfo(buf, " %s", name);
-					}
-					else {
-						elog(NOTICE, "compile_proc: %d: name_datum is null", i);
-					}
-				}
-			}
-		}
-	}
-
-	prosrc_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
-	prosrc = TextDatumGetCString(prosrc_datum);
-
-	if (is_null)
-		elog(ERROR, "compile_proc: source datum is null.");
-
-	appendStringInfo(buf, ")\n%s)", prosrc);
-}
-
-SCM eval_lambda_expr(const char *src, SCM module)
-{
-	SCM scm_proc;
-	SCM port = scm_open_input_string(scm_from_locale_string(src));
-
-	SCM lambda_expr = scm_internal_catch(
-        SCM_BOOL_T,
-        (scm_t_catch_body)scm_read,
-        (void *)port,
-        read_error_handler, (void *)src);
-
-	SCM expected_eof = scm_internal_catch(
-        SCM_BOOL_T,
-        (scm_t_catch_body)scm_read,
-        (void *)port,
-        read_error_handler, (void *)src);
-
-	if (!SCM_EOF_OBJECT_P(expected_eof))
-		elog(ERROR, "syntax error: object read after end of lambda expr: %s\n%s",
-		     scm_to_string(expected_eof), src);
-
-	scm_proc = untrusted_eval(lambda_expr, module);
-
-	return scm_proc;
-}
-
-SCM read_error_handler(void *data, SCM key, SCM args)
-{
-	elog(ERROR, "%s %s \nfunction body: \n%s", scm_to_string(key),
-	     scm_to_string(args), (char *)data);
-}
-
-SCM untrusted_eval(SCM expr, SCM module)
-{
-	return call_2(untrusted_eval_proc, expr, module);
-}
-
-Datum plguile3_check_preamble(PG_FUNCTION_ARGS)
-{
- 	Datum src = PG_GETARG_DATUM(0);
-	SCM port = scm_open_input_string(datum_text_to_scm(src, InvalidOid));
-	SCM x;
-
-	SCM module = call_1(make_sandbox_module_proc, trusted_bindings);
-
-	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
-		untrusted_eval(x, module);
-
-	return BoolGetDatum(true);
-}
-
-SCM unbox_datum(SCM x)
-{
-	Oid type_oid = get_boxed_datum_type(x);
-	Datum value = get_boxed_datum_value(x);
-
-	return datum_to_scm(value, type_oid);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -6553,6 +6583,14 @@ SCM raise_warning(SCM message)
 {
 	elog(WARNING, "%s", scm_string_to_pstr(message));
 	return SCM_UNDEFINED;
+}
+
+SCM unbox_datum(SCM x)
+{
+	Oid type_oid = get_boxed_datum_type(x);
+	Datum value = get_boxed_datum_value(x);
+
+	return datum_to_scm(value, type_oid);
 }
 
 void _PG_fini(void)
