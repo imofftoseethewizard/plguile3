@@ -208,7 +208,6 @@ static bool is_time(SCM x);
 static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
 
-static Oid get_guile3_owner_oid(void);
 static SCM load_base_module(void);
 static SCM base_module_loader(void *data);
 static SCM load_base_module_error_handler(void *data, SCM key, SCM args);
@@ -329,8 +328,6 @@ static FetchDirection scm_to_fetch_direction(SCM direction);
 static long scm_to_fetch_count(SCM count);
 static char set_current_volatility(char v);
 static SCM apply_in_sandbox(SCM proc, SCM args);
-static SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit);
-static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
 static SCM apply_0_with_handlers(SCM proc, SCM args, int internal_backtrace_frame_count);
 static SCM apply_0_with_handlers_inner(void *data);
 static SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args);
@@ -348,7 +345,6 @@ static Oid int4range_oid;
 static Oid int8_oid;
 static Oid numeric_oid;
 
-static SCM apply_with_limits_proc;
 static SCM bit_string_data_proc;
 static SCM bit_string_length_proc;
 static SCM box_a_proc;
@@ -368,7 +364,6 @@ static SCM date_year_proc;
 static SCM date_zone_offset_proc;
 static SCM decimal_to_inexact_proc;
 static SCM decimal_to_string_proc;
-static SCM eval_with_limits_proc;
 static SCM flush_function_cache_proc;
 static SCM inet_address_proc;
 static SCM inet_bits_proc;
@@ -652,7 +647,6 @@ void init_guile(void)
 	   transformer to give us proc we need.
 	*/
 
-	apply_with_limits_proc      = eval_string_in_base_module("apply-with-limits");
 	bit_string_data_proc        = eval_string_in_base_module("bit-string-data");
 	bit_string_length_proc      = eval_string_in_base_module("bit-string-length");
 	box_a_proc                  = eval_string_in_base_module("box-a");
@@ -670,7 +664,6 @@ void init_guile(void)
 	date_second_proc            = eval_string_in_base_module("date-second");
 	date_year_proc              = eval_string_in_base_module("date-year");
 	date_zone_offset_proc       = eval_string_in_base_module("date-zone-offset");
-	eval_with_limits_proc       = eval_string_in_base_module("eval-with-limits");
 	flush_function_cache_proc   = eval_string_in_base_module("flush-function-cache");
 	inet_address_proc           = eval_string_in_base_module("inet-address");
 	inet_bits_proc              = eval_string_in_base_module("inet-bits");
@@ -1083,31 +1076,6 @@ SCM untrusted_eval(SCM expr, SCM module)
 	return call_2(untrusted_eval_proc, expr, module);
 }
 
-static inline Oid get_language_owner()
-{
-	return owner_oid != InvalidOid ? owner_oid : get_guile3_owner_oid();
-}
-
-Oid get_guile3_owner_oid(void)
-{
-	HeapTuple lang_tuple;
-	bool is_null;
-
-	lang_tuple = SearchSysCache1(LANGNAME, CStringGetDatum("guile3"));
-
-	if (lang_tuple == NULL)
-		elog(ERROR, "language guile3 not found");
-
-	owner_oid = SysCacheGetAttr(LANGOID, lang_tuple, Anum_pg_language_lanowner, &is_null);
-
-	if (is_null)
-		elog(ERROR, "language guile3 has no owner");
-
-	ReleaseSysCache(lang_tuple);
-
-	return owner_oid;
-}
-
 SCM load_base_module(void)
 {
     return scm_internal_catch(
@@ -1515,6 +1483,12 @@ char set_current_volatility(char v)
 	return prior_volatility;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Sandboxed Apply
+
+static SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit);
+
 SCM apply_in_sandbox(SCM proc, SCM args)
 {
 	CallLimits limits;
@@ -1530,18 +1504,15 @@ SCM apply_in_sandbox(SCM proc, SCM args)
 
 SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
 {
+	static SCM apply_with_limits_proc = SCM_UNDEFINED;
+
+	if (apply_with_limits_proc == SCM_UNDEFINED)
+		apply_with_limits_proc = eval_string_in_base_module("apply-with-limits");
+
 	return apply_0_with_handlers(
 		apply_with_limits_proc,
 		scm_list_4(proc, args, time_limit, allocation_limit),
 		9);
-}
-
-SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
-{
-	return apply_0_with_handlers(
-		eval_with_limits_proc,
-		scm_list_4(expr, module, time_limit, allocation_limit),
-		8);
 }
 
 typedef struct {
@@ -1612,65 +1583,6 @@ SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args)
 	}
 
 	return SCM_BOOL_F;
-}
-
-CallLimits *get_call_limits(CallLimits *limits)
-{
-	const char *command =
-		"select time, allocation from plguile3.call_limit where role_id in (0, $1) order by role_id";
-
-	Oid arg_type = OIDOID;
-	Datum role_datum = ObjectIdGetDatum(GetUserId());
-
-	int ret;
-
-	Oid prev_user_id;
-	int prev_sec_con;
-
-	ret = SPI_connect();
-
-	if (ret != SPI_OK_CONNECT)
-		elog(ERROR, "spi_connect_error: %d", ret);
-
-	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
-	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
-
-	ret = SPI_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
-
-	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
-
-	if (ret != SPI_OK_SELECT)
-		elog(ERROR, "spi_select_error: %d", ret);
-
-	// Defaults to effectively unlimited.
-	limits->time_seconds     = 1e9;   // almost 32 years
-	limits->allocation_bytes = 1L<<50; // one exabyte
-
-	if (SPI_tuptable && SPI_processed) {
-
-		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
-
-		for (long row = 0; row < SPI_tuptable->numvals; row++) {
-
-			HeapTuple tuple = SPI_tuptable->vals[row];
-			bool is_null;
-			Datum time_limit, allocation_limit;
-
-			time_limit = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
-
-			if (!is_null)
-				limits->time_seconds = DatumGetFloat4(time_limit);
-
-			allocation_limit = SPI_getbinval(tuple, tuple_desc, 2, &is_null);
-
-			if (!is_null)
-				limits->allocation_bytes = DatumGetInt64(allocation_limit);
-		}
-	}
-
-	SPI_finish();
-
-	return limits;
 }
 
 SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo)
@@ -2044,6 +1956,13 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 	return call_2(make_boxed_datum_proc, scm_from_int32(type_oid), scm_from_int64(x));
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Inline Call Handler
+//
+
+static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
+
 PGDLLEXPORT Datum plguile3_call_inline(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(plguile3_call_inline);
 
@@ -2068,6 +1987,19 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 		eval_with_limits(x, module, time_limit, allocation_limit);
 
 	return (Datum)0;
+}
+
+SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
+{
+	static SCM eval_with_limits_proc = SCM_UNDEFINED;
+
+	if (eval_with_limits_proc == SCM_UNDEFINED)
+		eval_with_limits_proc = eval_string_in_base_module("eval-with-limits");
+
+	return apply_0_with_handlers(
+		eval_with_limits_proc,
+		scm_list_4(expr, module, time_limit, allocation_limit),
+		8);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2100,7 +2032,7 @@ Datum plguile3_check_preamble(PG_FUNCTION_ARGS)
 //
 
 static void cache_module(Oid role_oid, int64 preamble_id, SCM module);
-static void fetch_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id);
+static void get_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id);
 static void flush_module_cache_for_role(Oid role_oid);
 static SCM get_cached_module(Oid role_oid);
 static int64 get_cached_preamble_id(Oid role_oid);
@@ -2111,7 +2043,7 @@ SCM find_or_create_module_for_role(Oid role_oid)
 	int64 default_preamble_id, preamble_id, role_preamble_id;
 	SCM module;
 
-	fetch_preamble_ids(role_oid, &default_preamble_id, &role_preamble_id);
+	get_preamble_ids(role_oid, &default_preamble_id, &role_preamble_id);
 
 	preamble_id = role_preamble_id ? role_preamble_id : default_preamble_id;
 
@@ -2133,7 +2065,171 @@ SCM find_or_create_module_for_role(Oid role_oid)
 	return module;
 }
 
-void fetch_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id)
+void flush_module_cache_for_role(Oid role_oid)
+{
+	SCM role = scm_from_int(role_oid);
+	SCM old_func_cache = func_cache;
+
+	scm_hash_remove_x(module_cache, role);
+
+	func_cache = call_2(
+		flush_function_cache_proc, func_cache, call_1(role_to_func_oids_proc, role));
+
+	scm_gc_protect_object(func_cache);
+	scm_gc_unprotect_object(old_func_cache);
+}
+
+int64 get_cached_preamble_id(Oid role_oid)
+{
+	SCM role = scm_from_int(role_oid);
+	SCM obj = scm_hash_ref(module_cache, role, SCM_BOOL_F);
+
+	if (obj == SCM_BOOL_F)
+		return (int64)0;
+
+	return scm_to_int64(scm_car(obj));
+}
+
+SCM get_cached_module(Oid role_oid)
+{
+	SCM role = scm_from_int(role_oid);
+	SCM obj = scm_hash_ref(module_cache, role, SCM_BOOL_F);
+
+	if (obj == SCM_BOOL_F)
+		return SCM_BOOL_F;
+
+	return scm_cdr(obj);
+}
+
+static SCM get_preamble_src(int64 preamble_id);
+
+SCM prepare_sandbox_module(int64 preamble_id)
+{
+	SCM module = make_sandbox_module();
+
+	if (preamble_id) {
+
+		SCM preamble_src = get_preamble_src(preamble_id);
+
+		SCM port = scm_open_input_string(preamble_src);
+		SCM x;
+
+		while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
+			untrusted_eval(x, module);
+	}
+
+	return module;
+}
+
+SCM make_sandbox_module(void)
+{
+	static SCM make_sandbox_module_proc = SCM_UNDEFINED;
+
+	if (make_sandbox_module_proc == SCM_UNDEFINED)
+		make_sandbox_module_proc = eval_string_in_base_module("make-sandbox-module");
+
+	return call_1(make_sandbox_module_proc, trusted_bindings);
+}
+
+void cache_module(Oid role_oid, int64 preamble_id, SCM module)
+{
+	SCM role = scm_from_int(role_oid);
+	SCM preamble = scm_from_int64(preamble_id);
+	scm_hash_set_x(module_cache, role, scm_cons(preamble, module));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Access to plguile3 schema
+//
+
+static Oid get_guile3_owner_oid(void);
+
+static inline Oid get_language_owner()
+{
+	return owner_oid != InvalidOid ? owner_oid : get_guile3_owner_oid();
+}
+
+Oid get_guile3_owner_oid(void)
+{
+	HeapTuple lang_tuple;
+	bool is_null;
+
+	lang_tuple = SearchSysCache1(LANGNAME, CStringGetDatum("guile3"));
+
+	if (lang_tuple == NULL)
+		elog(ERROR, "language guile3 not found");
+
+	owner_oid = SysCacheGetAttr(LANGOID, lang_tuple, Anum_pg_language_lanowner, &is_null);
+
+	if (is_null)
+		elog(ERROR, "language guile3 has no owner");
+
+	ReleaseSysCache(lang_tuple);
+
+	return owner_oid;
+}
+
+CallLimits *get_call_limits(CallLimits *limits)
+{
+	const char *command =
+		"select time, allocation from plguile3.call_limit where role_id in (0, $1) order by role_id";
+
+	Oid arg_type = OIDOID;
+	Datum role_datum = ObjectIdGetDatum(GetUserId());
+
+	int ret;
+
+	Oid prev_user_id;
+	int prev_sec_con;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
+	ret = SPI_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
+
+	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	// Defaults to effectively unlimited.
+	limits->time_seconds     = 1e9;   // almost 32 years
+	limits->allocation_bytes = 1L<<50; // one exabyte
+
+	if (SPI_tuptable && SPI_processed) {
+
+		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
+
+		for (long row = 0; row < SPI_tuptable->numvals; row++) {
+
+			HeapTuple tuple = SPI_tuptable->vals[row];
+			bool is_null;
+			Datum time_limit, allocation_limit;
+
+			time_limit = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
+
+			if (!is_null)
+				limits->time_seconds = DatumGetFloat4(time_limit);
+
+			allocation_limit = SPI_getbinval(tuple, tuple_desc, 2, &is_null);
+
+			if (!is_null)
+				limits->allocation_bytes = DatumGetInt64(allocation_limit);
+		}
+	}
+
+	SPI_finish();
+
+	return limits;
+}
+
+void get_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id)
 {
 	const char *command =
 		"select role_id, preamble_id from plguile3.eval_env where role_id in (0, $1)";
@@ -2182,111 +2278,56 @@ void fetch_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_pr
 	SPI_finish();
 }
 
-void flush_module_cache_for_role(Oid role_oid)
+SCM get_preamble_src(int64 preamble_id)
 {
-	SCM role = scm_from_int(role_oid);
-	SCM old_func_cache = func_cache;
+	const char *command = "select src from plguile3.preamble where id = $1";
 
-	scm_hash_remove_x(module_cache, role);
+	int ret;
+	Oid arg_type = INT8OID;
+	Datum preamble = Int64GetDatum(preamble_id);
 
-	func_cache = call_2(
-		flush_function_cache_proc, func_cache, call_1(role_to_func_oids_proc, role));
+	Oid prev_user_id;
+	int prev_sec_con;
 
-	scm_gc_protect_object(func_cache);
-	scm_gc_unprotect_object(old_func_cache);
+	TupleDesc tuple_desc;
+	HeapTuple tuple;
+	bool is_null;
+	Datum src_datum;
+	SCM src;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
+	ret = SPI_execute_with_args(command, 1, &arg_type, &preamble, NULL, true, 1);
+
+	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	if (!SPI_tuptable || !SPI_processed)
+		elog(ERROR, "get_preamble_src: preamble %ld not found", preamble_id);
+
+	tuple_desc = SPI_tuptable->tupdesc;
+	tuple = SPI_tuptable->vals[0];
+	src_datum = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
+
+	if (is_null)
+		elog(ERROR, "get_preamble_src: preamble %ld is null", preamble_id);
+
+	src = scm_from_locale_string(TextDatumGetCString(src_datum));
+
+	SPI_finish();
+
+	return src;
 }
 
-int64 get_cached_preamble_id(Oid role_oid)
-{
-	SCM role = scm_from_int(role_oid);
-	SCM obj = scm_hash_ref(module_cache, role, SCM_BOOL_F);
 
-	if (obj == SCM_BOOL_F)
-		return (int64)0;
-
-	return scm_to_int64(scm_car(obj));
-}
-
-SCM get_cached_module(Oid role_oid)
-{
-	SCM role = scm_from_int(role_oid);
-	SCM obj = scm_hash_ref(module_cache, role, SCM_BOOL_F);
-
-	if (obj == SCM_BOOL_F)
-		return SCM_BOOL_F;
-
-	return scm_cdr(obj);
-}
-
-SCM prepare_sandbox_module(int64 preamble_id)
-{
-	SCM module = make_sandbox_module();
-
-	if (preamble_id) {
-
-		const char *command = "select src from plguile3.preamble where id = $1";
-
-		int ret;
-		Oid arg_type = INT8OID;
-		Datum preamble = Int64GetDatum(preamble_id);
-
-		Oid prev_user_id;
-		int prev_sec_con;
-
-		ret = SPI_connect();
-
-		if (ret != SPI_OK_CONNECT)
-			elog(ERROR, "spi_connect_error: %d", ret);
-
-		GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
-		SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
-
-		ret = SPI_execute_with_args(command, 1, &arg_type, &preamble, NULL, true, 1);
-
-		SetUserIdAndSecContext(prev_user_id, prev_sec_con);
-
-		if (ret != SPI_OK_SELECT)
-			elog(ERROR, "spi_select_error: %d", ret);
-
-		if (SPI_tuptable && SPI_processed) {
-
-			TupleDesc tuple_desc = SPI_tuptable->tupdesc;
-			HeapTuple tuple = SPI_tuptable->vals[0];
-			bool is_null;
-			char *src = TextDatumGetCString(SPI_getbinval(tuple, tuple_desc, 1, &is_null));
-
-			if (!is_null) {
-
-				SCM port = scm_open_input_string(scm_from_locale_string(src));
-				SCM x;
-
-				while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
-					untrusted_eval(x, module);
-			}
-		}
-
-		SPI_finish();
-	}
-
-	return module;
-}
-
-SCM make_sandbox_module(void)
-{
-	static SCM make_sandbox_module_proc = SCM_UNDEFINED;
-
-	if (make_sandbox_module_proc == SCM_UNDEFINED)
-		make_sandbox_module_proc = eval_string_in_base_module("make-sandbox-module");
-
-	return call_1(make_sandbox_module_proc, trusted_bindings);
-}
-
-void cache_module(Oid role_oid, int64 preamble_id, SCM module)
-{
-	SCM role = scm_from_int(role_oid);
-	SCM preamble = scm_from_int64(preamble_id);
-	scm_hash_set_x(module_cache, role, scm_cons(preamble, module));
-}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
