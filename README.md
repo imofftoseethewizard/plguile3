@@ -29,23 +29,35 @@ enables the creation of database functions using Guile Scheme 3.0.
 
 The scope of the 1.0 release is detailed below.
 
-The 0.21.x versions will reorganize, refactor, refine, and document
+The 0.21.x versions will add a a module system, s.t. `use-modules` can
+import system modules -- curated for trusted bindings only -- or
+user-defined modules. This will include permissions and a dependency
+graph so that cached compilations can be invalidated.
+
+The 0.23.x versions will reorganize, refactor, refine, and document
 plguile3.c and plguile3.scm.
 
-The 0.23.x versions will include an extensive test campaign covering
+The 0.25.x versions will include an extensive test campaign covering
 load, concurrency, session isolation, memory correctness, fuzzing,
 etc.  Tests will also be extended to Postgres version 12-16.
 
-Version 0.24.0 will be the pre-1.0 beta release.
+Version 0.26.0 will be the pre-1.0 beta release.
 
-The 0.24.x versions will add
+The 0.26.x versions will add
 
 - documentation and examples
 - support for Postgres 12, 13, 15, and 16
 - packaging for pgxn, deb, rpm, and apk.
 
-The 0.25.x versions will include extensions and usability updates
-after use in at least one large project.
+The 0.27.x versions will include extensions and usability updates
+after use in at least one large project.  Initial observations:
+
+- using the form `(execute "command" (list args ...) ...)` is clumsy
+  and not as good an experience as the `sql` or `plpgsql` languages.
+  It would be much better to have forms such as `(select ...)` and
+  `(insert ...)`, etc.  The implication, however, is that the full
+  syntax of Postgres would be represented in Scheme, at least for
+  selected commands.
 
 Post 1.0 improvements:
 
