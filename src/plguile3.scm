@@ -791,6 +791,10 @@
      utf16->string
      utf32->string)))
 
+(define srfi-9-bindings
+  '(((srfi srfi-9)
+     define-record-type)))
+
 (define srfi-19-bindings
   '(((srfi srfi-19)
      time-utc
@@ -869,6 +873,34 @@
      time-utc->time-tai!
      date->string
      string->date)))
+
+(define srfi-43-bindings
+  '(((srfi srfi-43)
+     reverse-list->vector
+     reverse-vector->list
+     vector-any
+     vector-append
+     vector-binary-search
+     vector-concatenate
+     vector-count
+     vector-empty?
+     vector-every
+     vector-fold
+     vector-fold-right
+     vector-for-each
+     vector-index
+     vector-index-right
+     vector-map
+     vector-map!
+     vector-reverse!
+     vector-reverse-copy
+     vector-reverse-copy!
+     vector-skip
+     vector-skip-right
+     vector-swap!
+     vector-unfold
+     vector-unfold-right
+     vector=)))
 
 (define plguile3-bindings
   '(((guile)
@@ -1029,5 +1061,7 @@
 (define trusted-bindings
   (append all-pure-and-impure-bindings
           bytevector-bindings
-          srfi-19-bindings
+          srfi-9-bindings  ; define-record-type
+          srfi-19-bindings ; dates and times
+          srfi-43-bindings ; vectors
           plguile3-bindings))

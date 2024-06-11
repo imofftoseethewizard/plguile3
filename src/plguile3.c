@@ -1,3 +1,5 @@
+#include <time.h>
+
 #include <libguile.h>
 
 #include <postgres.h>
@@ -26,6 +28,7 @@
 #include <mb/pg_wchar.h>
 #include <miscadmin.h>
 #include <parser/parse_func.h>
+#include <storage/shmem.h>
 #include <tcop/dest.h>
 #include <tsearch/ts_type.h>
 #include <utils/array.h>
@@ -321,6 +324,7 @@ static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
+static SCM begin_define_module(SCM args);
 static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll);
 static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
 static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
@@ -566,6 +570,7 @@ static SCM base_module = SCM_UNDEFINED;
 // Initialization
 //
 
+static void init_shared_memory(void);
 static void init_type_conversion(void);
 static void init_type_cache(void);
 static void init_range_type_cache(void);
@@ -575,8 +580,20 @@ void _PG_init(void)
 {
 	// TODO: check that `SHOW server_encoding` is 'UTF8'
 
+	init_shared_memory();
 	init_type_conversion();
 	init_guile();
+}
+
+static pg_time_t *shared_module_timestamp;
+
+void init_shared_memory(void)
+{
+	bool found;
+	shared_module_timestamp = ShmemInitStruct("plguile3", sizeof(pg_time_t), &found);
+
+	if (!found)
+		*shared_module_timestamp = time(NULL);
 }
 
 void init_type_conversion(void)
@@ -624,6 +641,7 @@ void init_guile(void)
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
 
+	define_primitive("%begin-define-module",   1, 0, 0, (SCM (*)()) begin_define_module);
 	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
 	define_primitive("%execute-with-receiver", 4, 0, 0, (SCM (*)()) spi_execute_with_receiver);
@@ -1962,6 +1980,12 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 //
 
 static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
+static void register_xact_callback_save_module_source(SCM name, const char *source);
+
+static bool call_inline_active = false;
+static bool database_accessed_during_call = false;
+static bool module_defined_during_call = false;
+static SCM defined_module_name = SCM_UNDEFINED;
 
 PGDLLEXPORT Datum plguile3_call_inline(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(plguile3_call_inline);
@@ -1978,13 +2002,43 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	SCM port = scm_open_input_string(scm_from_locale_string(source_text));
 	SCM x;
 
-	get_call_limits(&limits);
+	// Keep track of nested inline call handlers.  This is to limit the use of
+	// define-module to inline call handlers, and to only once during the extent
+	// of the outermost handler.
 
-	time_limit = scm_from_double(limits.time_seconds);
-	allocation_limit = scm_from_int64(limits.allocation_bytes);
+	bool prior_call_inline_active = call_inline_active;
+	call_inline_active = true;
 
-	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
-		eval_with_limits(x, module, time_limit, allocation_limit);
+	// If this is the outermost call inline handler (they can be nested),
+	// then clear the flag noting database access and the flag noting that
+	// a module has been defined.
+
+	if (!prior_call_inline_active) {
+		database_accessed_during_call = false;
+		module_defined_during_call = false;
+	}
+
+	PG_TRY();
+	{
+		get_call_limits(&limits);
+
+		time_limit = scm_from_double(limits.time_seconds);
+		allocation_limit = scm_from_int64(limits.allocation_bytes);
+
+		while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
+			eval_with_limits(x, module, time_limit, allocation_limit);
+	}
+	PG_FINALLY();
+	{
+		call_inline_active = prior_call_inline_active;
+	}
+	PG_END_TRY();
+
+	if (module_defined_during_call) {
+		register_xact_callback_save_module_source(defined_module_name, source_text);
+		scm_gc_unprotect_object(defined_module_name);
+		defined_module_name = SCM_UNDEFINED;
+	}
 
 	return (Datum)0;
 }
@@ -2000,6 +2054,36 @@ SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
 		eval_with_limits_proc,
 		scm_list_4(expr, module, time_limit, allocation_limit),
 		8);
+}
+
+void register_xact_callback_save_module_source(SCM name, const char *source)
+{
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Modules
+
+SCM begin_define_module(SCM name)
+{
+	if (!call_inline_active)
+		throw_runtime_error("define-module may only be called during a DO statement.");
+
+	if (database_accessed_during_call)
+		throw_runtime_error("define-module may not be called during a DO statement which accesses the database.");
+
+	if (module_defined_during_call)
+		throw_runtime_error("define-module may only be called once per DO statement.");
+
+	module_defined_during_call = true;
+
+	if (defined_module_name != SCM_UNDEFINED)
+		scm_gc_unprotect_object(defined_module_name);
+
+	scm_gc_protect_object(name);
+	defined_module_name = name;
+
+	return SCM_UNDEFINED;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -5649,6 +5733,11 @@ SCM spi_execute(SCM command, SCM args, SCM count)
 
 	SPIExecuteOptions options = {0};
 
+	if (module_defined_during_call)
+		throw_runtime_error("DO statements which define a module must be not access the database.");
+
+	database_accessed_during_call = true;
+
 	if (!scm_is_string(command))
 		throw_wrong_argument_type("command", "string", command);
 
@@ -5798,6 +5887,11 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 
 	long nargs = scm_ilength(args);
 	Oid *arg_types = NULL;
+
+	if (module_defined_during_call)
+		throw_runtime_error("DO statements which define a module must be not access the database.");
+
+	database_accessed_during_call = true;
 
 	if (scm_procedure_p(receiver_proc) == SCM_BOOL_F)
 		throw_wrong_argument_type("receiver", "procedure", receiver_proc);
@@ -5966,6 +6060,11 @@ SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM sc
 	int ret;
 	SCM cursor;
 
+	if (module_defined_during_call)
+		throw_runtime_error("DO statements which define a module must be not access the database.");
+
+	database_accessed_during_call = true;
+
 	if (nargs < 0)
 		throw_wrong_argument_type("args", "list", args);
 
@@ -6048,6 +6147,11 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 	TupleDesc tuple_desc;
 	SCM attr_names, attr_names_hash, records, type_names;
 
+	if (module_defined_during_call)
+		throw_runtime_error("DO statements which define a module must be not access the database.");
+
+	database_accessed_during_call = true;
+
 	if (!is_cursor(cursor))
 		throw_wrong_argument_type("cursor", "cursor", cursor);
 
@@ -6116,6 +6220,14 @@ SCM spi_cursor_move(SCM cursor, SCM direction, SCM count)
 	const char *name = (const char *)scm_foreign_object_ref(cursor, 0);
 	int ret;
 	Portal portal;
+
+	if (module_defined_during_call)
+		throw_runtime_error("DO statements which call define-module must not access the database.");
+
+	database_accessed_during_call = true;
+
+	if (!is_cursor(cursor))
+		throw_wrong_argument_type("cursor", "cursor", cursor);
 
 	ret = SPI_connect();
 

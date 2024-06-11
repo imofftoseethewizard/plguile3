@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2024-06-11
+
+This version provides some preliminaries for a trusted module system.
+When complete, this will provide define-module, use-module, @, and @@
+with identical semantics, though restricted to only trusted modules.
+There are no tests for these changes.
+
 ## [0.20.0] - 2024-03-18
 
 This version ensures that row trigger responses are allocated in the
