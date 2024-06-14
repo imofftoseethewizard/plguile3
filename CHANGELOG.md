@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2024-06-14
+
+This version includes the logic to resolve module names for use in
+`(use-modules ...)` forms and `#:use-module` parameters to
+`define-module`.  There are no tests for these changes.
+
 ## [0.21.0] - 2024-06-11
 
 This version provides some preliminaries for a trusted module system.

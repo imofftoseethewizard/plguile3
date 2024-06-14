@@ -16,23 +16,13 @@ create table call_limit (
 
 create table module (
   id bigserial primary key,
-  owner_id oid not null, -- owner may update and delete (in addition to postgres)
-  public bool default false, -- if true, module is available for all, otherwise only owner
+  owner_id oid, -- owner may update and delete (in addition to postgres)
   name text not null,
-  src text not null,
-  hash bytea not null);
+  src text not null);
 
--- module unique (owner_id, name)
--- module unique (public, name)
+create unique index ix_module_owner_id_name on module (owner_id, name);
 
 create index ix_module_name on module (name);
-
-create table module_reference (
-  module_id bigint not null,
-  referrer_id bigint not null,
-  primary key (module_id, referrer_id),
-  foreign key (module_id) references module (id),
-  foreign key (referrer_id) references module (id));
 
 create table preamble (
   id bigserial primary key,

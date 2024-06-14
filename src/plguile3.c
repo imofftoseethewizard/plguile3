@@ -1,7 +1,7 @@
 #include <time.h>
 
 #include <libguile.h>
-
+#include <libguile/srfi-13.h>
 #include <postgres.h>
 
 // Postgres include files, in alphabetical order
@@ -325,6 +325,7 @@ static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
 static SCM begin_define_module(SCM args);
+static SCM resolve_trusted_module_name(SCM args);
 static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll);
 static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
 static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
@@ -435,6 +436,7 @@ static SCM make_tsposition_proc;
 static SCM make_tsquery_proc;
 static SCM make_tsvector_proc;
 static SCM multirange_ranges_proc;
+static SCM nested_ref_module_proc;
 static SCM normalize_tsvector_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
@@ -451,6 +453,7 @@ static SCM record_types_proc;
 static SCM role_add_func_oid_proc;
 static SCM role_to_func_oids_proc;
 static SCM string_to_decimal_proc;
+static SCM symbol_to_string_proc;
 static SCM table_attr_names_proc;
 static SCM table_rows_proc;
 static SCM table_types_proc;
@@ -459,6 +462,7 @@ static SCM time_monotonic_symbol;
 static SCM time_nanosecond_proc;
 static SCM time_second_proc;
 static SCM trusted_bindings;
+static SCM trusted_module;
 static SCM tslexeme_lexeme_proc;
 static SCM tslexeme_positions_proc;
 static SCM tsposition_index_proc;
@@ -468,6 +472,10 @@ static SCM tsvector_lexemes_proc;
 static SCM validate_tsquery_proc;
 //static SCM validate_jsonb_proc;
 static SCM validate_jsonpath_proc;
+
+// Symbols for modules
+static SCM public_symbol;
+static SCM trusted_symbol;
 
 // Symbols for triggers
 static SCM after_symbol;
@@ -641,7 +649,9 @@ void init_guile(void)
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
 
-	define_primitive("%begin-define-module",   1, 0, 0, (SCM (*)()) begin_define_module);
+	define_primitive("%begin-define-module",         1, 0, 0, (SCM (*)()) begin_define_module);
+	define_primitive("%resolve-trusted-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
+
 	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
 	define_primitive("%execute-with-receiver", 4, 0, 0, (SCM (*)()) spi_execute_with_receiver);
@@ -785,6 +795,13 @@ void init_guile(void)
 	is_int8_proc            = eval_string_in_base_module("int8-compatible?");
 	string_to_decimal_proc  = eval_string_in_base_module("string->decimal");
 
+	nested_ref_module_proc = eval_string_in_base_module("nested-ref-module");
+	symbol_to_string_proc  = eval_string_in_base_module("symbol->string");
+	trusted_module         = eval_string_in_base_module("(resolve-module '(trusted))");
+
+	public_symbol  = scm_from_utf8_symbol("public");
+	trusted_symbol = scm_from_utf8_symbol("trusted");
+
 	after_symbol     = scm_from_utf8_symbol("after");
 	before_symbol    = scm_from_utf8_symbol("before");
 	delete_symbol    = scm_from_utf8_symbol("delete");
@@ -901,6 +918,7 @@ void init_guile(void)
 	stop_marker = scm_cons(SCM_EOL, SCM_EOL);
 	scm_gc_protect_object(stop_marker);
 }
+
 
 void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
 {
@@ -2064,6 +2082,10 @@ void register_xact_callback_save_module_source(SCM name, const char *source)
 //
 // Modules
 
+static SCM user_qualified_module_name(Oid user_oid, SCM names);
+static bool is_trusted_module_loaded(SCM names);
+static SCM resolve_trusted_module_name_from_storage(SCM names);
+
 SCM begin_define_module(SCM name)
 {
 	if (!call_inline_active)
@@ -2084,6 +2106,84 @@ SCM begin_define_module(SCM name)
 	defined_module_name = name;
 
 	return SCM_UNDEFINED;
+}
+
+SCM resolve_trusted_module_name(SCM names)
+{
+	// `names` is a list of symbols, exactly like the name param of
+	// `resolve-module` in boot-9.scm.
+
+	SCM caller_qualified_names = user_qualified_module_name(GetUserId(), names);
+
+	if (is_trusted_module_loaded(caller_qualified_names))
+		return scm_cons(trusted_symbol, caller_qualified_names);
+	else
+		return resolve_trusted_module_name_from_storage(names);
+}
+
+SCM user_qualified_module_name(Oid user_oid, SCM names)
+{
+	SCM user_oid_str = scm_number_to_string(scm_from_int(user_oid), SCM_I_MAKINUM(10));
+	return scm_cons(scm_string_to_symbol(user_oid_str), names);
+}
+
+bool is_trusted_module_loaded(SCM names)
+{
+	SCM exists = scm_apply_0(nested_ref_module_proc, scm_list_2(trusted_module, names));
+	return exists != SCM_BOOL_F;
+}
+
+SCM resolve_trusted_module_name_from_storage(SCM names)
+{
+	Oid caller_oid = GetUserId();
+
+	SCM name_strs;
+	char *names_cstr;
+
+	int ret;
+	Oid arg_types[] = {TEXTOID, OIDOID};
+	Datum arg_vals[2];
+
+	const char *command =
+		"select owner_id from plguile3.module where name = $1 and (owner is null or owner = $2) order by owner_id desc nulls last";
+
+	SCM resolved_names = SCM_BOOL_F;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	name_strs = scm_map(symbol_to_string_proc, names, SCM_EOL);
+	names_cstr = scm_to_locale_string(scm_string_join(name_strs, SCM_UNDEFINED, SCM_UNDEFINED));
+
+	arg_vals[0] = CStringGetDatum(names_cstr);
+	arg_vals[1] = ObjectIdGetDatum(caller_oid);
+
+	ret = SPI_execute_with_args(command, 2, arg_types, arg_vals, NULL, true, 2);
+
+	free(names_cstr);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	if (SPI_tuptable && SPI_processed) {
+
+		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
+		HeapTuple tuple = SPI_tuptable->vals[0];
+		SCM qualified_names;
+
+		if (SPI_getvalue(tuple, tuple_desc, 1) == NULL)
+			qualified_names = scm_cons(public_symbol, names);
+		else
+			qualified_names = user_qualified_module_name(caller_oid, names);
+
+		resolved_names = scm_cons(trusted_symbol, qualified_names);
+	}
+
+	SPI_finish();
+
+	return resolved_names;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

@@ -1,3 +1,7 @@
+;; base for all modules -- system, public, and private -- that
+;; can be imported into scheme code
+(define-module (trusted))
+
 (define-module (plguile3 base)
   #:use-module (ice-9 sandbox)
   #:use-module (srfi srfi-1)  ; fold-right
