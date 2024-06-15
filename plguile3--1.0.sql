@@ -24,6 +24,10 @@ create unique index ix_module_owner_id_name on module (owner_id, name);
 
 create index ix_module_name on module (name);
 
+create table create_public_module_permission (
+  role_id oid primary key
+);
+
 create table preamble (
   id bigserial primary key,
   src text not null);

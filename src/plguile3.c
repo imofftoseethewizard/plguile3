@@ -324,8 +324,10 @@ static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
+static SCM prepare_public_module_definition(void);
 static SCM begin_define_module(SCM args);
 static SCM resolve_trusted_module_name(SCM args);
+static SCM resolve_trusted_public_module_name(SCM args);
 static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll);
 static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
 static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
@@ -649,8 +651,10 @@ void init_guile(void)
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
 
-	define_primitive("%begin-define-module",         1, 0, 0, (SCM (*)()) begin_define_module);
-	define_primitive("%resolve-trusted-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
+	define_primitive("%prepare-public-module-definition",   0, 0, 0, (SCM (*)()) prepare_public_module_definition);
+	define_primitive("%begin-define-module",                1, 0, 0, (SCM (*)()) begin_define_module);
+	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
+	define_primitive("%resolve-trusted-public-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_public_module_name);
 
 	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
@@ -1998,10 +2002,11 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 //
 
 static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
-static void register_xact_callback_save_module_source(SCM name, const char *source);
+static void register_xact_callback_save_module_source(SCM name, bool is_public, const char *source);
 
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
+static bool defining_public_module = false;
 static bool module_defined_during_call = false;
 static SCM defined_module_name = SCM_UNDEFINED;
 
@@ -2034,6 +2039,7 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	if (!prior_call_inline_active) {
 		database_accessed_during_call = false;
 		module_defined_during_call = false;
+		defining_public_module = false;
 	}
 
 	PG_TRY();
@@ -2053,7 +2059,7 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	if (module_defined_during_call) {
-		register_xact_callback_save_module_source(defined_module_name, source_text);
+		register_xact_callback_save_module_source(defined_module_name, defining_public_module, source_text);
 		scm_gc_unprotect_object(defined_module_name);
 		defined_module_name = SCM_UNDEFINED;
 	}
@@ -2074,7 +2080,7 @@ SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
 		8);
 }
 
-void register_xact_callback_save_module_source(SCM name, const char *source)
+void register_xact_callback_save_module_source(SCM name, bool is_public, const char *source)
 {
 }
 
@@ -2082,9 +2088,51 @@ void register_xact_callback_save_module_source(SCM name, const char *source)
 //
 // Modules
 
+static bool can_define_public_module(Oid role_id);
 static SCM user_qualified_module_name(Oid user_oid, SCM names);
 static bool is_trusted_module_loaded(SCM names);
+static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
+
+SCM prepare_public_module_definition(void)
+{
+	Oid caller_oid = GetUserId();
+
+	if (!can_define_public_module(caller_oid))
+		throw_runtime_error("permission to create public modules required.");
+
+	defining_public_module = true;
+	return SCM_UNDEFINED;
+}
+
+bool can_define_public_module(Oid role_id)
+{
+	int ret;
+	Oid arg_types[] = {OIDOID};
+	Datum arg_vals[1];
+
+	const char *command = "select * from plguile3.create_public_module_permission where role_id = $1";
+
+	bool result;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	arg_vals[0] = ObjectIdGetDatum(role_id);
+
+	ret = SPI_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	result = SPI_tuptable && SPI_processed;
+
+	SPI_finish();
+
+	return result;
+}
 
 SCM begin_define_module(SCM name)
 {
@@ -2106,6 +2154,19 @@ SCM begin_define_module(SCM name)
 	defined_module_name = name;
 
 	return SCM_UNDEFINED;
+}
+
+SCM resolve_trusted_public_module_name(SCM names)
+{
+	// `names` is a list of symbols, exactly like the name param of
+	// `resolve-module` in boot-9.scm.
+
+	SCM public_qualified_names = scm_cons(public_symbol, names);
+
+	if (is_trusted_module_loaded(public_qualified_names))
+		return scm_cons(trusted_symbol, public_qualified_names);
+	else
+		return resolve_trusted_public_module_name_from_storage(names);
 }
 
 SCM resolve_trusted_module_name(SCM names)
@@ -2133,6 +2194,45 @@ bool is_trusted_module_loaded(SCM names)
 	return exists != SCM_BOOL_F;
 }
 
+SCM resolve_trusted_public_module_name_from_storage(SCM names)
+{
+	SCM name_strs;
+	char *names_cstr;
+
+	int ret;
+	Oid arg_types[] = {TEXTOID};
+	Datum arg_vals[1];
+
+	const char *command =
+		"select owner_id from plguile3.module where name = $1 and owner_id is null order by owner_id desc nulls last";
+
+	SCM resolved_names = SCM_BOOL_F;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	name_strs = scm_map(symbol_to_string_proc, names, SCM_EOL);
+	names_cstr = scm_to_locale_string(scm_string_join(name_strs, SCM_UNDEFINED, SCM_UNDEFINED));
+
+	arg_vals[0] = CStringGetDatum(names_cstr);
+
+	ret = SPI_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
+
+	free(names_cstr);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	if (SPI_tuptable && SPI_processed)
+		resolved_names = scm_cons(trusted_symbol, scm_cons(public_symbol, names));
+
+	SPI_finish();
+
+	return resolved_names;
+}
+
 SCM resolve_trusted_module_name_from_storage(SCM names)
 {
 	Oid caller_oid = GetUserId();
@@ -2145,7 +2245,7 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	Datum arg_vals[2];
 
 	const char *command =
-		"select owner_id from plguile3.module where name = $1 and (owner is null or owner = $2) order by owner_id desc nulls last";
+		"select owner_id from plguile3.module where name = $1 and (owner_id is null or owner_id = $2) order by owner_id desc nulls last";
 
 	SCM resolved_names = SCM_BOOL_F;
 
