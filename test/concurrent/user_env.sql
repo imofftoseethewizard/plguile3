@@ -51,12 +51,12 @@ begin
       guile3_get_call_time_limit,
       guile3_get_default_call_allocation_limit,
       guile3_get_default_call_time_limit,
-      guile3_get_default_preamble,
-      guile3_get_preamble,
+      guile3_get_default_prelude,
+      guile3_get_prelude,
       guile3_get_session_user_call_allocation_limit,
       guile3_get_session_user_call_time_limit,
-      guile3_get_session_user_preamble,
-      guile3_set_session_user_preamble
+      guile3_get_session_user_prelude,
+      guile3_set_session_user_prelude
     to bob, carol;
 
 end
@@ -74,13 +74,13 @@ select plan(24);
 
 		select plan(19);
 
-select guile3_set_default_preamble('(define the-owner "anyone")');
+select guile3_set_default_prelude('(define the-owner "anyone")');
 
-select guile3_remove_role_preamble('alice');
-select guile3_remove_role_preamble('bob');
-select guile3_remove_role_preamble('carol');
+select guile3_remove_role_prelude('alice');
+select guile3_remove_role_prelude('bob');
+select guile3_remove_role_prelude('carol');
 
-select is(guile3_get_default_preamble(), '(define the-owner "anyone")');
+select is(guile3_get_default_prelude(), '(define the-owner "anyone")');
 
 create or replace function who_owns_this() returns text as 'the-owner' language guile3;
 
@@ -94,13 +94,13 @@ $$ language guile3;
 
 select set_test_event('ready');
 
-select is(who_owns_this(), 'anyone', 'alice no preamble');
+select is(who_owns_this(), 'anyone', 'alice no prelude');
 
 	select pg_sleep(0.01);
 
 	select wait_for_test_event('ready');
 
-	select is(who_owns_this(), 'anyone', 'bob no preamble');
+	select is(who_owns_this(), 'anyone', 'bob no prelude');
 
 	select set_test_event('b.1 done');
 
@@ -108,54 +108,54 @@ select is(who_owns_this(), 'anyone', 'alice no preamble');
 
 		select wait_for_test_event('ready');
 
-		select is(who_owns_this(), 'anyone', 'carol no preamble');
+		select is(who_owns_this(), 'anyone', 'carol no prelude');
 
 		select set_test_event('c.1 done');
 
 select wait_for_test_event('b.1 done');
 select wait_for_test_event('c.1 done');
 
-select guile3_set_default_preamble('(define the-owner "someone")');
+select guile3_set_default_prelude('(define the-owner "someone")');
 
-select is(who_owns_this(), 'someone', 'alice no preamble 2');
+select is(who_owns_this(), 'someone', 'alice no prelude 2');
 
 select set_test_event('someone-ready');
 
 	select wait_for_test_event('someone-ready');
 
-	select is(who_owns_this(), 'someone', 'bob no preamble 2');
+	select is(who_owns_this(), 'someone', 'bob no prelude 2');
 
 	select set_test_event('b.2 done');
 
 		select wait_for_test_event('someone-ready');
 
-		select is(who_owns_this(), 'someone', 'carol no preamble 2');
+		select is(who_owns_this(), 'someone', 'carol no prelude 2');
 
 		select set_test_event('c.2 done');
 
 select wait_for_test_event('b.2 done');
 select wait_for_test_event('c.2 done');
 
-select guile3_set_role_preamble('bob', '(define the-owner "bob")');
+select guile3_set_role_prelude('bob', '(define the-owner "bob")');
 
-select is(guile3_get_default_preamble(), '(define the-owner "someone")');
-select is(guile3_get_role_preamble('bob'), '(define the-owner "bob")');
+select is(guile3_get_default_prelude(), '(define the-owner "someone")');
+select is(guile3_get_role_prelude('bob'), '(define the-owner "bob")');
 
-select is(who_owns_this(), 'someone', 'alice no preamble 3');
+select is(who_owns_this(), 'someone', 'alice no prelude 3');
 
 select set_test_event('bob-ready');
 
 	select wait_for_test_event('bob-ready');
 
-	select is(guile3_get_preamble(), '(define the-owner "bob")');
+	select is(guile3_get_prelude(), '(define the-owner "bob")');
 
-	select is(who_owns_this(), 'someone', 'bob with preamble');
+	select is(who_owns_this(), 'someone', 'bob with prelude');
 
 	select set_test_event('b.3 done');
 
 		select wait_for_test_event('bob-ready');
 
-		select is(who_owns_this(), 'someone', 'carol no preamble 3');
+		select is(who_owns_this(), 'someone', 'carol no prelude 3');
 
 		select set_test_event('c.3 done');
 
@@ -165,19 +165,19 @@ select wait_for_test_event('c.3 done');
 
 alter function who_owns_this owner to bob;
 
-select is(who_owns_this(), 'bob', 'alice no preamble 4');
+select is(who_owns_this(), 'bob', 'alice no prelude 4');
 
 select set_test_event('bob-the-owner');
 
 	select wait_for_test_event('bob-the-owner');
 
-	select is(who_owns_this(), 'bob', 'bob with preamble 2');
+	select is(who_owns_this(), 'bob', 'bob with prelude 2');
 
 	select set_test_event('b.4 done');
 
 		select wait_for_test_event('bob-the-owner');
 
-		select is(who_owns_this(), 'bob', 'carol no preamble 4');
+		select is(who_owns_this(), 'bob', 'carol no prelude 4');
 
 		select set_test_event('c.4 done');
 
@@ -185,25 +185,25 @@ select set_test_event('bob-the-owner');
 select wait_for_test_event('b.4 done');
 select wait_for_test_event('c.4 done');
 
-select guile3_set_role_preamble('bob', '(define the-owner "robert")');
+select guile3_set_role_prelude('bob', '(define the-owner "robert")');
 
-select is(who_owns_this(), 'robert', 'alice no preamble 4');
+select is(who_owns_this(), 'robert', 'alice no prelude 4');
 
 select set_test_event('robert-the-owner');
 
 	select wait_for_test_event('robert-the-owner');
 
-	select is(who_owns_this(), 'robert', 'bob with preamble 3');
+	select is(who_owns_this(), 'robert', 'bob with prelude 3');
 
 	select set_test_event('b.5 done');
 
 		select wait_for_test_event('robert-the-owner');
 
-		select is(who_owns_this(), 'robert', 'carol no preamble 4');
+		select is(who_owns_this(), 'robert', 'carol no prelude 4');
 
 		select set_test_event('c.5 done');
 
-	select throws_ok('guile3_set_role_preamble(''carol'', ''bogus'')');
+	select throws_ok('guile3_set_role_prelude(''carol'', ''bogus'')');
 
 select guile3_set_default_call_time_limit(1);
 select guile3_set_role_call_time_limit('alice', NULL);

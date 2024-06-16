@@ -2316,15 +2316,15 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Preamble Validation
+// Prelude Validation
 //
 
-PGDLLEXPORT Datum plguile3_check_preamble(PG_FUNCTION_ARGS);
-PG_FUNCTION_INFO_V1(plguile3_check_preamble);
+PGDLLEXPORT Datum plguile3_check_prelude(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_check_prelude);
 
 static SCM make_sandbox_module(void);
 
-Datum plguile3_check_preamble(PG_FUNCTION_ARGS)
+Datum plguile3_check_prelude(PG_FUNCTION_ARGS)
 {
  	Datum src = PG_GETARG_DATUM(0);
 	SCM port = scm_open_input_string(datum_text_to_scm(src, InvalidOid));
@@ -2343,35 +2343,35 @@ Datum plguile3_check_preamble(PG_FUNCTION_ARGS)
 // Sandboxed Modules
 //
 
-static void cache_module(Oid role_oid, int64 preamble_id, SCM module);
-static void get_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id);
+static void cache_module(Oid role_oid, int64 prelude_id, SCM module);
+static void get_prelude_ids(Oid role_oid, int64 *default_prelude_id, int64 *role_prelude_id);
 static void flush_module_cache_for_role(Oid role_oid);
 static SCM get_cached_module(Oid role_oid);
-static int64 get_cached_preamble_id(Oid role_oid);
-static SCM prepare_sandbox_module(int64 preamble_id);
+static int64 get_cached_prelude_id(Oid role_oid);
+static SCM prepare_sandbox_module(int64 prelude_id);
 
 SCM find_or_create_module_for_role(Oid role_oid)
 {
-	int64 default_preamble_id, preamble_id, role_preamble_id;
+	int64 default_prelude_id, prelude_id, role_prelude_id;
 	SCM module;
 
-	get_preamble_ids(role_oid, &default_preamble_id, &role_preamble_id);
+	get_prelude_ids(role_oid, &default_prelude_id, &role_prelude_id);
 
-	preamble_id = role_preamble_id ? role_preamble_id : default_preamble_id;
+	prelude_id = role_prelude_id ? role_prelude_id : default_prelude_id;
 
-	if (!preamble_id)
+	if (!prelude_id)
 		flush_module_cache_for_role(role_oid);
 	else {
-		int64 cached_preamble_id = get_cached_preamble_id(role_oid);
-		if (preamble_id != cached_preamble_id)
+		int64 cached_prelude_id = get_cached_prelude_id(role_oid);
+		if (prelude_id != cached_prelude_id)
 			flush_module_cache_for_role(role_oid);
 	}
 
 	module = get_cached_module(role_oid);
 
 	if (module == SCM_BOOL_F) {
-		module = prepare_sandbox_module(preamble_id);
-		cache_module(role_oid, preamble_id, module);
+		module = prepare_sandbox_module(prelude_id);
+		cache_module(role_oid, prelude_id, module);
 	}
 
 	return module;
@@ -2391,7 +2391,7 @@ void flush_module_cache_for_role(Oid role_oid)
 	scm_gc_unprotect_object(old_func_cache);
 }
 
-int64 get_cached_preamble_id(Oid role_oid)
+int64 get_cached_prelude_id(Oid role_oid)
 {
 	SCM role = scm_from_int(role_oid);
 	SCM obj = scm_hash_ref(module_cache, role, SCM_BOOL_F);
@@ -2413,17 +2413,17 @@ SCM get_cached_module(Oid role_oid)
 	return scm_cdr(obj);
 }
 
-static SCM get_preamble_src(int64 preamble_id);
+static SCM get_prelude_src(int64 prelude_id);
 
-SCM prepare_sandbox_module(int64 preamble_id)
+SCM prepare_sandbox_module(int64 prelude_id)
 {
 	SCM module = make_sandbox_module();
 
-	if (preamble_id) {
+	if (prelude_id) {
 
-		SCM preamble_src = get_preamble_src(preamble_id);
+		SCM prelude_src = get_prelude_src(prelude_id);
 
-		SCM port = scm_open_input_string(preamble_src);
+		SCM port = scm_open_input_string(prelude_src);
 		SCM x;
 
 		while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
@@ -2443,11 +2443,11 @@ SCM make_sandbox_module(void)
 	return call_1(make_sandbox_module_proc, trusted_bindings);
 }
 
-void cache_module(Oid role_oid, int64 preamble_id, SCM module)
+void cache_module(Oid role_oid, int64 prelude_id, SCM module)
 {
 	SCM role = scm_from_int(role_oid);
-	SCM preamble = scm_from_int64(preamble_id);
-	scm_hash_set_x(module_cache, role, scm_cons(preamble, module));
+	SCM prelude = scm_from_int64(prelude_id);
+	scm_hash_set_x(module_cache, role, scm_cons(prelude, module));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2541,10 +2541,10 @@ CallLimits *get_call_limits(CallLimits *limits)
 	return limits;
 }
 
-void get_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_preamble_id)
+void get_prelude_ids(Oid role_oid, int64 *default_prelude_id, int64 *role_prelude_id)
 {
 	const char *command =
-		"select role_id, preamble_id from plguile3.eval_env where role_id in (0, $1)";
+		"select role_id, prelude_id from plguile3.eval_env where role_id in (0, $1)";
 
 	int ret;
 	Oid arg_type = OIDOID;
@@ -2567,7 +2567,7 @@ void get_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_prea
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
 
-	*default_preamble_id = *role_preamble_id = 0;
+	*default_prelude_id = *role_prelude_id = 0;
 
 	if (SPI_tuptable != NULL) {
 
@@ -2578,25 +2578,25 @@ void get_preamble_ids(Oid role_oid, int64 *default_preamble_id, int64 *role_prea
 			HeapTuple tuple = SPI_tuptable->vals[row];
 
 			bool is_null;
-			int64 preamble_id = DatumGetInt64(SPI_getbinval(tuple, tuple_desc, 2, &is_null));
+			int64 prelude_id = DatumGetInt64(SPI_getbinval(tuple, tuple_desc, 2, &is_null));
 
 			if (DatumGetObjectId(SPI_getbinval(tuple, tuple_desc, 1, &is_null)))
-				*role_preamble_id = preamble_id;
+				*role_prelude_id = prelude_id;
 			else
-				*default_preamble_id = preamble_id;
+				*default_prelude_id = prelude_id;
 		}
 	}
 
 	SPI_finish();
 }
 
-SCM get_preamble_src(int64 preamble_id)
+SCM get_prelude_src(int64 prelude_id)
 {
-	const char *command = "select src from plguile3.preamble where id = $1";
+	const char *command = "select src from plguile3.prelude where id = $1";
 
 	int ret;
 	Oid arg_type = INT8OID;
-	Datum preamble = Int64GetDatum(preamble_id);
+	Datum prelude = Int64GetDatum(prelude_id);
 
 	Oid prev_user_id;
 	int prev_sec_con;
@@ -2615,7 +2615,7 @@ SCM get_preamble_src(int64 preamble_id)
 	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
 	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
 
-	ret = SPI_execute_with_args(command, 1, &arg_type, &preamble, NULL, true, 1);
+	ret = SPI_execute_with_args(command, 1, &arg_type, &prelude, NULL, true, 1);
 
 	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
 
@@ -2623,14 +2623,14 @@ SCM get_preamble_src(int64 preamble_id)
 		elog(ERROR, "spi_select_error: %d", ret);
 
 	if (!SPI_tuptable || !SPI_processed)
-		elog(ERROR, "get_preamble_src: preamble %ld not found", preamble_id);
+		elog(ERROR, "get_prelude_src: prelude %ld not found", prelude_id);
 
 	tuple_desc = SPI_tuptable->tupdesc;
 	tuple = SPI_tuptable->vals[0];
 	src_datum = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
 
 	if (is_null)
-		elog(ERROR, "get_preamble_src: preamble %ld is null", preamble_id);
+		elog(ERROR, "get_prelude_src: prelude %ld is null", prelude_id);
 
 	src = scm_from_locale_string(TextDatumGetCString(src_datum));
 
