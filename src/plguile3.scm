@@ -711,12 +711,43 @@
   (let ((thunk (lambda () (apply proc args))))
     (call-with-time-and-allocation-limits time-limit allocation-limit thunk)))
 
+(define-syntax define-public-module
+  (syntax-rules ()
+    ((define-public-module exp ...)
+     (begin
+       (%prepare-public-module-definition)
+       (define-module exp ...)))))
+
+(define original-define-module* define-module*)
+
+(define (define-trusted-module* name . args)
+  (let* ((qualified-name (%begin-define-module name))
+         (processed-args (let loop ((args args)
+                                    (result (list qualified-name)))
+                           (if (null? args)
+                               (reverse result)
+                               (if (eq? #:use-module (car args))
+                                   (loop (cddr args)
+                                         (cons (%resolve-use-module-name (cadr args))
+                                               (cons #:use-module result)))
+                                   (loop (cddr args)
+                                         (cons (cadr args)
+                                               (cons (car args)
+                                                     result))))))))
+    (apply original-define-module* processed-args)))
+
 (define (eval-with-limits exp module time-limit allocation-limit)
-  (eval-in-sandbox exp
-                   #:time-limit time-limit
-                   #:allocation-limit allocation-limit
-                   #:module module
-                   #:sever-module? #f))
+  (dynamic-wind
+    (lambda ()
+      (set! (@ (guile) define-module*) define-trusted-module*))
+    (lambda ()
+      (eval-in-sandbox exp
+                       #:time-limit time-limit
+                       #:allocation-limit allocation-limit
+                       #:module module
+                       #:sever-module? #f))
+    (lambda ()
+      (set! (@ (guile) define-module*) original-define-module*))))
 
 (define (untrusted-eval exp module)
   (eval-in-sandbox exp

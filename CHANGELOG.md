@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.2] - 2024-06-16
+
+This version includes the remainder of `define-public-module`.  There
+are no tests for these changes.
+
 ## [0.21.2] - 2024-06-15
 
 This version includes preliminaries for supporting
-`define-public-module`.
+`define-public-module`.  There are no tests for these changes.
 
 ## [0.21.1] - 2024-06-14
 

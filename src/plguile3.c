@@ -326,6 +326,7 @@ static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
 static SCM prepare_public_module_definition(void);
 static SCM begin_define_module(SCM args);
+static SCM resolve_use_module_name(SCM names);
 static SCM resolve_trusted_module_name(SCM args);
 static SCM resolve_trusted_public_module_name(SCM args);
 static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll);
@@ -653,6 +654,7 @@ void init_guile(void)
 
 	define_primitive("%prepare-public-module-definition",   0, 0, 0, (SCM (*)()) prepare_public_module_definition);
 	define_primitive("%begin-define-module",                1, 0, 0, (SCM (*)()) begin_define_module);
+	define_primitive("%resolve-use-module-name",            1, 0, 0, (SCM (*)()) resolve_use_module_name);
 	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
 	define_primitive("%resolve-trusted-public-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_public_module_name);
 
@@ -2134,8 +2136,10 @@ bool can_define_public_module(Oid role_id)
 	return result;
 }
 
-SCM begin_define_module(SCM name)
+SCM begin_define_module(SCM names)
 {
+	SCM qualified_name;
+
 	if (!call_inline_active)
 		throw_runtime_error("define-module may only be called during a DO statement.");
 
@@ -2150,10 +2154,34 @@ SCM begin_define_module(SCM name)
 	if (defined_module_name != SCM_UNDEFINED)
 		scm_gc_unprotect_object(defined_module_name);
 
-	scm_gc_protect_object(name);
-	defined_module_name = name;
+	scm_gc_protect_object(names);
+	defined_module_name = names;
 
-	return SCM_UNDEFINED;
+	if (defining_public_module)
+		qualified_name = scm_cons(public_symbol, names);
+	else
+		qualified_name = user_qualified_module_name(GetUserId(), names);
+
+	return scm_cons(trusted_symbol, qualified_name);
+}
+
+SCM resolve_use_module_name(SCM names)
+{
+	SCM resolved_names;
+
+	if (defining_public_module)
+		resolved_names = resolve_trusted_public_module_name(names);
+	else
+		resolved_names = resolve_trusted_module_name(names);
+
+	if (resolved_names == SCM_BOOL_F) {
+		if (defining_public_module)
+			throw_runtime_error("Public module '%s' does not exist.", scm_to_string(names));
+		else
+			throw_runtime_error("Module '%s' does not exist.", scm_to_string(names));
+	}
+
+	return resolved_names;
 }
 
 SCM resolve_trusted_public_module_name(SCM names)
@@ -6928,7 +6956,8 @@ bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_t
 
 SCM raise_notice(SCM message)
 {
-	elog(NOTICE, "%s", scm_string_to_pstr(message));
+	// elog(NOTICE, "%s", scm_string_to_pstr(message));
+	elog(NOTICE, "%s", scm_to_string(message));
 	return SCM_UNDEFINED;
 }
 
