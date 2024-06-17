@@ -2004,7 +2004,9 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 //
 
 static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
-static void register_xact_callback_save_module_source(SCM name, bool is_public, const char *source);
+static void validate_and_save_module_source(SCM name, bool is_public, const char *source);
+static void save_module_source(SCM name, bool is_public, const char *source);
+static void after_save_module_xact_callback(XactEvent event, void *arg);
 
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
@@ -2061,7 +2063,7 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	if (module_defined_during_call) {
-		register_xact_callback_save_module_source(defined_module_name, defining_public_module, source_text);
+		validate_and_save_module_source(defined_module_name, defining_public_module, source_text);
 		scm_gc_unprotect_object(defined_module_name);
 		defined_module_name = SCM_UNDEFINED;
 	}
@@ -2080,10 +2082,6 @@ SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
 		eval_with_limits_proc,
 		scm_list_4(expr, module, time_limit, allocation_limit),
 		8);
-}
-
-void register_xact_callback_save_module_source(SCM name, bool is_public, const char *source)
-{
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2113,7 +2111,10 @@ bool can_define_public_module(Oid role_id)
 	Oid arg_types[] = {OIDOID};
 	Datum arg_vals[1];
 
-	const char *command = "select * from plguile3.create_public_module_permission where role_id = $1";
+	const char *command =
+		"select * "
+		"from plguile3.create_public_module_permission "
+		"where role_id = $1";
 
 	bool result;
 
@@ -2312,6 +2313,87 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	SPI_finish();
 
 	return resolved_names;
+}
+
+void validate_and_save_module_source(SCM name, bool is_public, const char *source)
+{
+	save_module_source(name, is_public, source);
+
+	RegisterXactCallback(after_save_module_xact_callback, NULL);
+}
+
+void save_module_source(SCM name, bool is_public, const char *source)
+{
+	SPIExecuteOptions options = {0};
+
+ 	ParamListInfo param_list;
+	ParamExternData *param_ptr;
+
+	SCM name_strs;
+	char *name_cstr;
+
+	const char *command =
+		"insert into plguile3.module (owner_id, name, src) "
+		"values ($1, $2, $3) "
+		"on conflict (owner_id, name) "
+		  "do update set src = $2";
+
+	int ret;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	param_list = makeParamList(3);
+
+	param_ptr = (ParamExternData *)&param_list->params;
+
+	param_ptr->ptype = OIDOID;
+	param_ptr->isnull = is_public;
+	param_ptr->value = ObjectIdGetDatum(GetUserId());
+
+	param_ptr++;
+
+	param_ptr->ptype = TEXTOID;
+	param_ptr->isnull = false;
+
+	name_strs = scm_map(symbol_to_string_proc, name, SCM_EOL);
+	name_cstr = scm_to_locale_string(scm_string_join(name_strs, SCM_UNDEFINED, SCM_UNDEFINED));
+
+	param_ptr->value = CStringGetDatum(name_cstr);
+
+	param_ptr++;
+
+	param_ptr->ptype = TEXTOID;
+	param_ptr->isnull = false;
+	param_ptr->value = CStringGetDatum(source);
+
+	options.allow_nonatomic = false;
+	options.tcount          = 1;
+	options.params          = param_list;
+	options.read_only       = false;
+
+	ret = SPI_execute_extended(command, &options);
+
+	free(name_cstr);
+
+	if (ret != SPI_OK_INSERT)
+		elog(ERROR, "spi_insert_error: %d", ret);
+
+	if (!(SPI_tuptable && SPI_processed))
+		elog(ERROR, "unable to save module source.");
+
+	SPI_finish();
+
+	scm_gc_protect_object(name);
+
+	RegisterXactCallback(after_save_module_xact_callback, NULL);
+}
+
+void after_save_module_xact_callback(XactEvent event, void *arg)
+{
+	*shared_module_timestamp = time(NULL);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -6159,7 +6241,7 @@ SCM spi_execute_with_receiver(SCM receiver_proc, SCM command, SCM args, SCM coun
 
 Oid *prepare_execute_options(SPIExecuteOptions *options, SCM args, SCM count)
 {
-	ParamListInfo param_list;
+ 	ParamListInfo param_list;
 	ParamExternData *param_ptr;
 
 	long nargs = scm_ilength(args);
