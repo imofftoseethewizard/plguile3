@@ -2005,8 +2005,6 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 
 static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
 static void validate_and_save_module_source(SCM name, bool is_public, const char *source);
-static void save_module_source(SCM name, bool is_public, const char *source);
-static void after_save_module_xact_callback(XactEvent event, void *arg);
 
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
@@ -2093,6 +2091,16 @@ static SCM user_qualified_module_name(Oid user_oid, SCM names);
 static bool is_trusted_module_loaded(SCM names);
 static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
+static void save_module_source(SCM name, bool is_public, const char *source);
+static void validate_public_module(SCM name, const char *source);
+static void validate_user_module(Oid role_id, SCM name, const char *source);
+static void after_save_module_xact_callback(XactEvent event, void *arg);
+static SCM get_user_module(Oid role_id);
+static SCM get_module_submodules(SCM module);
+static void set_module_submodules(SCM module, SCM hash);
+static SCM load_user_submodule_names_from_storage(Oid role_id);
+static SCM load_and_validate_module(void *data);
+static SCM load_error_handler(void *data, SCM tag, SCM throw_args);
 
 SCM prepare_public_module_definition(void)
 {
@@ -2319,6 +2327,11 @@ void validate_and_save_module_source(SCM name, bool is_public, const char *sourc
 {
 	save_module_source(name, is_public, source);
 
+	if (is_public)
+		validate_public_module(name, source);
+	else
+		validate_user_module(GetUserId(), name, source);
+
 	RegisterXactCallback(after_save_module_xact_callback, NULL);
 }
 
@@ -2391,9 +2404,89 @@ void save_module_source(SCM name, bool is_public, const char *source)
 	RegisterXactCallback(after_save_module_xact_callback, NULL);
 }
 
+void validate_public_module(SCM name, const char *source)
+{
+}
+
+void validate_user_module(Oid role_id, SCM name, const char *source)
+{
+	SCM user_module = get_user_module(role_id);
+	SCM prior_user_submodules = get_module_submodules(user_module);
+	SCM user_submodule_names = load_user_submodule_names_from_storage(role_id);
+
+	set_module_submodules(user_module, scm_c_make_hash_table(0));
+
+	for (SCM names = user_submodule_names;
+	     names != SCM_EOL;
+	     names = SCM_CDR(names)) {
+
+		SCM name = user_qualified_module_name(role_id, SCM_CAR(names));
+		SCM error_handle = scm_cons(SCM_BOOL_F, SCM_EOL);
+
+		if (!is_trusted_module_loaded(name)) {
+
+			scm_internal_catch(
+				SCM_BOOL_T,
+				(scm_t_catch_body)load_and_validate_module,
+				(void *)name,
+				load_error_handler,
+				(void *)error_handle);
+
+			if (SCM_CAR(error_handle) != SCM_BOOL_F) {
+				set_module_submodules(user_module, prior_user_submodules);
+				elog(ERROR, "TODO");
+			}
+		}
+	}
+}
+
+SCM get_user_module(Oid role_id)
+{
+	return SCM_BOOL_F;
+}
+
+SCM get_module_submodules(SCM module)
+{
+	static SCM module_submodules_proc = SCM_UNDEFINED;
+
+	if (module_submodules_proc == SCM_UNDEFINED)
+		module_submodules_proc = eval_string_in_base_module("module-submodules");
+
+	return scm_call_1(module_submodules_proc, module);
+}
+
+void set_module_submodules(SCM module, SCM hash)
+{
+	static SCM set_module_submodules_proc = SCM_UNDEFINED;
+
+	if (set_module_submodules_proc == SCM_UNDEFINED)
+		set_module_submodules_proc = eval_string_in_base_module("set-module-submodules!");
+
+	scm_call_2(set_module_submodules_proc, module, hash);
+}
+
+SCM load_user_submodule_names_from_storage(Oid role_id)
+{
+	return SCM_BOOL_F;
+}
+
+SCM load_and_validate_module(void *data)
+{
+	return SCM_BOOL_F;
+}
+
+SCM load_error_handler(void *data, SCM tag, SCM throw_args)
+{
+	return SCM_BOOL_F;
+}
+
 void after_save_module_xact_callback(XactEvent event, void *arg)
 {
-	*shared_module_timestamp = time(NULL);
+	// Update the shared timestamp of the last module defined or updated,
+	// causing other backends to invalidate their compiled code caches.
+
+	if (event == XACT_EVENT_COMMIT || event == XACT_EVENT_PARALLEL_COMMIT)
+		*shared_module_timestamp = time(NULL);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
