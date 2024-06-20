@@ -439,7 +439,6 @@ static SCM make_tsposition_proc;
 static SCM make_tsquery_proc;
 static SCM make_tsvector_proc;
 static SCM multirange_ranges_proc;
-static SCM nested_ref_module_proc;
 static SCM normalize_tsvector_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
@@ -801,7 +800,6 @@ void init_guile(void)
 	is_int8_proc            = eval_string_in_base_module("int8-compatible?");
 	string_to_decimal_proc  = eval_string_in_base_module("string->decimal");
 
-	nested_ref_module_proc = eval_string_in_base_module("nested-ref-module");
 	symbol_to_string_proc  = eval_string_in_base_module("symbol->string");
 	trusted_module         = eval_string_in_base_module("(resolve-module '(trusted))");
 
@@ -2089,6 +2087,7 @@ SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
 static bool can_define_public_module(Oid role_id);
 static SCM user_qualified_module_name(Oid user_oid, SCM names);
 static bool is_trusted_module_loaded(SCM names);
+static SCM get_trusted_module(SCM names);
 static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
 static void save_module_source(SCM name, bool is_public, const char *source);
@@ -2098,7 +2097,8 @@ static void after_save_module_xact_callback(XactEvent event, void *arg);
 static SCM get_user_module(Oid role_id);
 static SCM get_module_submodules(SCM module);
 static void set_module_submodules(SCM module, SCM hash);
-static SCM load_user_submodule_names_from_storage(Oid role_id);
+static SCM load_qualified_module_names_from_storage(void);
+static SCM load_user_module_names_from_storage(Oid role_id);
 static SCM load_and_validate_module(void *data);
 static SCM load_error_handler(void *data, SCM tag, SCM throw_args);
 
@@ -2227,8 +2227,17 @@ SCM user_qualified_module_name(Oid user_oid, SCM names)
 
 bool is_trusted_module_loaded(SCM names)
 {
-	SCM exists = scm_apply_0(nested_ref_module_proc, scm_list_2(trusted_module, names));
-	return exists != SCM_BOOL_F;
+	return get_trusted_module(names) != SCM_BOOL_F;
+}
+
+SCM get_trusted_module(SCM names)
+{
+	static SCM nested_ref_module_proc = SCM_UNDEFINED;
+
+	if (nested_ref_module_proc == SCM_UNDEFINED)
+		nested_ref_module_proc = eval_string_in_base_module("nested-ref-module");
+
+	return scm_apply_0(nested_ref_module_proc, scm_list_2(trusted_module, names));
 }
 
 SCM resolve_trusted_public_module_name_from_storage(SCM names)
@@ -2337,13 +2346,12 @@ void validate_and_save_module_source(SCM name, bool is_public, const char *sourc
 
 void save_module_source(SCM name, bool is_public, const char *source)
 {
+	static Oid text_array_type_oid = InvalidOid;
+
 	SPIExecuteOptions options = {0};
 
  	ParamListInfo param_list;
 	ParamExternData *param_ptr;
-
-	SCM name_strs;
-	char *name_cstr;
 
 	const char *command =
 		"insert into plguile3.module (owner_id, name, src) "
@@ -2362,25 +2370,25 @@ void save_module_source(SCM name, bool is_public, const char *source)
 
 	param_ptr = (ParamExternData *)&param_list->params;
 
-	param_ptr->ptype = OIDOID;
+	param_ptr->ptype  = OIDOID;
 	param_ptr->isnull = is_public;
-	param_ptr->value = ObjectIdGetDatum(GetUserId());
+	param_ptr->value  = ObjectIdGetDatum(GetUserId());
 
 	param_ptr++;
 
-	param_ptr->ptype = TEXTOID;
+	if (text_array_type_oid == InvalidOid) {
+		text_array_type_oid = get_array_type(TEXTOID);
+	}
+
+	param_ptr->ptype  = text_array_type_oid;
 	param_ptr->isnull = false;
-
-	name_strs = scm_map(symbol_to_string_proc, name, SCM_EOL);
-	name_cstr = scm_to_locale_string(scm_string_join(name_strs, SCM_UNDEFINED, SCM_UNDEFINED));
-
-	param_ptr->value = CStringGetDatum(name_cstr);
+	param_ptr->value  = scm_to_datum_array(scm_vector(name), TEXTOID);
 
 	param_ptr++;
 
-	param_ptr->ptype = TEXTOID;
+	param_ptr->ptype  = TEXTOID;
 	param_ptr->isnull = false;
-	param_ptr->value = CStringGetDatum(source);
+	param_ptr->value  = CStringGetDatum(source);
 
 	options.allow_nonatomic = false;
 	options.tcount          = 1;
@@ -2388,8 +2396,6 @@ void save_module_source(SCM name, bool is_public, const char *source)
 	options.read_only       = false;
 
 	ret = SPI_execute_extended(command, &options);
-
-	free(name_cstr);
 
 	if (ret != SPI_OK_INSERT)
 		elog(ERROR, "spi_insert_error: %d", ret);
@@ -2406,17 +2412,45 @@ void save_module_source(SCM name, bool is_public, const char *source)
 
 void validate_public_module(SCM name, const char *source)
 {
+	SCM prior_modules = get_module_submodules(trusted_module);
+	SCM module_names = load_qualified_module_names_from_storage();
+
+	set_module_submodules(trusted_module, scm_c_make_hash_table(0));
+
+	for (SCM names = module_names;
+	     names != SCM_EOL;
+	     names = SCM_CDR(names)) {
+
+		SCM name = SCM_CAR(names);
+		SCM error_handle = scm_cons(SCM_BOOL_F, SCM_EOL);
+
+		if (!is_trusted_module_loaded(name)) {
+
+			scm_internal_catch(
+				SCM_BOOL_T,
+				(scm_t_catch_body)load_and_validate_module,
+				(void *)name,
+				load_error_handler,
+				(void *)error_handle);
+
+			if (SCM_CAR(error_handle) != SCM_BOOL_F) {
+				set_module_submodules(trusted_module, prior_modules);
+				elog(ERROR, "TODO");
+			}
+		}
+	}
+
 }
 
 void validate_user_module(Oid role_id, SCM name, const char *source)
 {
 	SCM user_module = get_user_module(role_id);
-	SCM prior_user_submodules = get_module_submodules(user_module);
-	SCM user_submodule_names = load_user_submodule_names_from_storage(role_id);
+	SCM prior_user_modules = get_module_submodules(user_module);
+	SCM user_module_names = load_user_module_names_from_storage(role_id);
 
 	set_module_submodules(user_module, scm_c_make_hash_table(0));
 
-	for (SCM names = user_submodule_names;
+	for (SCM names = user_module_names;
 	     names != SCM_EOL;
 	     names = SCM_CDR(names)) {
 
@@ -2433,7 +2467,7 @@ void validate_user_module(Oid role_id, SCM name, const char *source)
 				(void *)error_handle);
 
 			if (SCM_CAR(error_handle) != SCM_BOOL_F) {
-				set_module_submodules(user_module, prior_user_submodules);
+				set_module_submodules(user_module, prior_user_modules);
 				elog(ERROR, "TODO");
 			}
 		}
@@ -2442,7 +2476,7 @@ void validate_user_module(Oid role_id, SCM name, const char *source)
 
 SCM get_user_module(Oid role_id)
 {
-	return SCM_BOOL_F;
+	return get_trusted_module(user_qualified_module_name(role_id, SCM_EOL));
 }
 
 SCM get_module_submodules(SCM module)
@@ -2465,9 +2499,108 @@ void set_module_submodules(SCM module, SCM hash)
 	scm_call_2(set_module_submodules_proc, module, hash);
 }
 
-SCM load_user_submodule_names_from_storage(Oid role_id)
+SCM load_qualified_module_names_from_storage(void)
 {
-	return SCM_BOOL_F;
+	const char *command = "select owner_id, name from module";
+
+	int ret;
+
+	SCM names = SCM_EOL;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	ret = SPI_execute(command, true, 0);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	if (SPI_tuptable && SPI_processed) {
+
+		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
+		Oid type_oid = tuple_desc->attrs[1].atttypid;
+
+		for (long row = 0; row < SPI_tuptable->numvals; row++) {
+
+			HeapTuple tuple = SPI_tuptable->vals[row];
+			bool owner_is_null, name_is_null;
+		    Datum owner_datum = SPI_getbinval(tuple, tuple_desc, 1, &owner_is_null);
+			Datum name_datum = SPI_getbinval(tuple, tuple_desc, 2, &name_is_null);
+
+			SCM base_name = scm_vector_to_list(datum_array_to_scm(name_datum, type_oid));
+			SCM qualified_name;
+
+			if (owner_is_null) {
+				qualified_name = scm_cons(public_symbol, base_name);
+			}
+			else {
+				Oid owner_id = DatumGetObjectId(owner_datum);
+				qualified_name = user_qualified_module_name(owner_id, base_name);
+			}
+			names = scm_cons(qualified_name, names);
+		}
+	}
+
+	SPI_finish();
+
+	return names;
+}
+
+SCM load_user_module_names_from_storage(Oid role_id)
+{
+	SPIExecuteOptions options = {0};
+
+ 	ParamListInfo param_list;
+	ParamExternData *param_ptr;
+
+	const char *command = "select name from module where owner_id = $1";
+
+	int ret;
+
+	SCM names = SCM_EOL;
+
+	ret = SPI_connect();
+
+	if (ret != SPI_OK_CONNECT)
+		elog(ERROR, "spi_connect_error: %d", ret);
+
+	param_list = makeParamList(1);
+
+	param_ptr = (ParamExternData *)&param_list->params;
+
+	param_ptr->ptype = OIDOID;
+	param_ptr->isnull = role_id == InvalidOid;
+	param_ptr->value = ObjectIdGetDatum(role_id);
+
+	options.allow_nonatomic = false;
+	options.params          = param_list;
+	options.read_only       = true;
+
+	ret = SPI_execute_extended(command, &options);
+
+	if (ret != SPI_OK_SELECT)
+		elog(ERROR, "spi_select_error: %d", ret);
+
+	if (SPI_tuptable && SPI_processed) {
+
+		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
+		Oid type_oid = tuple_desc->attrs[0].atttypid;
+
+		for (long row = 0; row < SPI_tuptable->numvals; row++) {
+
+			HeapTuple tuple = SPI_tuptable->vals[row];
+			bool is_null;
+			Datum name_datum = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
+			SCM name = scm_vector_to_list(datum_array_to_scm(name_datum, type_oid));
+			names = scm_cons(name, names);
+		}
+	}
+
+	SPI_finish();
+
+	return names;
 }
 
 SCM load_and_validate_module(void *data)
