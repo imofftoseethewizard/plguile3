@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.9] - 2024-06-27
+
+This version includes a first pass at a curated list of built-in
+module bindings.
+
 ## [0.21.8] - 2024-06-22
 
 This version completes the module validation logic.  There are no
