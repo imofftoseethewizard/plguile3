@@ -3,28 +3,30 @@
 (define-module (trusted))
 
 (define-module (plguile3 base)
+  #:use-module (plguile3 primitives)
   #:use-module (ice-9 hash-table)
   #:use-module (ice-9 sandbox)
+  #:use-module (rnrs io ports)
   #:use-module (srfi srfi-1)  ; fold-right
   #:use-module (srfi srfi-9)  ; define-record-type
   #:use-module (srfi srfi-11) ; let-values
   #:use-module (srfi srfi-19) ; date, time, etc (used in plguile3.c)
-  #:export (%cursor-open
-            %execute
-            %execute-with-receiver
-            %fetch
-            %move
-            notice
-            stop-command-execution
-            unbox-datum
-            warning
-            start-transaction
-            commit
-            commit-and-chain
-            rollback
-            rollback-and-chain
+  #:re-export (%cursor-open
+               %execute
+               %execute-with-receiver
+               %fetch
+               %move
+               notice
+               stop-command-execution
+               unbox-datum
+               warning
+               start-transaction
+               commit
+               commit-and-chain
+               rollback
+               rollback-and-chain)
 
-            execute
+  #:export (execute
             cursor-open
             fetch
 
@@ -709,8 +711,39 @@
        (<= x 9223372036854775807)))
 
 (define (apply-with-limits proc args time-limit allocation-limit)
-  (let ((thunk (lambda () (apply proc args))))
-    (call-with-time-and-allocation-limits time-limit allocation-limit thunk)))
+  (parameterize ((current-input-port   default-input-port)
+                 (current-output-port  default-output-port)
+                 (current-error-port   default-error-port)
+                 (current-warning-port default-warning-port))
+    (let ((thunk (lambda () (apply proc args))))
+      (call-with-time-and-allocation-limits time-limit allocation-limit thunk))))
+
+;; (define (apply-with-limits proc args time-limit allocation-limit)
+;;   (let ((thunk (lambda () (apply proc args))))
+;;     (call-with-time-and-allocation-limits time-limit allocation-limit thunk)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Output Ports
+;;
+
+(define (make-log-output-port level fmt)
+  (let* ((port-id (string-append "log-" (symbol->string level) "-port"))
+         (output-handler
+         (case level
+           ((info) notice)
+           ((warning error) warning)
+           (else
+            (error "make-log-output-port: level must be one of 'info, 'warning, or 'error." ))))
+         (write! (lambda (str idx count)
+                    (output-handler fmt (substring str idx (+ idx count)))
+                    count)))
+    (make-custom-textual-output-port port-id write! #f #f #f)))
+
+(define default-input-port   (%make-void-port OPEN_READ))
+(define default-output-port  (make-log-output-port 'info  "%"))
+(define default-warning-port (make-log-output-port 'warning "%"))
+(define default-error-port   (make-log-output-port 'error   "plguile3 ERROR: %"))
 
 (define-syntax define-public-module
   (syntax-rules ()
@@ -755,12 +788,32 @@
                    #:module module
                    #:sever-module? #f))
 
-
 (define (re-export-curated-builtin-module name)
   (let ((m (current-module))
-        (bindings (hash-ref curated-bindings name)))
-    (module-use-interfaces! m (list (resolve-interface name #:select bindings)))
-    (module-export! m bindings)))
+        (bindings (hash-ref curated-bindings name))
+        (adjust-module (hash-ref curated-module-adjustments name (lambda (m) m))))
+
+    (module-use-interfaces! m (list (resolve-builtin-interface name bindings)))
+
+    (module-export! m bindings)
+    (adjust-module m)
+    m))
+
+(define (resolve-builtin-interface name bindings)
+  (dynamic-wind
+    (lambda ()
+      (set! (@ (guile) define-module*) original-define-module*))
+    (lambda ()
+      (resolve-interface name #:select bindings))
+    (lambda ()
+      (set! (@ (guile) define-module*) define-trusted-module*))))
+
+(define curated-module-adjustments
+  (alist->hash-table
+   `(((srfi srfi-64)
+      ,(lambda (m)
+         ;; test-log-to-file defaults to true
+         (set! (@ (srfi srfi-64) test-log-to-file) #f))))))
 
 (define curated-bindings
   (alist->hash-table
@@ -778,8 +831,26 @@
       atomic-box?
       make-atomic-box)
 
-     ;; ice-9 binary-ports -- seems safe, but would require other port
-     ;; functions to use
+     ((ice-9 binary-ports)
+      call-with-input-bytevector
+      call-with-output-bytevector
+      eof-object
+      get-bytevector-all
+      get-bytevector-n
+      get-bytevector-n!
+      get-bytevector-some
+      get-bytevector-some!
+      get-string-n!
+      get-u8
+      lookahead-u8
+      make-custom-binary-input-port
+      make-custom-binary-input/output-port
+      make-custom-binary-output-port
+      open-bytevector-input-port
+      open-bytevector-output-port
+      put-bytevector
+      put-u8
+      unget-bytevector)
 
      ((ice-9 calling)
       let-with-configuration-getter-and-setter
@@ -906,8 +977,8 @@
       warning?
       with-exception-handler)
 
-     ;; TODO (ice-9 format) format references current-output-port,
-     ;; need wrapper to block that code path
+     ((ice-9 format)
+       format)
 
      ((ice-9 futures)
       future
@@ -1104,13 +1175,6 @@
       pure-funcq)
 
      ((ice-9 ports)
-      ;; todo replace default current ports with pg-appropriate versions
-      ;; set these up on transaction start
-      ;; input: closed
-      ;; output: elog notice
-      ;; error: elog warning
-      ;; warning: elog warning
-      ;; load: closed
       %make-void-port
       %port-property
       %set-port-property!
@@ -2391,7 +2455,6 @@
       rotate-bit-field)
 
      ((srfi srfi-64)
-      ;; todo test-log-to-file replacement
       test-apply
       test-approximate
       test-assert
@@ -2405,7 +2468,6 @@
       test-expect-fail
       test-group
       test-group-with-cleanup
-      ;;test-log-to-file
       test-match-all
       test-match-any
       test-match-name
@@ -2899,9 +2961,7 @@
       uri-reference?
       uri-scheme
       uri-userinfo
-      uri?)
-
-     )))
+      uri?))))
 
 (define exception-bindings
   '(()))

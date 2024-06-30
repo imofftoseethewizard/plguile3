@@ -636,11 +636,17 @@ void init_type_conversion(void)
 // Guile Initialization
 //
 
+static void define_primitives_module(void);
+static void init_primitives_module(void *unused);
 static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
+
+static SCM primitives_module = SCM_UNDEFINED;
 
 void init_guile(void)
 {
 	scm_init_guile();
+
+	define_primitives_module();
 
 	// Load plguile3.scm
 	base_module = load_base_module();
@@ -650,27 +656,6 @@ void init_guile(void)
 
 	module_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(module_cache);
-
-	define_primitive("%prepare-public-module-definition",   0, 0, 0, (SCM (*)()) prepare_public_module_definition);
-	define_primitive("%begin-define-module",                1, 0, 0, (SCM (*)()) begin_define_module);
-	define_primitive("%resolve-use-module-name",            1, 0, 0, (SCM (*)()) resolve_use_module_name);
-	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
-	define_primitive("%resolve-trusted-public-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_public_module_name);
-
-	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
-	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
-	define_primitive("%execute-with-receiver", 4, 0, 0, (SCM (*)()) spi_execute_with_receiver);
-	define_primitive("%fetch",                 3, 0, 0, (SCM (*)()) spi_cursor_fetch);
-	define_primitive("%move",                  3, 0, 0, (SCM (*)()) spi_cursor_move);
-	define_primitive("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
-	define_primitive("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
-	define_primitive("notice",                 1, 0, 0, (SCM (*)()) raise_notice);
-	define_primitive("warning",                1, 0, 0, (SCM (*)()) raise_warning);
-	define_primitive("start-transaction",      0, 0, 0, (SCM (*)()) spi_start_transaction);
-	define_primitive("commit",                 0, 0, 0, (SCM (*)()) spi_commit);
-	define_primitive("commit-and-chain",       0, 0, 0, (SCM (*)()) spi_commit_and_chain);
-	define_primitive("rollback",               0, 0, 0, (SCM (*)()) spi_rollback);
-	define_primitive("rollback-and-chain",     0, 0, 0, (SCM (*)()) spi_rollback_and_chain);
 
 	/* Procedures defined by define-record-type are inlinable, meaning that instead of being
 	   procedures, they are actually syntax transformers.  In non-call contexts, they refer to
@@ -923,10 +908,41 @@ void init_guile(void)
 	scm_gc_protect_object(stop_marker);
 }
 
+void define_primitives_module(void)
+{
+	scm_c_define_module("plguile3 primitives", init_primitives_module, NULL);
+}
+
+void init_primitives_module(void *unused)
+{
+	primitives_module = scm_current_module();
+
+	define_primitive("%prepare-public-module-definition",   0, 0, 0, (SCM (*)()) prepare_public_module_definition);
+	define_primitive("%begin-define-module",                1, 0, 0, (SCM (*)()) begin_define_module);
+	define_primitive("%resolve-use-module-name",            1, 0, 0, (SCM (*)()) resolve_use_module_name);
+	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
+	define_primitive("%resolve-trusted-public-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_public_module_name);
+
+	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
+	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
+	define_primitive("%execute-with-receiver", 4, 0, 0, (SCM (*)()) spi_execute_with_receiver);
+	define_primitive("%fetch",                 3, 0, 0, (SCM (*)()) spi_cursor_fetch);
+	define_primitive("%move",                  3, 0, 0, (SCM (*)()) spi_cursor_move);
+	define_primitive("stop-command-execution", 0, 0, 0, (SCM (*)()) stop_command_execution);
+	define_primitive("unbox-datum",            1, 0, 0, (SCM (*)()) unbox_datum);
+	define_primitive("notice",                 1, 0, 0, (SCM (*)()) raise_notice);
+	define_primitive("warning",                1, 0, 0, (SCM (*)()) raise_warning);
+	define_primitive("start-transaction",      0, 0, 0, (SCM (*)()) spi_start_transaction);
+	define_primitive("commit",                 0, 0, 0, (SCM (*)()) spi_commit);
+	define_primitive("commit-and-chain",       0, 0, 0, (SCM (*)()) spi_commit_and_chain);
+	define_primitive("rollback",               0, 0, 0, (SCM (*)()) spi_rollback);
+	define_primitive("rollback-and-chain",     0, 0, 0, (SCM (*)()) spi_rollback_and_chain);
+}
 
 void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
 {
-	scm_c_module_define(base_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
+	scm_c_module_define(primitives_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
+	scm_c_export(name);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1616,7 +1632,8 @@ SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args)
 
 		SCM port = scm_open_output_string();
 
-		scm_display_backtrace(stack, port, SCM_INUM1, scm_from_int(frame_count));
+		// scm_display_backtrace(stack, port, SCM_INUM1, scm_from_int(frame_count));
+		// scm_display_backtrace(stack, port, SCM_I_MAKINUM(0), scm_from_int(frame_count));
 
 		d->backtrace = scm_get_output_string(port);
 		scm_close_port(port);
@@ -3063,8 +3080,6 @@ SCM get_prelude_src(int64 prelude_id)
 
 	return src;
 }
-
-
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //

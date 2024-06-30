@@ -248,27 +248,27 @@ select throws_ok(
 
 select throws_ok(
   'select f_x_bad_decimal_1()',
-  '%exception: ((invalid-decimal #:digits "a" #:scale 0))',
+  e'%exception: ((invalid-decimal #:digits "a" #:scale 0))\n',
   'decimal: bad decimal 1');
 
 select throws_ok(
   'select f_x_bad_decimal_2()',
-  '%exception: ((invalid-decimal #:digits 0.5 #:scale 0))',
+  e'%exception: ((invalid-decimal #:digits 0.5 #:scale 0))\n',
   'decimal: bad decimal 2');
 
 select throws_ok(
   'select f_x_bad_decimal_3()',
-  '%exception: ((invalid-decimal #:digits 5 #:scale -1))',
+  e'%exception: ((invalid-decimal #:digits 5 #:scale -1))\n',
   'decimal: bad decimal 3');
 
 select throws_ok(
   'select f_x_bad_decimal_4()',
-  '%exception: ((invalid-decimal #:digits 5 #:scale 0.2))',
+  e'%exception: ((invalid-decimal #:digits 5 #:scale 0.2))\n',
   'decimal: bad decimal 4');
 
 select throws_ok(
   'select f_x_bad_decimal_5()',
-  '%exception: ((invalid-decimal #:digits 5 #:scale "2"))',
+  e'%exception: ((invalid-decimal #:digits 5 #:scale "2"))\n',
   'decimal: bad decimal 5');
 
 --------------------------------------------------------------------------------
@@ -1259,12 +1259,12 @@ $$ language guile3 stable;
 
 select throws_ok(
   'select f_x_execute_insert_immutable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute: immutable cannot change the db');
 
 select throws_ok(
   'select f_x_execute_insert_stable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute: stable cannot change the db');
 
 create function f_x_execute_with_args_insert_immutable() returns int as $$
@@ -1277,12 +1277,12 @@ $$ language guile3 stable;
 
 select throws_ok(
   'select f_x_execute_with_args_insert_immutable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute with args: immutable cannot change the db');
 
 select throws_ok(
   'select f_x_execute_with_args_insert_stable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute with args: stable cannot change the db');
 
 create function f_x_execute_with_receiver_insert_immutable() returns int as $$
@@ -1297,12 +1297,12 @@ $$ language guile3 stable;
 
 select throws_ok(
   'select f_x_execute_with_receiver_insert_immutable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute with receiver: immutable cannot change the db');
 
 select throws_ok(
   'select f_x_execute_with_receiver_insert_stable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute with receiver: stable cannot change the db');
 
 create function f_x_cursor_open_insert_immutable() returns int as $$
@@ -1317,12 +1317,12 @@ $$ language guile3 stable;
 
 select throws_ok(
   'select f_x_cursor_open_insert_immutable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute with receiver: immutable cannot change the db');
 
 select throws_ok(
   'select f_x_cursor_open_insert_stable()',
-  'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)',
+  e'execute-error: ("0A000" "INSERT is not allowed in a non-volatile function" #f #f)\n',
   'execute with receiver: stable cannot change the db');
 
 create function f_execute_with_receiver_simple() returns int as $$
@@ -1368,22 +1368,22 @@ $$ language guile3;
 
 select throws_ok(
   'select f_x_execute_with_receiver_wrong_type_command()',
-  'wrong-argument-type: (command "string" 5)',
+  e'wrong-argument-type: (command "string" 5)\n',
   'execute_with_receiver: wrong_type_command');
 
 select throws_ok(
   'select f_x_execute_with_receiver_wrong_type_args_1()',
-  'wrong-argument-type: (args "list" #f)',
+  e'wrong-argument-type: (args "list" #f)\n',
   'execute_with_receiver: wrong_type_args_1');
 
 select throws_ok(
   'select f_x_execute_with_receiver_wrong_type_args_2()',
-  'wrong-argument-type: (args "list" (1 . 2))',
+  e'wrong-argument-type: (args "list" (1 . 2))\n',
   'execute_with_receiver: wrong_type_args_2');
 
 select throws_ok(
   'select f_x_execute_with_receiver_wrong_type_receiver()',
-  'wrong-argument-type: (receiver "procedure" moo-cow)',
+  e'wrong-argument-type: (receiver "procedure" moo-cow)\n',
   'execute_with_receiver: wrong_type_receiver');
 
 create function f_cursor_simple() returns text as $$
@@ -1410,17 +1410,17 @@ $$ language guile3;
 
 select throws_ok(
   'select f_x_cursor_wrong_type_command()',
-  'wrong-argument-type: (command "string" 5)',
+  e'wrong-argument-type: (command "string" 5)\n',
   'cursor_open: wrong_type_command');
 
 select throws_ok(
   'select f_x_cursor_wrong_type_args_1()',
-  'wrong-argument-type: (args "list" #f)',
+  e'wrong-argument-type: (args "list" #f)\n',
   'cursor_open: wrong_type_args_1');
 
 select throws_ok(
   'select f_x_cursor_wrong_type_args_2()',
-  'wrong-argument-type: (args "list" (1 . 2))',
+  e'wrong-argument-type: (args "list" (1 . 2))\n',
   'cursor_open: wrong_type_args_2');
 
 create function f_tr_new() returns trigger as 'new' language guile3;
@@ -1488,7 +1488,7 @@ $$ language guile3;
 
 select throws_ok(
   'select f_x_nested()',
-  'execute-error: ("P0001" "nested error" #f #f)',
+  e'execute-error: ("P0001" "nested error" #f #f)\n',
   'nested error handling');
 
 select throws_ok(
