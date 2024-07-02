@@ -329,6 +329,7 @@ static SCM begin_define_module(SCM args);
 static SCM resolve_use_module_name(SCM names);
 static SCM resolve_trusted_module_name(SCM args);
 static SCM resolve_trusted_public_module_name(SCM args);
+static SCM load_trusted_module(SCM name);
 static SCM spi_cursor_open(SCM command, SCM args, SCM count, SCM hold, SCM name, SCM scroll);
 static SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count);
 static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
@@ -595,15 +596,18 @@ void _PG_init(void)
 	init_guile();
 }
 
-static pg_time_t *shared_module_timestamp;
+static pg_time_t *shared_last_module_timestamp;
+static pg_time_t local_last_module_timestamp;
 
 void init_shared_memory(void)
 {
 	bool found;
-	shared_module_timestamp = ShmemInitStruct("plguile3", sizeof(pg_time_t), &found);
+	shared_last_module_timestamp = ShmemInitStruct("plguile3", sizeof(pg_time_t), &found);
 
 	if (!found)
-		*shared_module_timestamp = time(NULL);
+		*shared_last_module_timestamp = time(NULL);
+
+	local_last_module_timestamp = time(NULL);
 }
 
 void init_type_conversion(void)
@@ -639,8 +643,6 @@ void init_type_conversion(void)
 static void define_primitives_module(void);
 static void init_primitives_module(void *unused);
 static void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn);
-
-static SCM primitives_module = SCM_UNDEFINED;
 
 void init_guile(void)
 {
@@ -913,6 +915,9 @@ void define_primitives_module(void)
 	scm_c_define_module("plguile3 primitives", init_primitives_module, NULL);
 }
 
+static SCM primitives_module = SCM_UNDEFINED;
+static SCM primitive_names = SCM_EOL;
+
 void init_primitives_module(void *unused)
 {
 	primitives_module = scm_current_module();
@@ -922,6 +927,7 @@ void init_primitives_module(void *unused)
 	define_primitive("%resolve-use-module-name",            1, 0, 0, (SCM (*)()) resolve_use_module_name);
 	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
 	define_primitive("%resolve-trusted-public-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_public_module_name);
+	define_primitive("%load-trusted-module",                1, 0, 0, (SCM (*)()) load_trusted_module);
 
 	define_primitive("%cursor-open",           6, 0, 0, (SCM (*)()) spi_cursor_open);
 	define_primitive("%execute",               3, 0, 0, (SCM (*)()) spi_execute);
@@ -937,12 +943,17 @@ void init_primitives_module(void *unused)
 	define_primitive("commit-and-chain",       0, 0, 0, (SCM (*)()) spi_commit_and_chain);
 	define_primitive("rollback",               0, 0, 0, (SCM (*)()) spi_rollback);
 	define_primitive("rollback-and-chain",     0, 0, 0, (SCM (*)()) spi_rollback_and_chain);
+
+	scm_module_export(primitives_module, primitive_names);
+	primitives_module = SCM_UNDEFINED;
+	primitive_names = SCM_EOL;
 }
 
 void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fcn)
 {
-	scm_c_module_define(primitives_module, name, scm_c_make_gsubr(name, req, opt, rst, fcn));
-	scm_c_export(name);
+	SCM name_sym = scm_from_utf8_symbol(name);
+	scm_module_define(primitives_module, name_sym, scm_c_make_gsubr(name, req, opt, rst, fcn));
+	primitive_names = scm_cons(name_sym, primitive_names);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -953,6 +964,9 @@ void define_primitive(const char *name, int req, int opt, int rst, scm_t_subr fc
 PGDLLEXPORT Datum plguile3_compile(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(plguile3_compile);
 
+static void flush_module_cache(void);
+static void unload_trusted_modules(void);
+static void flush_func_cache(void);
 static SCM compile_and_cache_proc(HeapTuple proc_tuple);
 static SCM find_or_create_module_for_role(Oid role_oid);
 static SCM untrusted_eval(SCM expr, SCM env);
@@ -964,6 +978,12 @@ Datum plguile3_compile(PG_FUNCTION_ARGS)
 
 	if (!HeapTupleIsValid(proc_tuple))
 		elog(ERROR, "plguile3_compile: Failed to fetch function details.");
+
+	if (*shared_last_module_timestamp > local_last_module_timestamp) {
+		flush_func_cache();
+		flush_module_cache();
+		unload_trusted_modules();
+	}
 
 	compile_and_cache_proc(proc_tuple);
 
@@ -990,6 +1010,14 @@ SCM hash_proc_source(HeapTuple proc_tuple)
 	Datum src_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
 	char *src = TextDatumGetCString(src_datum);
 	return scm_from_uint64(hash_bytes_extended((unsigned char *)src, strlen(src), 0));
+}
+
+void flush_func_cache(void)
+{
+	SCM old_func_cache = func_cache;
+	func_cache = scm_c_make_hash_table(16);
+	scm_gc_protect_object(func_cache);
+	scm_gc_unprotect_object(old_func_cache);
 }
 
 void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
@@ -1245,6 +1273,12 @@ PG_FUNCTION_INFO_V1(plguile3_call);
 
 Datum plguile3_call(PG_FUNCTION_ARGS)
 {
+	if (*shared_last_module_timestamp > local_last_module_timestamp) {
+		flush_func_cache();
+		flush_module_cache();
+		unload_trusted_modules();
+	}
+
 	if (CALLED_AS_TRIGGER(fcinfo))
 		return call_trigger(fcinfo);
 
@@ -2053,6 +2087,12 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 		defining_public_module = false;
 	}
 
+	if (*shared_last_module_timestamp > local_last_module_timestamp) {
+		flush_func_cache();
+		flush_module_cache();
+		unload_trusted_modules();
+	}
+
 	PG_TRY();
 	{
 		eval_source_text(source_text);
@@ -2129,10 +2169,19 @@ static void set_module_submodules(SCM module, SCM hash);
 static SCM load_public_module_names_from_storage(void);
 static SCM load_user_module_names_from_storage(Oid role_id);
 static SCM load_and_validate_module(void *data);
-static void load_module(SCM name);
 static const char *load_module_source_from_storage(SCM name);
 static SCM load_error_handler(void *data, SCM tag, SCM throw_args);
 static Oid get_text_array_type_oid(void);
+
+void unload_trusted_modules(void)
+{
+	static SCM unload_trusted_modules_proc = SCM_UNDEFINED;
+
+	if (unload_trusted_modules_proc == SCM_UNDEFINED)
+		unload_trusted_modules_proc = scm_c_module_lookup(base_module, "unload-trusted-modules");
+
+	scm_call_0(unload_trusted_modules_proc);
+}
 
 SCM prepare_public_module_definition(void)
 {
@@ -2323,7 +2372,11 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	Datum arg_vals[2];
 
 	const char *command =
-		"select owner_id from plguile3.module where name = $1 and (owner_id is null or owner_id = $2) order by owner_id desc nulls last";
+		"select owner_id from plguile3.module "
+		"where "
+		"  name = $1 "
+		"  and (owner_id is null or owner_id = $2) "
+		"order by owner_id desc nulls last";
 
 	SCM resolved_names = SCM_BOOL_F;
 
@@ -2638,7 +2691,7 @@ SCM load_user_module_names_from_storage(Oid role_id)
 
 SCM load_and_validate_module(void *data)
 {
-	load_module((SCM)data);
+	load_trusted_module((SCM)data);
 	return SCM_UNDEFINED;
 }
 
@@ -2653,10 +2706,10 @@ void after_save_module_xact_callback(XactEvent event, void *arg)
 	// causing other backends to invalidate their compiled code caches.
 
 	if (event == XACT_EVENT_COMMIT || event == XACT_EVENT_PARALLEL_COMMIT)
-		*shared_module_timestamp = time(NULL);
+		*shared_last_module_timestamp = time(NULL);
 }
 
-void load_module(SCM name)
+SCM load_trusted_module(SCM name)
 {
 	const char *source_text = load_module_source_from_storage(name);
 
@@ -2674,6 +2727,8 @@ void load_module(SCM name)
 		     scm_to_string(name));
 	}
 	PG_END_TRY();
+
+	return SCM_UNDEFINED;
 }
 
 const char *load_module_source_from_storage(SCM name)
@@ -2817,6 +2872,14 @@ SCM find_or_create_module_for_role(Oid role_oid)
 	}
 
 	return module;
+}
+
+void flush_module_cache(void)
+{
+	SCM old_module_cache = module_cache;
+	module_cache = scm_c_make_hash_table(16);
+	scm_gc_protect_object(module_cache);
+	scm_gc_unprotect_object(old_module_cache);
 }
 
 void flush_module_cache_for_role(Oid role_oid)

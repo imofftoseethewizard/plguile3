@@ -163,6 +163,29 @@
             cursor?
             cursor-name))
 
+(define try-load-trusted-module
+  (let ((try-load-module try-load-module))
+    (lambda (name version)
+      (if (eq? (car name) 'trusted)
+          (%load-trusted-module name)
+          (try-load-module name version)))))
+
+(set! (@@ (guile) try-load-module) try-load-trusted-module)
+
+(define-syntax-rule (safe-@ module name)
+  (let ((resolved-name (%resolve-trusted-module-name 'module)))
+    (unless resolved-name
+      (error (format #f "Module named ~s does not exist" 'module)))
+    (let* ((m (resolve-module resolved-name #f))
+           (public-i (module-public-interface m))
+           (variable (module-variable public-i 'name)))
+      (unless (and variable (variable-bound? variable))
+        (error "No variable named" 'name 'in 'module))
+      (variable-ref variable))))
+
+(define (unload-trusted-modules)
+  (set-module-submodules! (resolve-module '(trusted) #f) (make-hash-table)))
+
 (define (flush-function-cache h ids)
   (let ((new (make-hash-table)))
     (hash-for-each
@@ -718,10 +741,6 @@
     (let ((thunk (lambda () (apply proc args))))
       (call-with-time-and-allocation-limits time-limit allocation-limit thunk))))
 
-;; (define (apply-with-limits proc args time-limit allocation-limit)
-;;   (let ((thunk (lambda () (apply proc args))))
-;;     (call-with-time-and-allocation-limits time-limit allocation-limit thunk)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;; Output Ports
@@ -775,11 +794,15 @@
     (lambda ()
       (set! (@ (guile) define-module*) define-trusted-module*))
     (lambda ()
-      (eval-in-sandbox exp
-                       #:time-limit time-limit
-                       #:allocation-limit allocation-limit
-                       #:module module
-                       #:sever-module? #f))
+      (parameterize ((current-input-port   default-input-port)
+                     (current-output-port  default-output-port)
+                     (current-error-port   default-error-port)
+                     (current-warning-port default-warning-port))
+        (eval-in-sandbox exp
+                         #:time-limit time-limit
+                         #:allocation-limit allocation-limit
+                         #:module module
+                         #:sever-module? #f)))
     (lambda ()
       (set! (@ (guile) define-module*) original-define-module*))))
 

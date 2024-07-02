@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.11] - 2024-07-02
+
+This version includes several small changes:
+
+- adds default ports which send their output to Postgres' elog function
+- flushes all module and compiled code caches in all backends when a
+  module changes
+- module loading in both `#:use-module` parameters to `define-module`
+  and `use-module` forms will now load from storage when the module
+  name begins with `'trusted`.
+
 ## [0.21.10] - 2024-06-30
 
 This version factors out primitive definitions into a separate module
