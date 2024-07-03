@@ -26,7 +26,12 @@
                rollback
                rollback-and-chain)
 
-  #:export (execute
+  #:export ((safe-@ . @)
+            define-public-module
+            re-export-curated-builtin-module
+            copy-module
+
+            execute
             cursor-open
             fetch
 
@@ -779,15 +784,29 @@
                                     (result (list qualified-name)))
                            (if (null? args)
                                (reverse result)
-                               (if (eq? #:use-module (car args))
-                                   (loop (cddr args)
-                                         (cons (%resolve-use-module-name (cadr args))
-                                               (cons #:use-module result)))
-                                   (loop (cddr args)
-                                         (cons (cadr args)
-                                               (cons (car args)
-                                                     result))))))))
-    (apply original-define-module* processed-args)))
+                               (case (car args)
+
+                                 ;; resolve (foo bar) to (trusted <role-id> foo bar) or
+                                 ;; (trusted public foo bar) or throw an error
+                                 ((#:use-module)
+                                  (loop (cddr args)
+                                        (cons (%resolve-use-module-name (cadr args))
+                                              (cons #:use-module
+                                                    result))))
+
+                                 ;; ignore #:pure and #:declarative
+                                 ((#:pure #:declarative)
+                                  (loop (cddr args) result))
+
+                                 (else
+                                  (loop (cddr args)
+                                        (cons (cadr args)
+                                              (cons (car args)
+                                                    result)))))))))
+
+    (apply original-define-module* (append processed-args
+                                           (list #:pure #t
+                                                 #:use-module (plguile3 sandbox-base))))))
 
 (define (eval-with-limits exp module time-limit allocation-limit)
   (dynamic-wind
@@ -811,12 +830,50 @@
                    #:module module
                    #:sever-module? #f))
 
-(define (re-export-curated-builtin-module name)
-  (let ((m (current-module))
-        (bindings (hash-ref curated-bindings name))
-        (adjust-module (hash-ref curated-module-adjustments name (lambda (m) m))))
+(define (hash-table-copy h)
+  (let ((result (make-hash-table 0)))
+    (hash-for-each (lambda (k v)
+                     (hashq-set! result k v))
+                   h)
+    result))
 
-    (module-use-interfaces! m (list (resolve-builtin-interface name bindings)))
+(define (module-copy m)
+  (module-constructor (hash-table-copy (module-obarray m))
+                      (module-uses m)
+                      (module-binder m)
+                      ;; declarative
+                      #f
+                      macroexpand
+                      ;; name
+                      #f
+                      (module-kind m)
+                      ;; duplicate-handlers
+                      #f
+                      (hash-table-copy (module-import-obarray m))
+                      ;; observers
+                      '()
+                      ;; weak observers
+                      (make-weak-key-hash-table)
+                      ;; version
+                      #f
+                      (hash-table-copy (module-submodules m))
+                      ;; submodule-binder
+                      #f
+                      (let ((public-i (module-public-interface m)))
+                        (and public-i
+                             (module-copy public-i)))
+                      ;; filename next-unique-id
+                      #f 0
+                      (hash-table-copy (module-replacements m))
+                      ;; inlinable exports
+                      #f))
+
+(define-syntax-rule (re-export-curated-builtin-module name)
+  (let ((m (current-module))
+        (bindings (hash-ref curated-bindings 'name))
+        (adjust-module (hash-ref curated-module-adjustments 'name (lambda (m) m))))
+
+    (module-use-interfaces! m (list (resolve-builtin-interface 'name bindings)))
 
     (module-export! m bindings)
     (adjust-module m)
@@ -1866,6 +1923,32 @@
      ((srfi srfi-2)
       and-let*)
 
+     ((srfi srfi-4)
+      f32vector-copy
+      f32vector-copy!
+      f64vector-copy
+      f64vector-copy!
+      list->c32vector
+      list->c64vector
+      make-c32vector
+      make-c64vector
+      s16vector-copy
+      s16vector-copy!
+      s32vector-copy
+      s32vector-copy!
+      s64vector-copy
+      s64vector-copy!
+      s8vector-copy
+      s8vector-copy!
+      u16vector-copy
+      u16vector-copy!
+      u32vector-copy
+      u32vector-copy!
+      u64vector-copy
+      u64vector-copy!
+      u8vector-copy
+      u8vector-copy!)
+
      ((srfi srfi-4 gnu)
       any->c32vector
       any->c64vector
@@ -1899,10 +1982,6 @@
       f32vector-copy!
       f64vector-copy
       f64vector-copy!
-      list->c32vector
-      list->c64vector
-      make-c32vector
-      make-c64vector
       make-srfi-4-vector
       s16vector-copy
       s16vector-copy!
@@ -3171,8 +3250,15 @@
 
 (define plguile3-bindings
   '(((guile)
+     define-module
+     use-modules
      with-exception-handler)
+
     ((plguile3 base)
+     @
+     define-public-module
+     re-export-curated-builtin-module
+
      %cursor-open
      %execute
      %execute-with-receiver
@@ -3332,3 +3418,8 @@
           srfi-19-bindings ; dates and times
           srfi-43-bindings ; vectors
           plguile3-bindings))
+
+(module-define-submodule! (resolve-module '(plguile3) #f)
+                          'sandbox-base
+                          (make-sandbox-module (append all-pure-and-impure-bindings
+                                                       plguile3-bindings)))

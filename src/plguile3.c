@@ -2846,6 +2846,8 @@ static void flush_module_cache_for_role(Oid role_oid);
 static SCM get_cached_module(Oid role_oid);
 static int64 get_cached_prelude_id(Oid role_oid);
 static SCM prepare_sandbox_module(int64 prelude_id);
+static SCM copy_module(SCM module);
+static SCM base_module_lookup(const char *name);
 
 SCM find_or_create_module_for_role(Oid role_oid)
 {
@@ -2871,7 +2873,7 @@ SCM find_or_create_module_for_role(Oid role_oid)
 		cache_module(role_oid, prelude_id, module);
 	}
 
-	return module;
+	return copy_module(module);
 }
 
 void flush_module_cache(void)
@@ -2943,7 +2945,7 @@ SCM make_sandbox_module(void)
 	static SCM make_sandbox_module_proc = SCM_UNDEFINED;
 
 	if (make_sandbox_module_proc == SCM_UNDEFINED)
-		make_sandbox_module_proc = eval_string_in_base_module("make-sandbox-module");
+		make_sandbox_module_proc = base_module_lookup("make-sandbox-module");
 
 	return call_1(make_sandbox_module_proc, trusted_bindings);
 }
@@ -2953,6 +2955,21 @@ void cache_module(Oid role_oid, int64 prelude_id, SCM module)
 	SCM role = scm_from_int(role_oid);
 	SCM prelude = scm_from_int64(prelude_id);
 	scm_hash_set_x(module_cache, role, scm_cons(prelude, module));
+}
+
+SCM copy_module(SCM module)
+{
+	static SCM module_copy_proc = SCM_UNDEFINED;
+
+	if (module_copy_proc == SCM_UNDEFINED)
+		module_copy_proc = base_module_lookup("module-copy");
+
+	return scm_call_1(module_copy_proc, module);
+}
+
+SCM base_module_lookup(const char *name)
+{
+	return SCM_VARIABLE_REF(scm_c_module_lookup(base_module, name));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
