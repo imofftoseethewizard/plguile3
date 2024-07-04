@@ -760,14 +760,14 @@
            (else
             (error "make-log-output-port: level must be one of 'info, 'warning, or 'error." ))))
          (write! (lambda (str idx count)
-                    (output-handler fmt (substring str idx (+ idx count)))
+                    (output-handler (format #f fmt (substring str idx (+ idx count))))
                     count)))
     (make-custom-textual-output-port port-id write! #f #f #f)))
 
 (define default-input-port   (%make-void-port OPEN_READ))
-(define default-output-port  (make-log-output-port 'info  "%"))
-(define default-warning-port (make-log-output-port 'warning "%"))
-(define default-error-port   (make-log-output-port 'error   "plguile3 ERROR: %"))
+(define default-output-port  (make-log-output-port 'info    "~s"))
+(define default-warning-port (make-log-output-port 'warning "~s"))
+(define default-error-port   (make-log-output-port 'error   "plguile3 ERROR: ~s"))
 
 (define-syntax define-public-module
   (syntax-rules ()
@@ -781,32 +781,39 @@
 (define (define-trusted-module* name . args)
   (let* ((qualified-name (%begin-define-module name))
          (processed-args (let loop ((args args)
+                                    (imports '(((plguile3 sandbox-base))))
                                     (result (list qualified-name)))
                            (if (null? args)
-                               (reverse result)
+                               (reverse `(,imports #:imports ,@result))
                                (case (car args)
 
                                  ;; resolve (foo bar) to (trusted <role-id> foo bar) or
                                  ;; (trusted public foo bar) or throw an error
                                  ((#:use-module)
                                   (loop (cddr args)
+                                        imports
                                         (cons (%resolve-use-module-name (cadr args))
                                               (cons #:use-module
                                                     result))))
 
+                                 ((#:imports)
+                                  (loop (cddr args)
+                                        (append imports (cadr args))
+                                        result))
+
                                  ;; ignore #:pure and #:declarative
                                  ((#:pure #:declarative)
-                                  (loop (cddr args) result))
+                                  (loop (cddr args) imports result))
 
                                  (else
                                   (loop (cddr args)
+                                        imports
                                         (cons (cadr args)
                                               (cons (car args)
                                                     result)))))))))
 
-    (apply original-define-module* (append processed-args
-                                           (list #:pure #t
-                                                 #:use-module (plguile3 sandbox-base))))))
+    (display (format #f "~s" processed-args))
+    (apply original-define-module* (append processed-args (list #:pure #t)))))
 
 (define (eval-with-limits exp module time-limit allocation-limit)
   (dynamic-wind
@@ -3251,6 +3258,8 @@
 (define plguile3-bindings
   '(((guile)
      define-module
+     display
+     newline
      use-modules
      with-exception-handler)
 

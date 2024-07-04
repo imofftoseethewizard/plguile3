@@ -4,11 +4,6 @@ create schema plguile3;
 
 set search_path to plguile3;
 
-create function plguile3_check_prelude(src text)
-returns void
-as 'MODULE_PATHNAME'
-language c strict;
-
 create table call_limit (
   role_id oid primary key,
   time float4,
@@ -141,6 +136,98 @@ values
 create table create_public_module_permission (
   role_id oid primary key
 );
+
+create function guile3_has_create_public_module_permission(role_id oid)
+  returns bool
+  language sql
+  stable
+as $$
+  select exists (
+    select 1
+    from plguile3.create_public_module_permission p
+    where p.role_id = role_id
+  )
+$$;
+
+create function guile3_has_create_public_module_permission(role_name text)
+  returns bool
+  language sql
+  stable
+as $$
+  select guile3_has_create_public_module_permission(usesysid)
+  from pg_user
+  where usename = role_name
+$$;
+
+create function plguile3_notify_module_changed()
+  returns void
+  language c strict
+  as 'MODULE_PATHNAME';
+
+create function guile3_delete_module(module_name text[])
+  returns void
+  language sql
+as $$
+  select guile3_delete_user_module(usesysid, module_name)
+  from pg_user
+  where usename = current_user;
+$$;
+
+create function guile3_delete_public_module(module_name text[])
+  returns void
+  language sql
+as $$
+  select guile3_delete_user_module(null, module_name);
+$$;
+
+create function guile3_delete_user_module(role_id oid, module_name text[])
+  returns void
+  language plpgsql
+as $$
+begin
+
+  delete from plguile3.module
+  where
+    owner_id = role_id
+    and name = module_name;
+
+  perform plguile3_notify_module_changed();
+end
+$$;
+
+create function guile3_get_module(module_name text[])
+  returns text
+  language sql
+  stable
+as $$
+  select guile3_get_user_module(usesysid, module_name)
+  from pg_user
+  where usename = current_user;
+$$;
+
+create function guile3_get_public_module(role_id oid, module_name text[])
+  returns text
+  language sql
+  stable
+as $$
+  select guile3_get_user_module(null, module_name);
+$$;
+
+create function guile3_get_user_module(role_id oid, module_name text[])
+  returns text
+  language sql
+  stable
+as $$
+  select source from plguile3.modules
+  where
+    owner_id = role_id
+    and name = module_name;
+$$;
+
+create function plguile3_check_prelude(src text)
+  returns void
+  language c strict
+  as 'MODULE_PATHNAME';
 
 create table prelude (
   id bigserial primary key,

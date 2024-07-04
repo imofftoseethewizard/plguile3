@@ -2974,6 +2974,22 @@ SCM base_module_lookup(const char *name)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
+//
+//
+
+PGDLLEXPORT Datum plguile3_notify_module_changed(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_notify_module_changed);
+
+static SCM make_sandbox_module(void);
+
+Datum plguile3_notify_module_changed(PG_FUNCTION_ARGS)
+{
+	RegisterXactCallback(after_save_module_xact_callback, NULL);
+	return (Datum)0;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // Access to plguile3 schema
 //
 
@@ -7476,8 +7492,8 @@ bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_t
 
 SCM raise_notice(SCM message)
 {
-	// elog(NOTICE, "%s", scm_string_to_pstr(message));
-	elog(NOTICE, "%s", scm_to_string(message));
+	elog(NOTICE, "%s", scm_string_to_pstr(message));
+	//elog(NOTICE, "%s", scm_to_string(message));
 	return SCM_UNDEFINED;
 }
 

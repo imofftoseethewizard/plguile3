@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.13] - 2024-07-04
+
+This version adds administrative functions for getting module source
+and deleting modules. Module support is now code complete but untested
+(and it definitely has bugs).
+
 ## [0.21.12] - 2024-07-03
 
 This version completes module functionality.  Included are module
