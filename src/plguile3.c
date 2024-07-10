@@ -326,7 +326,7 @@ static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
 static SCM prepare_public_module_definition(void);
 static SCM begin_define_module(SCM args);
-static SCM resolve_use_module_name(SCM names);
+static SCM resolve_import_specs(SCM names);
 static SCM resolve_trusted_module_name(SCM args);
 static SCM resolve_trusted_public_module_name(SCM args);
 static SCM load_trusted_module(SCM name);
@@ -456,7 +456,6 @@ static SCM record_types_proc;
 static SCM role_add_func_oid_proc;
 static SCM role_to_func_oids_proc;
 static SCM string_to_decimal_proc;
-static SCM symbol_to_string_proc;
 static SCM table_attr_names_proc;
 static SCM table_rows_proc;
 static SCM table_types_proc;
@@ -787,7 +786,6 @@ void init_guile(void)
 	is_int8_proc            = eval_string_in_base_module("int8-compatible?");
 	string_to_decimal_proc  = eval_string_in_base_module("string->decimal");
 
-	symbol_to_string_proc  = eval_string_in_base_module("symbol->string");
 	trusted_module         = eval_string_in_base_module("(resolve-module '(trusted))");
 
 	public_symbol  = scm_from_utf8_symbol("public");
@@ -924,7 +922,7 @@ void init_primitives_module(void *unused)
 
 	define_primitive("%prepare-public-module-definition",   0, 0, 0, (SCM (*)()) prepare_public_module_definition);
 	define_primitive("%begin-define-module",                1, 0, 0, (SCM (*)()) begin_define_module);
-	define_primitive("%resolve-use-module-name",            1, 0, 0, (SCM (*)()) resolve_use_module_name);
+	define_primitive("%resolve-import-specs"   ,            1, 0, 0, (SCM (*)()) resolve_import_specs);
 	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
 	define_primitive("%resolve-trusted-public-module-name", 1, 0, 0, (SCM (*)()) resolve_trusted_public_module_name);
 	define_primitive("%load-trusted-module",                1, 0, 0, (SCM (*)()) load_trusted_module);
@@ -1646,6 +1644,7 @@ SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args)
 
 	if (backtrace == SCM_BOOL_F)
 		elog(ERROR, "%s: %s", scm_to_string(key), scm_to_string(args));
+
 	else
 		elog(ERROR, "%s: %s\n%s", scm_to_string(key), scm_to_string(args),
 		     scm_string_to_pstr(backtrace));
@@ -2096,6 +2095,7 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_TRY();
 	{
 		eval_source_text(source_text);
+		elog(NOTICE, "eval done");
 	}
 	PG_FINALLY();
 	{
@@ -2104,11 +2104,13 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	if (module_defined_during_call) {
+		elog(NOTICE, "module defined");
 		validate_and_save_module_source(defined_module_name, defining_public_module, source_text);
 		scm_gc_unprotect_object(defined_module_name);
 		defined_module_name = SCM_UNDEFINED;
 	}
 
+	elog(NOTICE, "all done");
 	return (Datum)0;
 }
 
@@ -2172,13 +2174,17 @@ static SCM load_and_validate_module(void *data);
 static const char *load_module_source_from_storage(SCM name);
 static SCM load_error_handler(void *data, SCM tag, SCM throw_args);
 static Oid get_text_array_type_oid(void);
+static Datum module_name_to_datum_array(SCM name);
+static SCM base_module_lookup(const char *name);
+static SCM datum_array_to_module_name(Datum name_datum);
+static SCM resolve_use_module_name(SCM names);
 
 void unload_trusted_modules(void)
 {
 	static SCM unload_trusted_modules_proc = SCM_UNDEFINED;
 
 	if (unload_trusted_modules_proc == SCM_UNDEFINED)
-		unload_trusted_modules_proc = scm_c_module_lookup(base_module, "unload-trusted-modules");
+		unload_trusted_modules_proc = base_module_lookup("unload-trusted-modules");
 
 	scm_call_0(unload_trusted_modules_proc);
 }
@@ -2236,8 +2242,9 @@ SCM begin_define_module(SCM names)
 	if (database_accessed_during_call)
 		throw_runtime_error("define-module may not be called during a DO statement which accesses the database.");
 
-	if (module_defined_during_call)
-		throw_runtime_error("define-module may only be called once per DO statement.");
+	// TODO (eval-when (expand load eval) ...) is a problem for this
+	/* if (module_defined_during_call) */
+	/* 	throw_runtime_error("define-module may only be called once per DO statement."); */
 
 	module_defined_during_call = true;
 
@@ -2252,26 +2259,49 @@ SCM begin_define_module(SCM names)
 	else
 		qualified_name = user_qualified_module_name(GetUserId(), names);
 
+	elog(NOTICE, "begin_define_module");
 	return scm_cons(trusted_symbol, qualified_name);
 }
 
-SCM resolve_use_module_name(SCM names)
+SCM resolve_import_specs(SCM specs)
 {
-	SCM resolved_names;
+	SCM head = specs;
+	SCM result = SCM_EOL;
 
-	if (defining_public_module)
-		resolved_names = resolve_trusted_public_module_name(names);
-	else
-		resolved_names = resolve_trusted_module_name(names);
-
-	if (resolved_names == SCM_BOOL_F) {
-		if (defining_public_module)
-			throw_runtime_error("Public module '%s' does not exist.", scm_to_string(names));
-		else
-			throw_runtime_error("Module '%s' does not exist.", scm_to_string(names));
+	elog(NOTICE, "resolve_import_specs: %s", scm_to_string(specs));
+	while (head != SCM_EOL) {
+		SCM spec = SCM_CAR(head);
+		SCM resolved_spec = scm_cons(resolve_use_module_name(SCM_CAR(spec)), SCM_CDR(spec));
+		elog(NOTICE, "spec: %s", scm_to_string(spec));
+		elog(NOTICE, "resolved: %s", scm_to_string(resolved_spec));
+		//SCM_SETCAR(spec, resolve_use_module_name(SCM_CDDR(SCM_CAR(spec))));
+		//elog(NOTICE, "new spec: %s",
+		//SCM_SETCAR(spec, resolve_use_module_name(SCM_CAR(spec)));
+		// elog(NOTICE, "old spec: %s", scm_to_string(spec));
+		result = scm_cons(resolved_spec, result);
+		head = SCM_CDR(head);
 	}
 
-	return resolved_names;
+	return scm_reverse(result);
+}
+
+SCM resolve_use_module_name(SCM name)
+{
+	SCM resolved_name;
+
+	if (defining_public_module)
+		resolved_name = resolve_trusted_public_module_name(name);
+	else
+		resolved_name = resolve_trusted_module_name(name);
+
+	if (resolved_name == SCM_BOOL_F) {
+		if (defining_public_module)
+			throw_runtime_error("Public module '%s' does not exist.", scm_to_string(name));
+		else
+			throw_runtime_error("Module '%s' does not exist.", scm_to_string(name));
+	}
+
+	return resolved_name;
 }
 
 SCM resolve_trusted_public_module_name(SCM names)
@@ -2323,11 +2353,8 @@ SCM get_trusted_module(SCM names)
 
 SCM resolve_trusted_public_module_name_from_storage(SCM names)
 {
-	SCM name_strs;
-	char *names_cstr;
-
 	int ret;
-	Oid arg_types[] = {TEXTOID};
+	Oid arg_types[1];
 	Datum arg_vals[1];
 
 	const char *command =
@@ -2340,14 +2367,10 @@ SCM resolve_trusted_public_module_name_from_storage(SCM names)
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
-	name_strs = scm_map(symbol_to_string_proc, names, SCM_EOL);
-	names_cstr = scm_to_locale_string(scm_string_join(name_strs, SCM_UNDEFINED, SCM_UNDEFINED));
-
-	arg_vals[0] = CStringGetDatum(names_cstr);
+	arg_types[0] = get_text_array_type_oid();
+	arg_vals[0] = module_name_to_datum_array(names);
 
 	ret = SPI_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
-
-	free(names_cstr);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2364,11 +2387,8 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 {
 	Oid caller_oid = GetUserId();
 
-	SCM name_strs;
-	char *names_cstr;
-
 	int ret;
-	Oid arg_types[] = {TEXTOID, OIDOID};
+	Oid arg_types[2];
 	Datum arg_vals[2];
 
 	const char *command =
@@ -2385,15 +2405,13 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
-	name_strs = scm_map(symbol_to_string_proc, names, SCM_EOL);
-	names_cstr = scm_to_locale_string(scm_string_join(name_strs, SCM_UNDEFINED, SCM_UNDEFINED));
+	arg_types[0] = get_text_array_type_oid();
+	arg_vals[0] = module_name_to_datum_array(names);
 
-	arg_vals[0] = CStringGetDatum(names_cstr);
+	arg_types[1] = OIDOID;
 	arg_vals[1] = ObjectIdGetDatum(caller_oid);
 
 	ret = SPI_execute_with_args(command, 2, arg_types, arg_vals, NULL, true, 2);
-
-	free(names_cstr);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2431,7 +2449,6 @@ void validate_and_save_module_source(SCM name, bool is_public, const char *sourc
 
 void save_module_source(SCM name, bool is_public, const char *source)
 {
-
 	SPIExecuteOptions options = {0};
 
  	ParamListInfo param_list;
@@ -2441,7 +2458,7 @@ void save_module_source(SCM name, bool is_public, const char *source)
 		"insert into plguile3.module (owner_id, name, src) "
 		"values ($1, $2, $3) "
 		"on conflict (owner_id, name) "
-		  "do update set src = $2";
+		"  do update set src = $3";
 
 	int ret;
 
@@ -2462,13 +2479,13 @@ void save_module_source(SCM name, bool is_public, const char *source)
 
 	param_ptr->ptype  = get_text_array_type_oid();
 	param_ptr->isnull = false;
-	param_ptr->value  = scm_to_datum_array(scm_vector(name), TEXTOID);
+	param_ptr->value  = module_name_to_datum_array(name);
 
 	param_ptr++;
 
 	param_ptr->ptype  = TEXTOID;
 	param_ptr->isnull = false;
-	param_ptr->value  = CStringGetDatum(source);
+	param_ptr->value  = CStringGetTextDatum(source);
 
 	options.allow_nonatomic = false;
 	options.tcount          = 1;
@@ -2480,14 +2497,48 @@ void save_module_source(SCM name, bool is_public, const char *source)
 	if (ret != SPI_OK_INSERT)
 		elog(ERROR, "spi_insert_error: %d", ret);
 
-	if (!(SPI_tuptable && SPI_processed))
-		elog(ERROR, "unable to save module source.");
-
 	SPI_finish();
 
 	scm_gc_protect_object(name);
 
 	RegisterXactCallback(after_save_module_xact_callback, NULL);
+}
+
+Datum module_name_to_datum_array(SCM name)
+{
+	SCM head = name;
+	SCM strs = SCM_EOL;
+	int count = 0;
+
+	int16 len;
+	bool byval;
+	char align;
+
+	Datum *elems;
+	ArrayType *array;
+
+	get_typlenbyvalalign(TEXTOID, &len, &byval, &align);
+
+	while (head != SCM_EOL) {
+		strs = scm_cons(scm_symbol_to_string(SCM_CAR(head)), strs);
+		count++;
+		head = SCM_CDR(head);
+	}
+
+	elems = palloc(count * sizeof(Datum));
+
+	for (int i = count-1; i >= 0; i--) {
+		char *s = scm_to_locale_string(SCM_CAR(strs));
+		elems[i] = CStringGetTextDatum(s);
+		free(s);
+
+		strs = SCM_CDR(strs);
+	}
+
+	array = construct_array(elems, count, TEXTOID, len, byval, align);
+	pfree(elems);
+
+	return PointerGetDatum(array);
 }
 
 void validate_public_modules(const char *source)
@@ -2641,7 +2692,7 @@ SCM load_user_module_names_from_storage(Oid role_id)
  	ParamListInfo param_list;
 	ParamExternData *param_ptr;
 
-	const char *command = "select name from module where owner_id = $1";
+	const char *command = "select name from plguile3.module where owner_id = $1";
 
 	int ret;
 
@@ -2672,19 +2723,31 @@ SCM load_user_module_names_from_storage(Oid role_id)
 	if (SPI_tuptable && SPI_processed) {
 
 		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
-		Oid type_oid = tuple_desc->attrs[0].atttypid;
 
 		for (long row = 0; row < SPI_tuptable->numvals; row++) {
 
 			HeapTuple tuple = SPI_tuptable->vals[row];
 			bool is_null;
 			Datum name_datum = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
-			SCM name = scm_vector_to_list(datum_array_to_scm(name_datum, type_oid));
+			SCM name = datum_array_to_module_name(name_datum);
 			names = scm_cons(name, names);
 		}
 	}
 
 	SPI_finish();
+
+	return names;
+}
+
+SCM datum_array_to_module_name(Datum name_datum)
+{
+	SCM names = scm_vector_to_list(datum_array_to_scm(name_datum, TEXTOID));
+
+	SCM head = names;
+	while (head != SCM_EOL) {
+		SCM_SETCAR(head, scm_string_to_symbol(SCM_CAR(head)));
+		head = SCM_CDR(head);
+	}
 
 	return names;
 }
@@ -2711,19 +2774,25 @@ void after_save_module_xact_callback(XactEvent event, void *arg)
 
 SCM load_trusted_module(SCM name)
 {
-	const char *source_text = load_module_source_from_storage(name);
+	const char *source_text = load_module_source_from_storage(SCM_CDR(name));
 
+	bool prior_call_inline_active = call_inline_active;
+	call_inline_active = true;
 	database_accessed_during_call = false;
 	module_defined_during_call = false;
 	defining_public_module = false;
 
+	elog(NOTICE, "source text:\n%s", source_text);
+
 	PG_TRY();
 	{
 		eval_source_text(source_text);
+		call_inline_active = prior_call_inline_active;
 	}
 	PG_CATCH();
 	{
-		elog(ERROR, "Module validation failed: error while loading (possibly dependent) module %s",
+		call_inline_active = prior_call_inline_active;
+		elog(WARNING, "Module validation failed: error while loading (possibly dependent) module %s",
 		     scm_to_string(name));
 	}
 	PG_END_TRY();
@@ -2740,7 +2809,7 @@ const char *load_module_source_from_storage(SCM name)
  	ParamListInfo param_list;
 	ParamExternData *param_ptr;
 
-	const char *command = "select src from module where owner_id = $1 and name = $2";
+	const char *command = "select src from plguile3.module where owner_id = $1 and name = $2";
 
 	int ret;
 
@@ -2771,7 +2840,7 @@ const char *load_module_source_from_storage(SCM name)
 
 	param_ptr->ptype  = get_text_array_type_oid();
 	param_ptr->isnull = false;
-	param_ptr->value  = scm_to_datum_array(scm_vector(specific_name), TEXTOID);
+	param_ptr->value  = module_name_to_datum_array(specific_name);
 
 	options.allow_nonatomic = false;
 	options.params          = param_list;
@@ -2847,7 +2916,6 @@ static SCM get_cached_module(Oid role_oid);
 static int64 get_cached_prelude_id(Oid role_oid);
 static SCM prepare_sandbox_module(int64 prelude_id);
 static SCM copy_module(SCM module);
-static SCM base_module_lookup(const char *name);
 
 SCM find_or_create_module_for_role(Oid role_oid)
 {
@@ -6472,12 +6540,17 @@ SCM scm_c_list_ref(SCM obj, size_t k)
 
 char *scm_to_string(SCM obj)
 {
-	SCM proc = scm_eval_string(scm_from_locale_string("(lambda (x) (format #f \"~s\" x))"));
-	SCM str_scm = call_1(proc, obj);
+	static SCM proc = SCM_UNDEFINED;
 
 	size_t len;
-	char *c_str = scm_to_locale_stringn(str_scm, &len);
-	char *result = pstrdup(c_str);
+	char *c_str;
+	char *result;
+
+	if (proc == SCM_UNDEFINED)
+		proc = base_module_lookup("to-string");
+
+	c_str = scm_to_locale_stringn(call_1(proc, obj), &len);
+	result = pstrdup(c_str);
 
 	free(c_str);
 

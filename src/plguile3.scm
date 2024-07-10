@@ -29,7 +29,9 @@
   #:export ((safe-@ . @)
             define-public-module
             re-export-curated-builtin-module
-            copy-module
+            module-copy
+
+            to-string
 
             execute
             cursor-open
@@ -167,6 +169,9 @@
             make-cursor
             cursor?
             cursor-name))
+
+(define (to-string x)
+  (format #f "~s" x))
 
 (define try-load-trusted-module
   (let ((try-load-module try-load-module))
@@ -779,30 +784,28 @@
 (define original-define-module* define-module*)
 
 (define (define-trusted-module* name . args)
+  (notice (format #f "define-trusted-module*: ~s" (cons name args)))
   (let* ((qualified-name (%begin-define-module name))
          (processed-args (let loop ((args args)
-                                    (imports '(((plguile3 sandbox-base))))
+                                    (imports '())
                                     (result (list qualified-name)))
                            (if (null? args)
-                               (reverse `(,imports #:imports ,@result))
+                               (append (reverse result)
+                                       (list #:imports (cons '((plguile3 sandbox-base)) imports)
+                                             #:pure #t))
                                (case (car args)
 
                                  ;; resolve (foo bar) to (trusted <role-id> foo bar) or
                                  ;; (trusted public foo bar) or throw an error
-                                 ((#:use-module)
-                                  (loop (cddr args)
-                                        imports
-                                        (cons (%resolve-use-module-name (cadr args))
-                                              (cons #:use-module
-                                                    result))))
 
                                  ((#:imports)
+                                  (notice (format #f "imports: ~s" (cadr args)))
                                   (loop (cddr args)
-                                        (append imports (cadr args))
+                                        (%resolve-import-specs (cadr args))
                                         result))
 
-                                 ;; ignore #:pure and #:declarative
-                                 ((#:pure #:declarative)
+                                 ;; ignore #:pure and #:declarative?
+                                 ((#:pure #:declarative?)
                                   (loop (cddr args) imports result))
 
                                  (else
@@ -812,8 +815,17 @@
                                               (cons (car args)
                                                     result)))))))))
 
-    (display (format #f "~s" processed-args))
-    (apply original-define-module* (append processed-args (list #:pure #t)))))
+    (display (format #f "processed-args: ~s" processed-args))
+    (let ((prior-define-module* (@ (guile) define-module*)))
+      (dynamic-wind
+        (lambda ()
+          (notice "winding")
+          (set! (@ (guile) define-module*) original-define-module*))
+        (lambda ()
+          (apply original-define-module* processed-args))
+        (lambda ()
+          (notice "unwound")
+          (set! (@ (guile) define-module*) prior-define-module*))))))
 
 (define (eval-with-limits exp module time-limit allocation-limit)
   (dynamic-wind
@@ -3258,6 +3270,7 @@
 (define plguile3-bindings
   '(((guile)
      define-module
+     define-public
      display
      newline
      use-modules
