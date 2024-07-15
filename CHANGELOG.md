@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.15] - 2024-07-15
+
+This version includes some partial fixes for module validation, a lot
+of diagnostic support code, and a few small refinements.  The module
+validation code is misguided and will be removed in the next version.
+This version exists solely to memorialize it in its final state in the
+history.
+
 ## [0.21.14] - 2024-07-09
 
 This version contains fixes from initial ad hoc testing.  There are

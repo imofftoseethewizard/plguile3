@@ -1,4 +1,4 @@
-#include <time.h>
+ #include <time.h>
 
 #include <libguile.h>
 #include <libguile/srfi-13.h>
@@ -978,6 +978,7 @@ Datum plguile3_compile(PG_FUNCTION_ARGS)
 		elog(ERROR, "plguile3_compile: Failed to fetch function details.");
 
 	if (*shared_last_module_timestamp > local_last_module_timestamp) {
+		elog(NOTICE, "plguile3_compile: flushing");
 		flush_func_cache();
 		flush_module_cache();
 		unload_trusted_modules();
@@ -1272,6 +1273,7 @@ PG_FUNCTION_INFO_V1(plguile3_call);
 Datum plguile3_call(PG_FUNCTION_ARGS)
 {
 	if (*shared_last_module_timestamp > local_last_module_timestamp) {
+		elog(NOTICE, "plguile3_call: flushing");
 		flush_func_cache();
 		flush_module_cache();
 		unload_trusted_modules();
@@ -2052,7 +2054,7 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 //
 
 static void eval_source_text(const char *source_text);
-static SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit);
+static SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit);
 static void validate_and_save_module_source(SCM name, bool is_public, const char *source);
 
 static bool call_inline_active = false;
@@ -2087,6 +2089,7 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	}
 
 	if (*shared_last_module_timestamp > local_last_module_timestamp) {
+		elog(NOTICE, "plguile3_call_inline: flushing");
 		flush_func_cache();
 		flush_module_cache();
 		unload_trusted_modules();
@@ -2095,7 +2098,6 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_TRY();
 	{
 		eval_source_text(source_text);
-		elog(NOTICE, "eval done");
 	}
 	PG_FINALLY();
 	{
@@ -2104,18 +2106,17 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	if (module_defined_during_call) {
-		elog(NOTICE, "module defined");
 		validate_and_save_module_source(defined_module_name, defining_public_module, source_text);
 		scm_gc_unprotect_object(defined_module_name);
 		defined_module_name = SCM_UNDEFINED;
 	}
 
-	elog(NOTICE, "all done");
 	return (Datum)0;
 }
 
 void eval_source_text(const char *source_text)
 {
+	static bool init = false;
 	SCM module = find_or_create_module_for_role(GetUserId());
 	SCM port = scm_open_input_string(scm_from_locale_string(source_text));
 	SCM x;
@@ -2133,11 +2134,21 @@ void eval_source_text(const char *source_text)
 	module_defined_during_call = false;
 	defining_public_module = false;
 
-	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
-		eval_with_limits(x, module, time_limit, allocation_limit);
+	scm_set_current_module(module);
+
+	if (!init) {
+		init = true;
+		//eval_string_in_base_module("(instrument resolve-module)");
+	}
+
+	elog(NOTICE, "eval_source_text:");
+	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F) {
+		elog(NOTICE, "%s", scm_to_string(x));
+		eval_with_limits(x, time_limit, allocation_limit);
+	}
 }
 
-SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
+SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit)
 {
 	static SCM eval_with_limits_proc = SCM_UNDEFINED;
 
@@ -2146,7 +2157,7 @@ SCM eval_with_limits(SCM expr, SCM module, SCM time_limit, SCM allocation_limit)
 
 	return apply_0_with_handlers(
 		eval_with_limits_proc,
-		scm_list_4(expr, module, time_limit, allocation_limit),
+		scm_list_3(expr, time_limit, allocation_limit),
 		8);
 }
 
@@ -2161,8 +2172,8 @@ static SCM get_trusted_module(SCM names);
 static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
 static void save_module_source(SCM name, bool is_public, const char *source);
-static void validate_public_modules(const char *source);
-static void validate_user_modules(Oid role_id, const char *source);
+static void validate_public_modules(SCM name);
+static void validate_user_modules(Oid role_id, SCM name);
 static void after_save_module_xact_callback(XactEvent event, void *arg);
 static SCM get_public_root_module(void);
 static SCM get_user_root_module(Oid role_id);
@@ -2178,6 +2189,9 @@ static Datum module_name_to_datum_array(SCM name);
 static SCM base_module_lookup(const char *name);
 static SCM datum_array_to_module_name(Datum name_datum);
 static SCM resolve_use_module_name(SCM names);
+static void set_nested_submodule(SCM root, SCM name, SCM module);
+
+static bool after_save_module_xact_callback_registered = false;
 
 void unload_trusted_modules(void)
 {
@@ -2259,7 +2273,6 @@ SCM begin_define_module(SCM names)
 	else
 		qualified_name = user_qualified_module_name(GetUserId(), names);
 
-	elog(NOTICE, "begin_define_module");
 	return scm_cons(trusted_symbol, qualified_name);
 }
 
@@ -2268,16 +2281,9 @@ SCM resolve_import_specs(SCM specs)
 	SCM head = specs;
 	SCM result = SCM_EOL;
 
-	elog(NOTICE, "resolve_import_specs: %s", scm_to_string(specs));
 	while (head != SCM_EOL) {
 		SCM spec = SCM_CAR(head);
 		SCM resolved_spec = scm_cons(resolve_use_module_name(SCM_CAR(spec)), SCM_CDR(spec));
-		elog(NOTICE, "spec: %s", scm_to_string(spec));
-		elog(NOTICE, "resolved: %s", scm_to_string(resolved_spec));
-		//SCM_SETCAR(spec, resolve_use_module_name(SCM_CDDR(SCM_CAR(spec))));
-		//elog(NOTICE, "new spec: %s",
-		//SCM_SETCAR(spec, resolve_use_module_name(SCM_CAR(spec)));
-		// elog(NOTICE, "old spec: %s", scm_to_string(spec));
 		result = scm_cons(resolved_spec, result);
 		head = SCM_CDR(head);
 	}
@@ -2440,11 +2446,14 @@ void validate_and_save_module_source(SCM name, bool is_public, const char *sourc
 	save_module_source(name, is_public, source);
 
 	if (is_public)
-		validate_public_modules(source);
+		validate_public_modules(name);
 	else
-		validate_user_modules(GetUserId(), source);
+		validate_user_modules(GetUserId(), name);
 
-	RegisterXactCallback(after_save_module_xact_callback, NULL);
+	if (!after_save_module_xact_callback_registered) {
+		RegisterXactCallback(after_save_module_xact_callback, NULL);
+		after_save_module_xact_callback_registered = true;
+	}
 }
 
 void save_module_source(SCM name, bool is_public, const char *source)
@@ -2501,7 +2510,10 @@ void save_module_source(SCM name, bool is_public, const char *source)
 
 	scm_gc_protect_object(name);
 
-	RegisterXactCallback(after_save_module_xact_callback, NULL);
+	if (!after_save_module_xact_callback_registered) {
+		RegisterXactCallback(after_save_module_xact_callback, NULL);
+		after_save_module_xact_callback_registered = true;
+	}
 }
 
 Datum module_name_to_datum_array(SCM name)
@@ -2541,7 +2553,7 @@ Datum module_name_to_datum_array(SCM name)
 	return PointerGetDatum(array);
 }
 
-void validate_public_modules(const char *source)
+void validate_public_modules(SCM name)
 {
 	SCM public_root_module = get_public_root_module();
 	SCM prior_public_modules = get_module_submodules(public_root_module);
@@ -2574,13 +2586,22 @@ void validate_public_modules(const char *source)
 
 }
 
-void validate_user_modules(Oid role_id, const char *source)
+void validate_user_modules(Oid role_id, SCM new_module_name)
 {
+	SCM qualified_new_module_name = user_qualified_module_name(role_id, new_module_name);
+	SCM new_module = get_trusted_module(qualified_new_module_name);
+
 	SCM user_root_module = get_user_root_module(role_id);
 	SCM prior_user_modules = get_module_submodules(user_root_module);
 	SCM user_module_names = load_user_module_names_from_storage(role_id);
 
-	set_module_submodules(user_root_module, scm_c_make_hash_table(0));
+	SCM submodules = scm_c_make_hash_table(0);
+	elog(NOTICE, "validating new user module: %s", scm_to_string(qualified_new_module_name));
+
+	set_module_submodules(user_root_module, submodules);
+	set_nested_submodule(user_root_module, new_module_name, new_module);
+
+	elog(NOTICE, "validating: names %s", scm_to_string(user_module_names));
 
 	for (SCM names = user_module_names;
 	     names != SCM_EOL;
@@ -2588,6 +2609,13 @@ void validate_user_modules(Oid role_id, const char *source)
 
 		SCM name = user_qualified_module_name(role_id, SCM_CAR(names));
 		SCM error_handle = scm_cons(SCM_BOOL_F, SCM_EOL);
+
+		elog(NOTICE, "validating: qualified name %s", scm_to_string(name));
+
+		if (scm_eq_p(qualified_new_module_name, name) == SCM_BOOL_T) {
+			elog(NOTICE, "continuing");
+			continue;
+		}
 
 		if (!is_trusted_module_loaded(name)) {
 
@@ -2598,12 +2626,23 @@ void validate_user_modules(Oid role_id, const char *source)
 				load_error_handler,
 				(void *)error_handle);
 
+			elog(NOTICE, "validating new user module: loader finished for %s", scm_to_string(name));
+
 			if (SCM_CAR(error_handle) != SCM_BOOL_F) {
 				set_module_submodules(user_root_module, prior_user_modules);
 				elog(ERROR, "TODO");
 			}
 		}
 	}
+}
+
+void set_nested_submodule(SCM root, SCM name, SCM module) {
+	static SCM nested_define_module_proc = SCM_UNDEFINED;
+
+	if (nested_define_module_proc == SCM_UNDEFINED)
+		nested_define_module_proc = base_module_lookup("nested-define-module!");
+
+	scm_call_3(nested_define_module_proc, root, name, module);
 }
 
 SCM get_public_root_module(void)
@@ -2710,6 +2749,7 @@ SCM load_user_module_names_from_storage(Oid role_id)
 	param_ptr->ptype = OIDOID;
 	param_ptr->isnull = role_id == InvalidOid;
 	param_ptr->value = ObjectIdGetDatum(role_id);
+	elog(NOTICE, "load_user_module_names_from_storage: role_id: %d", role_id);
 
 	options.allow_nonatomic = false;
 	options.params          = param_list;
@@ -2723,6 +2763,8 @@ SCM load_user_module_names_from_storage(Oid role_id)
 	if (SPI_tuptable && SPI_processed) {
 
 		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
+
+		elog(NOTICE, "load_user_module_names_from_storage: %ld rows", SPI_tuptable->numvals);
 
 		for (long row = 0; row < SPI_tuptable->numvals; row++) {
 
@@ -2754,22 +2796,40 @@ SCM datum_array_to_module_name(Datum name_datum)
 
 SCM load_and_validate_module(void *data)
 {
-	load_trusted_module((SCM)data);
+	load_trusted_module(scm_cons(trusted_symbol, (SCM)data));
 	return SCM_UNDEFINED;
 }
 
 SCM load_error_handler(void *data, SCM tag, SCM throw_args)
 {
+	elog(NOTICE, "load_error_handler: tag: %s throw_args: %s", scm_to_string(tag), scm_to_string(throw_args));
+	SCM_SETCAR((SCM)data, throw_args);
 	return SCM_BOOL_F;
 }
 
 void after_save_module_xact_callback(XactEvent event, void *arg)
 {
-	// Update the shared timestamp of the last module defined or updated,
-	// causing other backends to invalidate their compiled code caches.
+	switch (event) {
+		case XACT_EVENT_COMMIT:
+		case XACT_EVENT_PARALLEL_COMMIT:
 
-	if (event == XACT_EVENT_COMMIT || event == XACT_EVENT_PARALLEL_COMMIT)
-		*shared_last_module_timestamp = time(NULL);
+			// Update the shared timestamp of the last module defined or updated,
+			// causing other backends to invalidate their compiled code caches.
+
+			*shared_last_module_timestamp = time(NULL);
+			local_last_module_timestamp = time(NULL);
+
+			// fall through
+
+		case XACT_EVENT_ABORT:
+		case XACT_EVENT_PARALLEL_ABORT:
+
+			after_save_module_xact_callback_registered = false;
+			UnregisterXactCallback(after_save_module_xact_callback, NULL);
+
+		default:
+			break;
+	}
 }
 
 SCM load_trusted_module(SCM name)
@@ -2818,6 +2878,8 @@ const char *load_module_source_from_storage(SCM name)
 	bool is_public = name_qualifier == public_symbol;
 	Oid role_id = InvalidOid;
 
+	elog(NOTICE, "loading %s from storage", scm_to_string(name));
+
 	if (!is_public) {
 		SCM role_id_str = scm_symbol_to_string(SCM_CAR(name));
 		role_id = scm_to_int(scm_string_to_number(role_id_str, SCM_I_MAKINUM(10)));
@@ -2827,6 +2889,8 @@ const char *load_module_source_from_storage(SCM name)
 
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
+
+	elog(NOTICE, "loading %s from storage", scm_to_string(name));
 
 	param_list = makeParamList(2);
 
@@ -3052,7 +3116,11 @@ static SCM make_sandbox_module(void);
 
 Datum plguile3_notify_module_changed(PG_FUNCTION_ARGS)
 {
-	RegisterXactCallback(after_save_module_xact_callback, NULL);
+	if (!after_save_module_xact_callback_registered) {
+		RegisterXactCallback(after_save_module_xact_callback, NULL);
+		after_save_module_xact_callback_registered = true;
+	}
+
 	return (Datum)0;
 }
 

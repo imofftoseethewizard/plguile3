@@ -5,6 +5,7 @@
 (define-module (plguile3 base)
   #:use-module (plguile3 primitives)
   #:use-module (ice-9 hash-table)
+  #:use-module (ice-9 match)
   #:use-module (ice-9 sandbox)
   #:use-module (rnrs io ports)
   #:use-module (srfi srfi-1)  ; fold-right
@@ -173,11 +174,18 @@
 (define (to-string x)
   (format #f "~s" x))
 
+(define original-resolve-module resolve-module)
+
 (define try-load-trusted-module
   (let ((try-load-module try-load-module))
     (lambda (name version)
       (if (eq? (car name) 'trusted)
-          (%load-trusted-module name)
+          (let ((m (resolve-module name #f version #:ensure #f)))
+            (notice (format #f "~s" (list 'try-load-trusted-module name version)))
+            (notice (format #f "resolved: ~s" m))
+            (when m
+              (notice (format #f "public-i: ~s" (module-public-interface m))))
+            (or m (%load-trusted-module name)))
           (try-load-module name version)))))
 
 (set! (@@ (guile) try-load-module) try-load-trusted-module)
@@ -194,7 +202,8 @@
       (variable-ref variable))))
 
 (define (unload-trusted-modules)
-  (set-module-submodules! (resolve-module '(trusted) #f) (make-hash-table)))
+  (notice "unloading trusted modules")
+  (set-module-submodules! (resolve-module '(trusted) #f #f #:ensure #f) (make-hash-table)))
 
 (define (flush-function-cache h ids)
   (let ((new (make-hash-table)))
@@ -781,25 +790,31 @@
        (%prepare-public-module-definition)
        (define-module exp ...)))))
 
+(define-syntax with-module-definer
+  (syntax-rules ()
+    ((define-public-module module-definer exp ...)
+     (let ((prior-define-module* (@ (guile) define-module*)))
+      (dynamic-wind
+        (lambda () (set! (@ (guile) define-module*) module-definer))
+        (lambda () exp ...)
+        (lambda () (set! (@ (guile) define-module*) prior-define-module*)))))))
+
 (define original-define-module* define-module*)
 
 (define (define-trusted-module* name . args)
-  (notice (format #f "define-trusted-module*: ~s" (cons name args)))
   (let* ((qualified-name (%begin-define-module name))
          (processed-args (let loop ((args args)
                                     (imports '())
                                     (result (list qualified-name)))
                            (if (null? args)
                                (append (reverse result)
-                                       (list #:imports (cons '((plguile3 sandbox-base)) imports)
-                                             #:pure #t))
+                                       (list #:imports imports #:pure #t))
                                (case (car args)
 
                                  ;; resolve (foo bar) to (trusted <role-id> foo bar) or
                                  ;; (trusted public foo bar) or throw an error
 
                                  ((#:imports)
-                                  (notice (format #f "imports: ~s" (cadr args)))
                                   (loop (cddr args)
                                         (%resolve-import-specs (cadr args))
                                         result))
@@ -815,34 +830,23 @@
                                               (cons (car args)
                                                     result)))))))))
 
-    (display (format #f "processed-args: ~s" processed-args))
-    (let ((prior-define-module* (@ (guile) define-module*)))
-      (dynamic-wind
-        (lambda ()
-          (notice "winding")
-          (set! (@ (guile) define-module*) original-define-module*))
-        (lambda ()
-          (apply original-define-module* processed-args))
-        (lambda ()
-          (notice "unwound")
-          (set! (@ (guile) define-module*) prior-define-module*))))))
+    (with-module-definer original-define-module*
+      (let ((m (apply original-define-module* processed-args)))
+        (module-use-interfaces! m sandbox-iface-specs)
+        (notice (format #f "resolve-module post define: ~a" (resolve-module qualified-name #f #f #:ensure #f)))
+        (notice (format #f "resolve-module post define: itf ~a" (module-public-interface (resolve-module qualified-name #f #f #:ensure #f))))
+                                        ;(notice (format #f "resolve-module post define: v ~a" (module-version (resolve-module qualified-name #f #f #:ensure #f))))
+        m))))
 
-(define (eval-with-limits exp module time-limit allocation-limit)
-  (dynamic-wind
-    (lambda ()
-      (set! (@ (guile) define-module*) define-trusted-module*))
-    (lambda ()
-      (parameterize ((current-input-port   default-input-port)
-                     (current-output-port  default-output-port)
-                     (current-error-port   default-error-port)
-                     (current-warning-port default-warning-port))
-        (eval-in-sandbox exp
-                         #:time-limit time-limit
-                         #:allocation-limit allocation-limit
-                         #:module module
-                         #:sever-module? #f)))
-    (lambda ()
-      (set! (@ (guile) define-module*) original-define-module*))))
+(define (eval-with-limits exp time-limit allocation-limit)
+  (parameterize ((current-input-port   default-input-port)
+                 (current-output-port  default-output-port)
+                 (current-error-port   default-error-port)
+                 (current-warning-port default-warning-port))
+    (with-module-definer define-trusted-module*
+      (call-with-time-and-allocation-limits time-limit
+                                            allocation-limit
+                                            (lambda () (primitive-eval exp))))))
 
 (define (untrusted-eval exp module)
   (eval-in-sandbox exp
@@ -3274,6 +3278,8 @@
      display
      newline
      use-modules
+     resolve-module
+     format
      with-exception-handler)
 
     ((plguile3 base)
@@ -3441,7 +3447,32 @@
           srfi-43-bindings ; vectors
           plguile3-bindings))
 
-(module-define-submodule! (resolve-module '(plguile3) #f)
-                          'sandbox-base
-                          (make-sandbox-module (append all-pure-and-impure-bindings
-                                                       plguile3-bindings)))
+(define sandbox-iface-specs
+  (let ((sandbox-bindings (append all-pure-and-impure-bindings
+                                  plguile3-bindings)))
+    (map (lambda (x)
+           (let ((mod-name (car x))
+                 (bindings (cdr x)))
+             (resolve-interface mod-name #:select bindings)))
+         sandbox-bindings)))
+
+(define indent "")
+(define output '())
+(define-syntax-rule (instrument target)
+  (let* ((orig (@@ (guile) target))
+         (wrapper
+          (lambda args
+            (let ((base-indent indent))
+              (set! output orig)
+              (notice (format #f "~a~s" base-indent (cons 'target args)))
+              (set! indent (string-append indent "  "))
+              (let ((result (apply orig args)))
+                (set! indent base-indent)
+                result)))))
+    (notice "instrument")
+    (notice (format #f "~s" orig))
+    (set! (@@ (guile) target) wrapper)
+    (notice (format #f "~s" orig))
+    ))
+
+;; (instrument resolve-module)
