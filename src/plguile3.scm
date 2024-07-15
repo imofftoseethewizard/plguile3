@@ -181,10 +181,6 @@
     (lambda (name version)
       (if (eq? (car name) 'trusted)
           (let ((m (resolve-module name #f version #:ensure #f)))
-            (notice (format #f "~s" (list 'try-load-trusted-module name version)))
-            (notice (format #f "resolved: ~s" m))
-            (when m
-              (notice (format #f "public-i: ~s" (module-public-interface m))))
             (or m (%load-trusted-module name)))
           (try-load-module name version)))))
 
@@ -202,7 +198,6 @@
       (variable-ref variable))))
 
 (define (unload-trusted-modules)
-  (notice "unloading trusted modules")
   (set-module-submodules! (resolve-module '(trusted) #f #f #:ensure #f) (make-hash-table)))
 
 (define (flush-function-cache h ids)
@@ -833,9 +828,6 @@
     (with-module-definer original-define-module*
       (let ((m (apply original-define-module* processed-args)))
         (module-use-interfaces! m sandbox-iface-specs)
-        (notice (format #f "resolve-module post define: ~a" (resolve-module qualified-name #f #f #:ensure #f)))
-        (notice (format #f "resolve-module post define: itf ~a" (module-public-interface (resolve-module qualified-name #f #f #:ensure #f))))
-                                        ;(notice (format #f "resolve-module post define: v ~a" (module-version (resolve-module qualified-name #f #f #:ensure #f))))
         m))))
 
 (define (eval-with-limits exp time-limit allocation-limit)
@@ -3472,7 +3464,4 @@
     (notice "instrument")
     (notice (format #f "~s" orig))
     (set! (@@ (guile) target) wrapper)
-    (notice (format #f "~s" orig))
-    ))
-
-;; (instrument resolve-module)
+    (notice (format #f "~s" orig))))

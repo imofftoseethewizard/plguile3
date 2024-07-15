@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.16] - 2024-07-16
+
+This version removes module validation and related diagnostic code.
+Currently the remaining obvious isses with the module system and
+related work are the lack of a proper `use-modules` wrapper, and the
+need to replace the current simple output port to elog adapter with a
+line buffering adapter.
+
 ## [0.21.15] - 2024-07-15
 
 This version includes some partial fixes for module validation, a lot

@@ -978,7 +978,6 @@ Datum plguile3_compile(PG_FUNCTION_ARGS)
 		elog(ERROR, "plguile3_compile: Failed to fetch function details.");
 
 	if (*shared_last_module_timestamp > local_last_module_timestamp) {
-		elog(NOTICE, "plguile3_compile: flushing");
 		flush_func_cache();
 		flush_module_cache();
 		unload_trusted_modules();
@@ -1273,7 +1272,6 @@ PG_FUNCTION_INFO_V1(plguile3_call);
 Datum plguile3_call(PG_FUNCTION_ARGS)
 {
 	if (*shared_last_module_timestamp > local_last_module_timestamp) {
-		elog(NOTICE, "plguile3_call: flushing");
 		flush_func_cache();
 		flush_module_cache();
 		unload_trusted_modules();
@@ -2055,7 +2053,7 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 
 static void eval_source_text(const char *source_text);
 static SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit);
-static void validate_and_save_module_source(SCM name, bool is_public, const char *source);
+static void save_module(SCM name, bool is_public, const char *source);
 
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
@@ -2089,7 +2087,6 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	}
 
 	if (*shared_last_module_timestamp > local_last_module_timestamp) {
-		elog(NOTICE, "plguile3_call_inline: flushing");
 		flush_func_cache();
 		flush_module_cache();
 		unload_trusted_modules();
@@ -2106,7 +2103,7 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	if (module_defined_during_call) {
-		validate_and_save_module_source(defined_module_name, defining_public_module, source_text);
+		save_module(defined_module_name, defining_public_module, source_text);
 		scm_gc_unprotect_object(defined_module_name);
 		defined_module_name = SCM_UNDEFINED;
 	}
@@ -2116,7 +2113,6 @@ Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 
 void eval_source_text(const char *source_text)
 {
-	static bool init = false;
 	SCM module = find_or_create_module_for_role(GetUserId());
 	SCM port = scm_open_input_string(scm_from_locale_string(source_text));
 	SCM x;
@@ -2136,16 +2132,8 @@ void eval_source_text(const char *source_text)
 
 	scm_set_current_module(module);
 
-	if (!init) {
-		init = true;
-		//eval_string_in_base_module("(instrument resolve-module)");
-	}
-
-	elog(NOTICE, "eval_source_text:");
-	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F) {
-		elog(NOTICE, "%s", scm_to_string(x));
+	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
 		eval_with_limits(x, time_limit, allocation_limit);
-	}
 }
 
 SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit)
@@ -2172,24 +2160,12 @@ static SCM get_trusted_module(SCM names);
 static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
 static void save_module_source(SCM name, bool is_public, const char *source);
-static void validate_public_modules(SCM name);
-static void validate_user_modules(Oid role_id, SCM name);
 static void after_save_module_xact_callback(XactEvent event, void *arg);
-static SCM get_public_root_module(void);
-static SCM get_user_root_module(Oid role_id);
-static SCM get_module_submodules(SCM module);
-static void set_module_submodules(SCM module, SCM hash);
-static SCM load_public_module_names_from_storage(void);
-static SCM load_user_module_names_from_storage(Oid role_id);
-static SCM load_and_validate_module(void *data);
 static const char *load_module_source_from_storage(SCM name);
-static SCM load_error_handler(void *data, SCM tag, SCM throw_args);
 static Oid get_text_array_type_oid(void);
 static Datum module_name_to_datum_array(SCM name);
 static SCM base_module_lookup(const char *name);
-static SCM datum_array_to_module_name(Datum name_datum);
 static SCM resolve_use_module_name(SCM names);
-static void set_nested_submodule(SCM root, SCM name, SCM module);
 
 static bool after_save_module_xact_callback_registered = false;
 
@@ -2441,14 +2417,9 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	return resolved_names;
 }
 
-void validate_and_save_module_source(SCM name, bool is_public, const char *source)
+void save_module(SCM name, bool is_public, const char *source)
 {
 	save_module_source(name, is_public, source);
-
-	if (is_public)
-		validate_public_modules(name);
-	else
-		validate_user_modules(GetUserId(), name);
 
 	if (!after_save_module_xact_callback_registered) {
 		RegisterXactCallback(after_save_module_xact_callback, NULL);
@@ -2553,260 +2524,6 @@ Datum module_name_to_datum_array(SCM name)
 	return PointerGetDatum(array);
 }
 
-void validate_public_modules(SCM name)
-{
-	SCM public_root_module = get_public_root_module();
-	SCM prior_public_modules = get_module_submodules(public_root_module);
-	SCM module_names = load_public_module_names_from_storage();
-
-	set_module_submodules(public_root_module, scm_c_make_hash_table(0));
-
-	for (SCM names = module_names;
-	     names != SCM_EOL;
-	     names = SCM_CDR(names)) {
-
-		SCM name = SCM_CAR(names);
-		SCM error_handle = scm_cons(SCM_BOOL_F, SCM_EOL);
-
-		if (!is_trusted_module_loaded(name)) {
-
-			scm_internal_catch(
-				SCM_BOOL_T,
-				(scm_t_catch_body)load_and_validate_module,
-				(void *)name,
-				load_error_handler,
-				(void *)error_handle);
-
-			if (SCM_CAR(error_handle) != SCM_BOOL_F) {
-				set_module_submodules(public_root_module, prior_public_modules);
-				elog(ERROR, "TODO");
-			}
-		}
-	}
-
-}
-
-void validate_user_modules(Oid role_id, SCM new_module_name)
-{
-	SCM qualified_new_module_name = user_qualified_module_name(role_id, new_module_name);
-	SCM new_module = get_trusted_module(qualified_new_module_name);
-
-	SCM user_root_module = get_user_root_module(role_id);
-	SCM prior_user_modules = get_module_submodules(user_root_module);
-	SCM user_module_names = load_user_module_names_from_storage(role_id);
-
-	SCM submodules = scm_c_make_hash_table(0);
-	elog(NOTICE, "validating new user module: %s", scm_to_string(qualified_new_module_name));
-
-	set_module_submodules(user_root_module, submodules);
-	set_nested_submodule(user_root_module, new_module_name, new_module);
-
-	elog(NOTICE, "validating: names %s", scm_to_string(user_module_names));
-
-	for (SCM names = user_module_names;
-	     names != SCM_EOL;
-	     names = SCM_CDR(names)) {
-
-		SCM name = user_qualified_module_name(role_id, SCM_CAR(names));
-		SCM error_handle = scm_cons(SCM_BOOL_F, SCM_EOL);
-
-		elog(NOTICE, "validating: qualified name %s", scm_to_string(name));
-
-		if (scm_eq_p(qualified_new_module_name, name) == SCM_BOOL_T) {
-			elog(NOTICE, "continuing");
-			continue;
-		}
-
-		if (!is_trusted_module_loaded(name)) {
-
-			scm_internal_catch(
-				SCM_BOOL_T,
-				(scm_t_catch_body)load_and_validate_module,
-				(void *)name,
-				load_error_handler,
-				(void *)error_handle);
-
-			elog(NOTICE, "validating new user module: loader finished for %s", scm_to_string(name));
-
-			if (SCM_CAR(error_handle) != SCM_BOOL_F) {
-				set_module_submodules(user_root_module, prior_user_modules);
-				elog(ERROR, "TODO");
-			}
-		}
-	}
-}
-
-void set_nested_submodule(SCM root, SCM name, SCM module) {
-	static SCM nested_define_module_proc = SCM_UNDEFINED;
-
-	if (nested_define_module_proc == SCM_UNDEFINED)
-		nested_define_module_proc = base_module_lookup("nested-define-module!");
-
-	scm_call_3(nested_define_module_proc, root, name, module);
-}
-
-SCM get_public_root_module(void)
-{
-	return get_trusted_module(scm_list_1(public_symbol));
-}
-
-SCM get_user_root_module(Oid role_id)
-{
-	return get_trusted_module(user_qualified_module_name(role_id, SCM_EOL));
-}
-
-SCM get_module_submodules(SCM module)
-{
-	static SCM module_submodules_proc = SCM_UNDEFINED;
-
-	if (module_submodules_proc == SCM_UNDEFINED)
-		module_submodules_proc = eval_string_in_base_module("module-submodules");
-
-	return scm_call_1(module_submodules_proc, module);
-}
-
-void set_module_submodules(SCM module, SCM hash)
-{
-	static SCM set_module_submodules_proc = SCM_UNDEFINED;
-
-	if (set_module_submodules_proc == SCM_UNDEFINED)
-		set_module_submodules_proc = eval_string_in_base_module("set-module-submodules!");
-
-	scm_call_2(set_module_submodules_proc, module, hash);
-}
-
-SCM load_public_module_names_from_storage(void)
-{
-	const char *command = "select owner_id, name from module where owner_id is null";
-
-	int ret;
-
-	SCM names = SCM_EOL;
-
-	ret = SPI_connect();
-
-	if (ret != SPI_OK_CONNECT)
-		elog(ERROR, "spi_connect_error: %d", ret);
-
-	ret = SPI_execute(command, true, 0);
-
-	if (ret != SPI_OK_SELECT)
-		elog(ERROR, "spi_select_error: %d", ret);
-
-	if (SPI_tuptable && SPI_processed) {
-
-		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
-		Oid type_oid = tuple_desc->attrs[1].atttypid;
-
-		for (long row = 0; row < SPI_tuptable->numvals; row++) {
-
-			HeapTuple tuple = SPI_tuptable->vals[row];
-			bool owner_is_null, name_is_null;
-		    Datum owner_datum = SPI_getbinval(tuple, tuple_desc, 1, &owner_is_null);
-			Datum name_datum = SPI_getbinval(tuple, tuple_desc, 2, &name_is_null);
-
-			SCM base_name = scm_vector_to_list(datum_array_to_scm(name_datum, type_oid));
-			SCM qualified_name;
-
-			if (owner_is_null) {
-				qualified_name = scm_cons(public_symbol, base_name);
-			}
-			else {
-				Oid owner_id = DatumGetObjectId(owner_datum);
-				qualified_name = user_qualified_module_name(owner_id, base_name);
-			}
-			names = scm_cons(qualified_name, names);
-		}
-	}
-
-	SPI_finish();
-
-	return names;
-}
-
-SCM load_user_module_names_from_storage(Oid role_id)
-{
-	SPIExecuteOptions options = {0};
-
- 	ParamListInfo param_list;
-	ParamExternData *param_ptr;
-
-	const char *command = "select name from plguile3.module where owner_id = $1";
-
-	int ret;
-
-	SCM names = SCM_EOL;
-
-	ret = SPI_connect();
-
-	if (ret != SPI_OK_CONNECT)
-		elog(ERROR, "spi_connect_error: %d", ret);
-
-	param_list = makeParamList(1);
-
-	param_ptr = (ParamExternData *)&param_list->params;
-
-	param_ptr->ptype = OIDOID;
-	param_ptr->isnull = role_id == InvalidOid;
-	param_ptr->value = ObjectIdGetDatum(role_id);
-	elog(NOTICE, "load_user_module_names_from_storage: role_id: %d", role_id);
-
-	options.allow_nonatomic = false;
-	options.params          = param_list;
-	options.read_only       = true;
-
-	ret = SPI_execute_extended(command, &options);
-
-	if (ret != SPI_OK_SELECT)
-		elog(ERROR, "spi_select_error: %d", ret);
-
-	if (SPI_tuptable && SPI_processed) {
-
-		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
-
-		elog(NOTICE, "load_user_module_names_from_storage: %ld rows", SPI_tuptable->numvals);
-
-		for (long row = 0; row < SPI_tuptable->numvals; row++) {
-
-			HeapTuple tuple = SPI_tuptable->vals[row];
-			bool is_null;
-			Datum name_datum = SPI_getbinval(tuple, tuple_desc, 1, &is_null);
-			SCM name = datum_array_to_module_name(name_datum);
-			names = scm_cons(name, names);
-		}
-	}
-
-	SPI_finish();
-
-	return names;
-}
-
-SCM datum_array_to_module_name(Datum name_datum)
-{
-	SCM names = scm_vector_to_list(datum_array_to_scm(name_datum, TEXTOID));
-
-	SCM head = names;
-	while (head != SCM_EOL) {
-		SCM_SETCAR(head, scm_string_to_symbol(SCM_CAR(head)));
-		head = SCM_CDR(head);
-	}
-
-	return names;
-}
-
-SCM load_and_validate_module(void *data)
-{
-	load_trusted_module(scm_cons(trusted_symbol, (SCM)data));
-	return SCM_UNDEFINED;
-}
-
-SCM load_error_handler(void *data, SCM tag, SCM throw_args)
-{
-	elog(NOTICE, "load_error_handler: tag: %s throw_args: %s", scm_to_string(tag), scm_to_string(throw_args));
-	SCM_SETCAR((SCM)data, throw_args);
-	return SCM_BOOL_F;
-}
-
 void after_save_module_xact_callback(XactEvent event, void *arg)
 {
 	switch (event) {
@@ -2842,8 +2559,6 @@ SCM load_trusted_module(SCM name)
 	module_defined_during_call = false;
 	defining_public_module = false;
 
-	elog(NOTICE, "source text:\n%s", source_text);
-
 	PG_TRY();
 	{
 		eval_source_text(source_text);
@@ -2878,8 +2593,6 @@ const char *load_module_source_from_storage(SCM name)
 	bool is_public = name_qualifier == public_symbol;
 	Oid role_id = InvalidOid;
 
-	elog(NOTICE, "loading %s from storage", scm_to_string(name));
-
 	if (!is_public) {
 		SCM role_id_str = scm_symbol_to_string(SCM_CAR(name));
 		role_id = scm_to_int(scm_string_to_number(role_id_str, SCM_I_MAKINUM(10)));
@@ -2889,8 +2602,6 @@ const char *load_module_source_from_storage(SCM name)
 
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
-
-	elog(NOTICE, "loading %s from storage", scm_to_string(name));
 
 	param_list = makeParamList(2);
 
