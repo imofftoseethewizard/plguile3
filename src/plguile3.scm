@@ -29,6 +29,7 @@
 
   #:export ((safe-@ . @)
             define-public-module
+            (trusted-use-modules . use-modules)
             re-export-curated-builtin-module
             module-copy
 
@@ -829,6 +830,28 @@
       (let ((m (apply original-define-module* processed-args)))
         (module-use-interfaces! m sandbox-iface-specs)
         m))))
+
+(define-syntax trusted-use-modules
+  (lambda (x)
+
+    (define (resolve-module-specs module-specs)
+      (let loop ((specs module-specs) (normalized '()))
+        (syntax-case specs ()
+          (()
+           (datum->syntax x (%resolve-import-specs (reverse normalized))))
+
+          (((name name* ...) . specs)
+           (and-map symbol? (syntax->datum #'(name name* ...)))
+           (loop #'specs (cons (list (syntax->datum #'(name name* ...))) normalized)))
+
+          ((((name name* ...) arg ...) . specs)
+           (and-map symbol? (syntax->datum #'(name name* ...)))
+           (loop #'specs (cons (syntax->datum #'((name name* ...) arg ...)) normalized))))))
+
+    (syntax-case x ()
+      ((_ spec ...)
+       (with-syntax (((resolved-specs ...) (resolve-module-specs #'(spec ...))))
+         #'(use-modules resolved-specs ...))))))
 
 (define (eval-with-limits exp time-limit allocation-limit)
   (parameterize ((current-input-port   default-input-port)
@@ -3269,7 +3292,6 @@
      define-public
      display
      newline
-     use-modules
      resolve-module
      format
      with-exception-handler)
@@ -3277,6 +3299,7 @@
     ((plguile3 base)
      @
      define-public-module
+     use-modules
      re-export-curated-builtin-module
 
      %cursor-open

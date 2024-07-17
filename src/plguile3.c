@@ -2222,7 +2222,7 @@ bool can_define_public_module(Oid role_id)
 	return result;
 }
 
-SCM begin_define_module(SCM names)
+SCM begin_define_module(SCM name)
 {
 	SCM qualified_name;
 
@@ -2232,22 +2232,18 @@ SCM begin_define_module(SCM names)
 	if (database_accessed_during_call)
 		throw_runtime_error("define-module may not be called during a DO statement which accesses the database.");
 
-	// TODO (eval-when (expand load eval) ...) is a problem for this
-	/* if (module_defined_during_call) */
-	/* 	throw_runtime_error("define-module may only be called once per DO statement."); */
-
 	module_defined_during_call = true;
 
 	if (defined_module_name != SCM_UNDEFINED)
 		scm_gc_unprotect_object(defined_module_name);
 
-	scm_gc_protect_object(names);
-	defined_module_name = names;
+	scm_gc_protect_object(name);
+	defined_module_name = name;
 
 	if (defining_public_module)
-		qualified_name = scm_cons(public_symbol, names);
+		qualified_name = scm_cons(public_symbol, name);
 	else
-		qualified_name = user_qualified_module_name(GetUserId(), names);
+		qualified_name = user_qualified_module_name(GetUserId(), name);
 
 	return scm_cons(trusted_symbol, qualified_name);
 }
