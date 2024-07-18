@@ -769,15 +769,34 @@
            ((warning error) warning)
            (else
             (error "make-log-output-port: level must be one of 'info, 'warning, or 'error." ))))
-         (write! (lambda (str idx count)
-                    (output-handler (format #f fmt (substring str idx (+ idx count))))
-                    count)))
+         (write! (let ((buffer #f))
+                   (lambda (str idx count)
+                     (let ((end (+ idx count)))
+                       (let loop ((start idx) (out-count 0))
+                         (if (= start end)
+                             out-count
+                             (let ((i (string-index str #\newline start end)))
+                               (if i
+                                   (let* ((line (substring str start i))
+                                          (text (if buffer
+                                                    (string-append buffer line)
+                                                    line)))
+                                     (output-handler (format #f fmt text))
+                                     (set! buffer #f)
+                                     (loop (1+ i) (+ out-count (string-length text) 1)))
+                                   (let* ((rest (substring str start end))
+                                          (text (if buffer
+                                                    (string-append buffer rest)
+                                                    rest)))
+                                     (set! buffer text)
+                                     out-count))))))))))
+
     (make-custom-textual-output-port port-id write! #f #f #f)))
 
 (define default-input-port   (%make-void-port OPEN_READ))
-(define default-output-port  (make-log-output-port 'info    "~s"))
-(define default-warning-port (make-log-output-port 'warning "~s"))
-(define default-error-port   (make-log-output-port 'error   "plguile3 ERROR: ~s"))
+(define default-output-port  (make-log-output-port 'info    "~a"))
+(define default-warning-port (make-log-output-port 'warning "~a"))
+(define default-error-port   (make-log-output-port 'error   "plguile3 ERROR: ~a"))
 
 (define-syntax define-public-module
   (syntax-rules ()

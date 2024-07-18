@@ -7341,7 +7341,6 @@ bool find_range_type_oid(Oid subtype_oid, Oid *range_type_oid, Oid *multirange_t
 SCM raise_notice(SCM message)
 {
 	elog(NOTICE, "%s", scm_string_to_pstr(message));
-	//elog(NOTICE, "%s", scm_to_string(message));
 	return SCM_UNDEFINED;
 }
 
