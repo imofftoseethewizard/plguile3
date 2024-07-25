@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.19] - 2024-07-25
+
+This version contains numerous fixes for issues found during ad hoc
+testing.
+
 ## [0.21.18] - 2024-07-18
 
 This version improves output to elog via textual ports. It's now

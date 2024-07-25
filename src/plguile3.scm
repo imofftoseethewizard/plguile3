@@ -198,9 +198,6 @@
         (error "No variable named" 'name 'in 'module))
       (variable-ref variable))))
 
-(define (unload-trusted-modules)
-  (set-module-submodules! (resolve-module '(trusted) #f #f #:ensure #f) (make-hash-table)))
-
 (define (flush-function-cache h ids)
   (let ((new (make-hash-table)))
     (hash-for-each
@@ -807,7 +804,7 @@
 
 (define-syntax with-module-definer
   (syntax-rules ()
-    ((define-public-module module-definer exp ...)
+    ((with-module-definer module-definer exp ...)
      (let ((prior-define-module* (@ (guile) define-module*)))
       (dynamic-wind
         (lambda () (set! (@ (guile) define-module*) module-definer))
@@ -931,8 +928,7 @@
         (adjust-module (hash-ref curated-module-adjustments 'name (lambda (m) m))))
 
     (module-use-interfaces! m (list (resolve-builtin-interface 'name bindings)))
-
-    (module-export! m bindings)
+    (module-re-export! m bindings)
     (adjust-module m)
     m))
 
@@ -3122,9 +3118,6 @@
       uri-userinfo
       uri?))))
 
-(define exception-bindings
-  '(()))
-
 (define bytevector-bindings
   '(((guile)
      string-utf8-length)
@@ -3193,10 +3186,6 @@
      utf8->string
      utf16->string
      utf32->string)))
-
-(define srfi-9-bindings
-  '(((srfi srfi-9)
-     define-record-type)))
 
 (define srfi-19-bindings
   '(((srfi srfi-19)
@@ -3276,34 +3265,6 @@
      time-utc->time-tai!
      date->string
      string->date)))
-
-(define srfi-43-bindings
-  '(((srfi srfi-43)
-     reverse-list->vector
-     reverse-vector->list
-     vector-any
-     vector-append
-     vector-binary-search
-     vector-concatenate
-     vector-count
-     vector-empty?
-     vector-every
-     vector-fold
-     vector-fold-right
-     vector-for-each
-     vector-index
-     vector-index-right
-     vector-map
-     vector-map!
-     vector-reverse!
-     vector-reverse-copy
-     vector-reverse-copy!
-     vector-skip
-     vector-skip-right
-     vector-swap!
-     vector-unfold
-     vector-unfold-right
-     vector=)))
 
 (define plguile3-bindings
   '(((guile)
@@ -3476,9 +3437,7 @@
 (define trusted-bindings
   (append all-pure-and-impure-bindings
           bytevector-bindings
-          srfi-9-bindings  ; define-record-type
           srfi-19-bindings ; dates and times
-          srfi-43-bindings ; vectors
           plguile3-bindings))
 
 (define sandbox-iface-specs

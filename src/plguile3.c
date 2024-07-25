@@ -1,4 +1,4 @@
- #include <time.h>
+#include <time.h>
 
 #include <libguile.h>
 #include <libguile/srfi-13.h>
@@ -2058,6 +2058,7 @@ static void save_module(SCM name, bool is_public, const char *source);
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
 static bool defining_public_module = false;
+static bool allow_public_module_definition = false;
 static bool module_defined_during_call = false;
 static SCM defined_module_name = SCM_UNDEFINED;
 
@@ -2126,10 +2127,6 @@ void eval_source_text(const char *source_text)
 	time_limit = scm_from_double(limits.time_seconds);
 	allocation_limit = scm_from_int64(limits.allocation_bytes);
 
-	database_accessed_during_call = false;
-	module_defined_during_call = false;
-	defining_public_module = false;
-
 	scm_set_current_module(module);
 
 	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
@@ -2166,6 +2163,9 @@ static Oid get_text_array_type_oid(void);
 static Datum module_name_to_datum_array(SCM name);
 static SCM base_module_lookup(const char *name);
 static SCM resolve_use_module_name(SCM names);
+static Oid get_guile3_owner_oid(void);
+static int privileged_execute_with_args(const char *src, int nargs, Oid *arg_types, Datum *values, const char *nulls, bool read_only, long count);
+static int privileged_execute_extended(const char *src, const SPIExecuteOptions *options);
 
 static bool after_save_module_xact_callback_registered = false;
 
@@ -2183,7 +2183,7 @@ SCM prepare_public_module_definition(void)
 {
 	Oid caller_oid = GetUserId();
 
-	if (!can_define_public_module(caller_oid))
+	if (!allow_public_module_definition && !can_define_public_module(caller_oid))
 		throw_runtime_error("permission to create public modules required.");
 
 	defining_public_module = true;
@@ -2210,7 +2210,7 @@ bool can_define_public_module(Oid role_id)
 
 	arg_vals[0] = ObjectIdGetDatum(role_id);
 
-	ret = SPI_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
+	ret = privileged_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2332,6 +2332,7 @@ SCM get_trusted_module(SCM names)
 SCM resolve_trusted_public_module_name_from_storage(SCM names)
 {
 	int ret;
+
 	Oid arg_types[1];
 	Datum arg_vals[1];
 
@@ -2348,7 +2349,7 @@ SCM resolve_trusted_public_module_name_from_storage(SCM names)
 	arg_types[0] = get_text_array_type_oid();
 	arg_vals[0] = module_name_to_datum_array(names);
 
-	ret = SPI_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
+	ret = privileged_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2366,6 +2367,7 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	Oid caller_oid = GetUserId();
 
 	int ret;
+
 	Oid arg_types[2];
 	Datum arg_vals[2];
 
@@ -2389,7 +2391,7 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	arg_types[1] = OIDOID;
 	arg_vals[1] = ObjectIdGetDatum(caller_oid);
 
-	ret = SPI_execute_with_args(command, 2, arg_types, arg_vals, NULL, true, 2);
+	ret = privileged_execute_with_args(command, 2, arg_types, arg_vals, NULL, true, 2);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2468,7 +2470,7 @@ void save_module_source(SCM name, bool is_public, const char *source)
 	options.params          = param_list;
 	options.read_only       = false;
 
-	ret = SPI_execute_extended(command, &options);
+	ret = privileged_execute_extended(command, &options);
 
 	if (ret != SPI_OK_INSERT)
 		elog(ERROR, "spi_insert_error: %d", ret);
@@ -2548,21 +2550,38 @@ void after_save_module_xact_callback(XactEvent event, void *arg)
 SCM load_trusted_module(SCM name)
 {
 	const char *source_text = load_module_source_from_storage(SCM_CDR(name));
+	SCM name_qualifier = SCM_CADR(name);
 
+	bool prior_allow_public_module_definition = allow_public_module_definition;
 	bool prior_call_inline_active = call_inline_active;
+	bool prior_database_accessed_during_call = database_accessed_during_call;
+	bool prior_defining_public_module = defining_public_module;
+	bool prior_module_defined_during_call = module_defined_during_call;
+
+	allow_public_module_definition = true;
 	call_inline_active = true;
 	database_accessed_during_call = false;
+	defining_public_module = name_qualifier == public_symbol;
 	module_defined_during_call = false;
-	defining_public_module = false;
 
 	PG_TRY();
 	{
 		eval_source_text(source_text);
+
+		allow_public_module_definition = prior_allow_public_module_definition;
 		call_inline_active = prior_call_inline_active;
+		database_accessed_during_call = prior_database_accessed_during_call;
+		defining_public_module = prior_defining_public_module;
+		module_defined_during_call = prior_module_defined_during_call;
 	}
 	PG_CATCH();
 	{
+		allow_public_module_definition = prior_allow_public_module_definition;
 		call_inline_active = prior_call_inline_active;
+		database_accessed_during_call = prior_database_accessed_during_call;
+		defining_public_module = prior_defining_public_module;
+		module_defined_during_call = prior_module_defined_during_call;
+
 		elog(WARNING, "Module validation failed: error while loading (possibly dependent) module %s",
 		     scm_to_string(name));
 	}
@@ -2580,7 +2599,9 @@ const char *load_module_source_from_storage(SCM name)
  	ParamListInfo param_list;
 	ParamExternData *param_ptr;
 
-	const char *command = "select src from plguile3.module where owner_id = $1 and name = $2";
+	const char *public_command = "select src from plguile3.module where name = $1 and owner_id is null";
+	const char *user_command   = "select src from plguile3.module where name = $1 and owner_id = $2";
+	const char *command;
 
 	int ret;
 
@@ -2603,22 +2624,24 @@ const char *load_module_source_from_storage(SCM name)
 
 	param_ptr = (ParamExternData *)&param_list->params;
 
-	param_ptr->ptype = OIDOID;
-	param_ptr->isnull = is_public;
-	param_ptr->value = ObjectIdGetDatum(role_id);
-
-	param_ptr++;
-
 	param_ptr->ptype  = get_text_array_type_oid();
 	param_ptr->isnull = false;
 	param_ptr->value  = module_name_to_datum_array(specific_name);
+
+	param_ptr++;
+
+	param_ptr->ptype = OIDOID;
+	param_ptr->isnull = is_public;
+	param_ptr->value = ObjectIdGetDatum(role_id);
 
 	options.allow_nonatomic = false;
 	options.params          = param_list;
 	options.read_only       = true;
 	options.tcount          = 1;
 
-	ret = SPI_execute_extended(command, &options);
+	command = is_public ? public_command : user_command;
+
+	ret = privileged_execute_extended(command, &options);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2873,20 +2896,12 @@ CallLimits *get_call_limits(CallLimits *limits)
 
 	int ret;
 
-	Oid prev_user_id;
-	int prev_sec_con;
-
 	ret = SPI_connect();
 
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
-	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
-	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
-
-	ret = SPI_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
-
-	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+	ret = privileged_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2930,20 +2945,13 @@ void get_prelude_ids(Oid role_oid, int64 *default_prelude_id, int64 *role_prelud
 	int ret;
 	Oid arg_type = OIDOID;
 	Datum role_datum = ObjectIdGetDatum(role_oid);
-	Oid prev_user_id;
-	int prev_sec_con;
 
 	ret = SPI_connect();
 
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
-	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
-	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
-
-	ret = SPI_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
-
-	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+	ret = privileged_execute_with_args(command, 1, &arg_type, &role_datum, NULL, true, 2);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -2979,9 +2987,6 @@ SCM get_prelude_src(int64 prelude_id)
 	Oid arg_type = INT8OID;
 	Datum prelude = Int64GetDatum(prelude_id);
 
-	Oid prev_user_id;
-	int prev_sec_con;
-
 	TupleDesc tuple_desc;
 	HeapTuple tuple;
 	bool is_null;
@@ -2993,12 +2998,7 @@ SCM get_prelude_src(int64 prelude_id)
 	if (ret != SPI_OK_CONNECT)
 		elog(ERROR, "spi_connect_error: %d", ret);
 
-	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
-	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
-
-	ret = SPI_execute_with_args(command, 1, &arg_type, &prelude, NULL, true, 1);
-
-	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+	ret = privileged_execute_with_args(command, 1, &arg_type, &prelude, NULL, true, 1);
 
 	if (ret != SPI_OK_SELECT)
 		elog(ERROR, "spi_select_error: %d", ret);
@@ -3018,6 +3018,44 @@ SCM get_prelude_src(int64 prelude_id)
 	SPI_finish();
 
 	return src;
+}
+
+int privileged_execute_extended(const char *src, const SPIExecuteOptions *options)
+{
+	Oid prev_user_id;
+	int prev_sec_con;
+
+	int ret;
+
+	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
+	ret = SPI_execute_extended(src, options);
+
+	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+
+	return ret;
+}
+
+int privileged_execute_with_args(
+	const char *src,
+	int nargs, Oid *arg_types,
+	Datum *values, const char *nulls,
+	bool read_only, long count)
+{
+	Oid prev_user_id;
+	int prev_sec_con;
+
+	int ret;
+
+	GetUserIdAndSecContext(&prev_user_id, &prev_sec_con);
+	SetUserIdAndSecContext(get_language_owner(), SECURITY_LOCAL_USERID_CHANGE);
+
+	ret = SPI_execute_with_args(src, nargs, arg_types, values, nulls, read_only, count);
+
+	SetUserIdAndSecContext(prev_user_id, prev_sec_con);
+
+	return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
