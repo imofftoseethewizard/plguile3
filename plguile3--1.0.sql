@@ -368,6 +368,11 @@ create trusted language guile3
     inline plguile3_call_inline
     validator plguile3_compile;
 
+create function plguile3_eval(src text)
+  returns void
+  language c strict
+  as 'MODULE_PATHNAME';
+
 set search_path to public;
 
 create function guile3_get_default_prelude() returns text as $$

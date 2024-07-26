@@ -198,6 +198,9 @@
         (error "No variable named" 'name 'in 'module))
       (variable-ref variable))))
 
+(define (unload-trusted-modules)
+  (set-module-submodules! (resolve-module '(trusted) #f #f #:ensure #f) (make-hash-table)))
+
 (define (flush-function-cache h ids)
   (let ((new (make-hash-table)))
     (hash-for-each

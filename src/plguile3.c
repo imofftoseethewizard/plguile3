@@ -2051,6 +2051,7 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 // Inline Call Handler
 //
 
+static Datum eval_code_block(const char *source_text);
 static void eval_source_text(const char *source_text);
 static SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit);
 static void save_module(SCM name, bool is_public, const char *source);
@@ -2067,9 +2068,12 @@ PG_FUNCTION_INFO_V1(plguile3_call_inline);
 
 Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 {
-	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
-	char *source_text = codeblock->source_text;
+	InlineCodeBlock *codeblock = (InlineCodeBlock *)DatumGetPointer(PG_GETARG_DATUM(0));
+	return eval_code_block(codeblock->source_text);
+}
 
+Datum eval_code_block(const char *source_text)
+{
 	// Keep track of nested inline call handlers.  This is to limit the use of
 	// define-module to inline call handlers, and to only once during the extent
 	// of the outermost handler.
@@ -2853,6 +2857,20 @@ Datum plguile3_notify_module_changed(PG_FUNCTION_ARGS)
 
 	return (Datum)0;
 }
+
+
+PGDLLEXPORT Datum plguile3_eval(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plguile3_eval);
+
+static SCM make_sandbox_module(void);
+
+Datum plguile3_eval(PG_FUNCTION_ARGS)
+{
+	Datum src_datum = PG_GETARG_DATUM(0);
+	return eval_code_block(TextDatumGetCString(src_datum));
+}
+
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
