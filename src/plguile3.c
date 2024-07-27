@@ -2051,8 +2051,8 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 // Inline Call Handler
 //
 
-static Datum eval_code_block(const char *source_text);
-static void eval_source_text(const char *source_text);
+static SCM eval_code_block(const char *source_text);
+static SCM eval_source_text(const char *source_text);
 static SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit);
 static void save_module(SCM name, bool is_public, const char *source);
 
@@ -2069,11 +2069,14 @@ PG_FUNCTION_INFO_V1(plguile3_call_inline);
 Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 {
 	InlineCodeBlock *codeblock = (InlineCodeBlock *)DatumGetPointer(PG_GETARG_DATUM(0));
-	return eval_code_block(codeblock->source_text);
+	eval_code_block(codeblock->source_text);
+	return (Datum)0;
 }
 
-Datum eval_code_block(const char *source_text)
+SCM eval_code_block(const char *source_text)
 {
+	SCM result = SCM_UNSPECIFIED;
+
 	// Keep track of nested inline call handlers.  This is to limit the use of
 	// define-module to inline call handlers, and to only once during the extent
 	// of the outermost handler.
@@ -2099,7 +2102,7 @@ Datum eval_code_block(const char *source_text)
 
 	PG_TRY();
 	{
-		eval_source_text(source_text);
+		result = eval_source_text(source_text);
 	}
 	PG_FINALLY();
 	{
@@ -2113,10 +2116,10 @@ Datum eval_code_block(const char *source_text)
 		defined_module_name = SCM_UNDEFINED;
 	}
 
-	return (Datum)0;
+	return result;
 }
 
-void eval_source_text(const char *source_text)
+SCM eval_source_text(const char *source_text)
 {
 	SCM module = find_or_create_module_for_role(GetUserId());
 	SCM port = scm_open_input_string(scm_from_locale_string(source_text));
@@ -2126,6 +2129,8 @@ void eval_source_text(const char *source_text)
 
 	SCM time_limit, allocation_limit;
 
+	SCM result = SCM_UNSPECIFIED;
+
 	get_call_limits(&limits);
 
 	time_limit = scm_from_double(limits.time_seconds);
@@ -2134,7 +2139,9 @@ void eval_source_text(const char *source_text)
 	scm_set_current_module(module);
 
 	while (scm_eof_object_p(x = scm_read(port)) == SCM_BOOL_F)
-		eval_with_limits(x, time_limit, allocation_limit);
+		result = eval_with_limits(x, time_limit, allocation_limit);
+
+	return result;
 }
 
 SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit)
@@ -2862,15 +2869,13 @@ Datum plguile3_notify_module_changed(PG_FUNCTION_ARGS)
 PGDLLEXPORT Datum plguile3_eval(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(plguile3_eval);
 
-static SCM make_sandbox_module(void);
-
 Datum plguile3_eval(PG_FUNCTION_ARGS)
 {
 	Datum src_datum = PG_GETARG_DATUM(0);
-	return eval_code_block(TextDatumGetCString(src_datum));
+	SCM result = eval_code_block(TextDatumGetCString(src_datum));
+
+	return CStringGetTextDatum(result == SCM_UNSPECIFIED ? "" : scm_to_string(result));
 }
-
-
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //

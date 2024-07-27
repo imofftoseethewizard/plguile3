@@ -369,7 +369,7 @@ create trusted language guile3
     validator plguile3_compile;
 
 create function plguile3_eval(src text)
-  returns void
+  returns text
   language c strict
   as 'MODULE_PATHNAME';
 
