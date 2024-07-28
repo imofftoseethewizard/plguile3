@@ -251,10 +251,50 @@ create function guile3_get_user_module(role_id oid, module_name text[])
   language sql
   stable
 as $$
-  select source from plguile3.modules
+  select source from plguile3.module
   where
     owner_id = role_id
     and name = module_name;
+$$;
+
+create function guile3_publish_user_module(role_id oid, module_name text[])
+  returns void
+  language sql
+as $$
+  update plguile3.module
+  set owner_id = null
+  where
+    owner_id = role_id
+    and name = module_name;
+$$;
+
+create function guile3_publish_user_module(role_name text, module_name text[])
+  returns void
+  language sql
+as $$
+  select plguile3.guile3_publish_user_module(usesysid, module_name)
+  from pg_user
+  where usename = role_name
+$$;
+
+create function guile3_privatize_public_module(role_id oid, module_name text[])
+  returns void
+  language sql
+as $$
+  update plguile3.module
+  set owner_id = role_id
+  where
+    owner_id is null
+    and name = module_name;
+$$;
+
+create function guile3_privatize_public_module(role_name text, module_name text[])
+  returns void
+  language sql
+as $$
+  select plguile3.guile3_privatize_public_module(usesysid, module_name)
+  from pg_user
+  where usename = role_name
 $$;
 
 create function plguile3_check_prelude(src text)
