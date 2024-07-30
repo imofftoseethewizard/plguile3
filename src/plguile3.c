@@ -324,7 +324,6 @@ static void dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static bool dest_receive(TupleTableSlot *slot, DestReceiver *self);
 static void dest_shutdown(DestReceiver *self);
 static void dest_destroy(DestReceiver *self);
-static SCM prepare_public_module_definition(void);
 static SCM begin_define_module(SCM args);
 static SCM resolve_import_specs(SCM names);
 static SCM resolve_trusted_module_name(SCM args);
@@ -920,7 +919,6 @@ void init_primitives_module(void *unused)
 {
 	primitives_module = scm_current_module();
 
-	define_primitive("%prepare-public-module-definition",   0, 0, 0, (SCM (*)()) prepare_public_module_definition);
 	define_primitive("%begin-define-module",                1, 0, 0, (SCM (*)()) begin_define_module);
 	define_primitive("%resolve-import-specs"   ,            1, 0, 0, (SCM (*)()) resolve_import_specs);
 	define_primitive("%resolve-trusted-module-name",        1, 0, 0, (SCM (*)()) resolve_trusted_module_name);
@@ -2054,7 +2052,7 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 static SCM eval_code_block(const char *source_text);
 static SCM eval_source_text(const char *source_text);
 static SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit);
-static void save_module(SCM name, bool is_public, const char *source);
+static void save_module(SCM name, const char *source);
 
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
@@ -2111,7 +2109,7 @@ SCM eval_code_block(const char *source_text)
 	PG_END_TRY();
 
 	if (module_defined_during_call) {
-		save_module(defined_module_name, defining_public_module, source_text);
+		save_module(defined_module_name, source_text);
 		scm_gc_unprotect_object(defined_module_name);
 		defined_module_name = SCM_UNDEFINED;
 	}
@@ -2161,13 +2159,12 @@ SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit)
 //
 // Modules
 
-static bool can_define_public_module(Oid role_id);
 static SCM user_qualified_module_name(Oid user_oid, SCM names);
 static bool is_trusted_module_loaded(SCM names);
 static SCM get_trusted_module(SCM names);
 static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
-static void save_module_source(SCM name, bool is_public, const char *source);
+static void save_module_source(SCM name, const char *source);
 static void after_save_module_xact_callback(XactEvent event, void *arg);
 static const char *load_module_source_from_storage(SCM name);
 static Oid get_text_array_type_oid(void);
@@ -2188,49 +2185,6 @@ void unload_trusted_modules(void)
 		unload_trusted_modules_proc = base_module_lookup("unload-trusted-modules");
 
 	scm_call_0(unload_trusted_modules_proc);
-}
-
-SCM prepare_public_module_definition(void)
-{
-	Oid caller_oid = GetUserId();
-
-	if (!allow_public_module_definition && !can_define_public_module(caller_oid))
-		throw_runtime_error("permission to create public modules required.");
-
-	defining_public_module = true;
-	return SCM_UNDEFINED;
-}
-
-bool can_define_public_module(Oid role_id)
-{
-	int ret;
-	Oid arg_types[] = {OIDOID};
-	Datum arg_vals[1];
-
-	const char *command =
-		"select * "
-		"from plguile3.create_public_module_permission "
-		"where role_id = $1";
-
-	bool result;
-
-	ret = SPI_connect();
-
-	if (ret != SPI_OK_CONNECT)
-		elog(ERROR, "spi_connect_error: %d", ret);
-
-	arg_vals[0] = ObjectIdGetDatum(role_id);
-
-	ret = privileged_execute_with_args(command, 1, arg_types, arg_vals, NULL, true, 1);
-
-	if (ret != SPI_OK_SELECT)
-		elog(ERROR, "spi_select_error: %d", ret);
-
-	result = SPI_tuptable && SPI_processed;
-
-	SPI_finish();
-
-	return result;
 }
 
 SCM begin_define_module(SCM name)
@@ -2426,9 +2380,9 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	return resolved_names;
 }
 
-void save_module(SCM name, bool is_public, const char *source)
+void save_module(SCM name, const char *source)
 {
-	save_module_source(name, is_public, source);
+	save_module_source(name, source);
 
 	if (!after_save_module_xact_callback_registered) {
 		RegisterXactCallback(after_save_module_xact_callback, NULL);
@@ -2436,7 +2390,7 @@ void save_module(SCM name, bool is_public, const char *source)
 	}
 }
 
-void save_module_source(SCM name, bool is_public, const char *source)
+void save_module_source(SCM name, const char *source)
 {
 	SPIExecuteOptions options = {0};
 
@@ -2461,7 +2415,7 @@ void save_module_source(SCM name, bool is_public, const char *source)
 	param_ptr = (ParamExternData *)&param_list->params;
 
 	param_ptr->ptype  = OIDOID;
-	param_ptr->isnull = is_public;
+	param_ptr->isnull = false;
 	param_ptr->value  = ObjectIdGetDatum(GetUserId());
 
 	param_ptr++;

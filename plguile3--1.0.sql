@@ -19,6 +19,20 @@ create unique index ix_module_owner_id_name on module (owner_id, name);
 
 create index ix_module_name on module (name);
 
+create function parse_module_name(module_name text)
+  returns text[]
+  language sql
+as $$
+  with split_name(part) as (
+    select * from unnest(string_to_array(module_name, ' ', ''))
+  )
+  select array_agg(part)
+  from split_name
+  where
+    part != '..'
+    and part !~ '.*/.*'
+$$;
+
 insert into module (name, src)
 values
   ('{ice-9,and-let-star}',        '(define-module (ice-9 and-let-star))        (re-export-curated-builtin-module (ice-9 and-let-star))'),
@@ -133,71 +147,12 @@ values
   ('{web,response}',              '(define-module (web response))              (re-export-curated-builtin-module (web response))'),
   ('{web,uri}',                   '(define-module (web uri))                   (re-export-curated-builtin-module (web uri))');
 
-create table create_public_module_permission (
-  role_id oid primary key
-);
-
-create function guile3_grant_create_public_module(role_id oid)
-  returns void
-  language sql
-as $$
-  insert into plguile3.create_public_module_permission values (role_id)
-  on conflict do nothing;
-$$;
-
-create function guile3_grant_create_public_module(role_name text)
-  returns void
-  language sql
-as $$
-  select plguile3.guile3_grant_create_public_module(usesysid)
-  from pg_user
-  where usename = role_name
-$$;
-
-create function guile3_revoke_create_public_module(role_id oid)
-  returns void
-  language sql
-as $$
-  delete from plguile3.create_public_module_permission where role_id = $1
-$$;
-
-create function guile3_revoke_create_public_module(role_name text)
-  returns void
-  language sql
-as $$
-  select plguile3.guile3_revoke_create_public_module(usesysid)
-  from pg_user
-  where usename = role_name
-$$;
-
-create function guile3_has_create_public_module_permission(role_id oid)
-  returns bool
-  language sql
-  stable
-as $$
-  select exists (
-    select 1
-    from plguile3.create_public_module_permission p
-    where p.role_id = role_id
-  )
-$$;
-
-create function guile3_has_create_public_module_permission(role_name text)
-  returns bool
-  language sql
-  stable
-as $$
-  select plguile3.guile3_has_create_public_module_permission(usesysid)
-  from pg_user
-  where usename = role_name
-$$;
-
 create function plguile3_notify_module_changed()
   returns void
   language c strict
   as 'MODULE_PATHNAME';
 
-create function guile3_delete_module(module_name text[])
+create function guile3_delete_module(module_name text)
   returns void
   language sql
 as $$
@@ -206,14 +161,14 @@ as $$
   where usename = current_user;
 $$;
 
-create function guile3_delete_public_module(module_name text[])
+create function guile3_delete_public_module(module_name text)
   returns void
   language sql
 as $$
   select plguile3.guile3_delete_user_module(null, module_name);
 $$;
 
-create function guile3_delete_user_module(role_id oid, module_name text[])
+create function guile3_delete_user_module(role_id oid, module_name text)
   returns void
   language plpgsql
 as $$
@@ -222,13 +177,13 @@ begin
   delete from plguile3.module
   where
     owner_id = role_id
-    and name = module_name;
+    and name = plguile3.parse_module_name(module_name);
 
   perform plguile3.plguile3_notify_module_changed();
 end
 $$;
 
-create function guile3_get_module(module_name text[])
+create function guile3_get_module(module_name text)
   returns text
   language sql
   stable
@@ -238,7 +193,7 @@ as $$
   where usename = current_user;
 $$;
 
-create function guile3_get_public_module(role_id oid, module_name text[])
+create function guile3_get_public_module(role_id oid, module_name text)
   returns text
   language sql
   stable
@@ -246,7 +201,7 @@ as $$
   select plguile3.guile3_get_user_module(null, module_name);
 $$;
 
-create function guile3_get_user_module(role_id oid, module_name text[])
+create function guile3_get_user_module(role_id oid, module_name text)
   returns text
   language sql
   stable
@@ -254,10 +209,10 @@ as $$
   select source from plguile3.module
   where
     owner_id = role_id
-    and name = module_name;
+    and name = plguile3.parse_module_name(module_name);
 $$;
 
-create function guile3_publish_user_module(role_id oid, module_name text[])
+create function guile3_publish_user_module(role_id oid, module_name text)
   returns void
   language sql
 as $$
@@ -265,10 +220,10 @@ as $$
   set owner_id = null
   where
     owner_id = role_id
-    and name = module_name;
+    and name = plguile3.parse_module_name(module_name);
 $$;
 
-create function guile3_publish_user_module(role_name text, module_name text[])
+create function guile3_publish_user_module(role_name text, module_name text)
   returns void
   language sql
 as $$
@@ -277,7 +232,7 @@ as $$
   where usename = role_name
 $$;
 
-create function guile3_privatize_public_module(role_id oid, module_name text[])
+create function guile3_privatize_public_module(role_id oid, module_name text)
   returns void
   language sql
 as $$
@@ -285,16 +240,69 @@ as $$
   set owner_id = role_id
   where
     owner_id is null
-    and name = module_name;
+    and name = plguile3.parse_module_name(module_name);
 $$;
 
-create function guile3_privatize_public_module(role_name text, module_name text[])
+create function guile3_privatize_public_module(role_name text, module_name text)
   returns void
   language sql
 as $$
   select plguile3.guile3_privatize_public_module(usesysid, module_name)
   from pg_user
   where usename = role_name
+$$;
+
+create function read_filesystem_module_source(
+    module_name text,
+    modules_path text default '/usr/share/guile/3.0')
+  returns text
+  language plpgsql
+as $$
+declare
+  path text;
+  content text;
+begin
+
+  create temporary table read_file_copy_dest (lineno serial, s text);
+
+  path := (
+    select format('%s/%s.scm', modules_path, string_agg(part, '/'))
+    from unnest(plguile3.parse_module_name(module_name)) n(part)
+  );
+
+  execute format('copy read_file_copy_dest (s) from %L', path);
+
+  select string_agg(s, e'\n') into content
+  from (
+    select s from read_file_copy_dest order by lineno
+  ) t;
+
+  drop table read_file_copy_dest;
+
+  return content;
+
+end
+$$;
+
+create function create_user_module_from_filesystem(
+    module_name text,
+    modules_path text default '/usr/share/guile/3.0')
+  returns void
+  language sql
+as $$
+  select plguile3.plguile3_eval(
+    plguile3.read_filesystem_module_source(module_name, modules_path)
+  );
+$$;
+
+create function create_public_module_from_filesystem(
+    module_name text,
+    modules_path text default '/usr/share/guile/3.0')
+  returns void
+  language sql
+as $$
+  select plguile3.create_user_module_from_filesystem(module_name, modules_path);
+  select plguile3.guile3_publish_user_module(current_user, module_name);
 $$;
 
 create function plguile3_check_prelude(src text)

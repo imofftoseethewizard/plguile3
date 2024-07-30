@@ -28,7 +28,6 @@
                rollback-and-chain)
 
   #:export ((safe-@ . @)
-            define-public-module
             (trusted-use-modules . use-modules)
             re-export-curated-builtin-module
             module-copy
@@ -797,13 +796,6 @@
 (define default-output-port  (make-log-output-port 'info    "~a"))
 (define default-warning-port (make-log-output-port 'warning "~a"))
 (define default-error-port   (make-log-output-port 'error   "plguile3 ERROR: ~a"))
-
-(define-syntax define-public-module
-  (syntax-rules ()
-    ((define-public-module exp ...)
-     (begin
-       (%prepare-public-module-definition)
-       (define-module exp ...)))))
 
 (define-syntax with-module-definer
   (syntax-rules ()
@@ -3281,7 +3273,6 @@
 
     ((plguile3 base)
      @
-     define-public-module
      use-modules
      re-export-curated-builtin-module
 
