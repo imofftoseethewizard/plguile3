@@ -2049,10 +2049,10 @@ SCM make_boxed_datum(Oid type_oid, Datum x)
 // Inline Call Handler
 //
 
-static SCM eval_code_block(const char *source_text);
-static SCM eval_source_text(const char *source_text);
+static SCM eval_code_block(SCM source_text);
+static SCM eval_source_text(SCM source_text);
 static SCM eval_with_limits(SCM expr, SCM time_limit, SCM allocation_limit);
-static void save_module(SCM name, const char *source);
+static void save_module(SCM name, SCM source_text);
 
 static bool call_inline_active = false;
 static bool database_accessed_during_call = false;
@@ -2067,11 +2067,11 @@ PG_FUNCTION_INFO_V1(plguile3_call_inline);
 Datum plguile3_call_inline(PG_FUNCTION_ARGS)
 {
 	InlineCodeBlock *codeblock = (InlineCodeBlock *)DatumGetPointer(PG_GETARG_DATUM(0));
-	eval_code_block(codeblock->source_text);
+	eval_code_block(scm_from_locale_string(codeblock->source_text));
 	return (Datum)0;
 }
 
-SCM eval_code_block(const char *source_text)
+SCM eval_code_block(SCM source_text)
 {
 	SCM result = SCM_UNSPECIFIED;
 
@@ -2117,10 +2117,10 @@ SCM eval_code_block(const char *source_text)
 	return result;
 }
 
-SCM eval_source_text(const char *source_text)
+SCM eval_source_text(SCM source_text)
 {
 	SCM module = find_or_create_module_for_role(GetUserId());
-	SCM port = scm_open_input_string(scm_from_locale_string(source_text));
+	SCM port = scm_open_input_string(source_text);
 	SCM x;
 
 	CallLimits limits;
@@ -2164,9 +2164,9 @@ static bool is_trusted_module_loaded(SCM names);
 static SCM get_trusted_module(SCM names);
 static SCM resolve_trusted_public_module_name_from_storage(SCM names);
 static SCM resolve_trusted_module_name_from_storage(SCM names);
-static void save_module_source(SCM name, const char *source);
+static void save_module_source(SCM name, SCM source_text);
 static void after_save_module_xact_callback(XactEvent event, void *arg);
-static const char *load_module_source_from_storage(SCM name);
+static SCM load_module_source_from_storage(SCM name);
 static Oid get_text_array_type_oid(void);
 static Datum module_name_to_datum_array(SCM name);
 static SCM base_module_lookup(const char *name);
@@ -2380,9 +2380,9 @@ SCM resolve_trusted_module_name_from_storage(SCM names)
 	return resolved_names;
 }
 
-void save_module(SCM name, const char *source)
+void save_module(SCM name, SCM source_text)
 {
-	save_module_source(name, source);
+	save_module_source(name, source_text);
 
 	if (!after_save_module_xact_callback_registered) {
 		RegisterXactCallback(after_save_module_xact_callback, NULL);
@@ -2390,7 +2390,7 @@ void save_module(SCM name, const char *source)
 	}
 }
 
-void save_module_source(SCM name, const char *source)
+void save_module_source(SCM name, SCM source_text)
 {
 	SPIExecuteOptions options = {0};
 
@@ -2428,7 +2428,7 @@ void save_module_source(SCM name, const char *source)
 
 	param_ptr->ptype  = TEXTOID;
 	param_ptr->isnull = false;
-	param_ptr->value  = CStringGetTextDatum(source);
+	param_ptr->value  = CStringGetTextDatum(scm_to_locale_string(source_text));
 
 	options.allow_nonatomic = false;
 	options.tcount          = 1;
@@ -2514,7 +2514,7 @@ void after_save_module_xact_callback(XactEvent event, void *arg)
 
 SCM load_trusted_module(SCM name)
 {
-	const char *source_text = load_module_source_from_storage(SCM_CDR(name));
+	SCM source_text = load_module_source_from_storage(SCM_CDR(name));
 	SCM name_qualifier = SCM_CADR(name);
 
 	bool prior_allow_public_module_definition = allow_public_module_definition;
@@ -2547,17 +2547,18 @@ SCM load_trusted_module(SCM name)
 		defining_public_module = prior_defining_public_module;
 		module_defined_during_call = prior_module_defined_during_call;
 
-		elog(WARNING, "Module validation failed: error while loading (possibly dependent) module %s",
+		elog(WARNING, "Module validation failed: error while loading module %s",
 		     scm_to_string(name));
+		PG_RE_THROW();
 	}
 	PG_END_TRY();
 
 	return SCM_UNDEFINED;
 }
 
-const char *load_module_source_from_storage(SCM name)
+SCM load_module_source_from_storage(SCM name)
 {
-	const char *src;
+	SCM source_text;
 
 	SPIExecuteOptions options = {0};
 
@@ -2619,13 +2620,14 @@ const char *load_module_source_from_storage(SCM name)
 		TupleDesc tuple_desc = SPI_tuptable->tupdesc;
 		HeapTuple tuple = SPI_tuptable->vals[0];
 		bool is_null;
+		char *src = TextDatumGetCString(SPI_getbinval(tuple, tuple_desc, 1, &is_null));
 
-		src = TextDatumGetCString(SPI_getbinval(tuple, tuple_desc, 1, &is_null));
+		source_text = scm_from_locale_string(src);
 	}
 
 	SPI_finish();
 
-	return src;
+	return source_text;
 }
 
 Oid get_text_array_type_oid(void)
@@ -2826,7 +2828,7 @@ PG_FUNCTION_INFO_V1(plguile3_eval);
 Datum plguile3_eval(PG_FUNCTION_ARGS)
 {
 	Datum src_datum = PG_GETARG_DATUM(0);
-	SCM result = eval_code_block(TextDatumGetCString(src_datum));
+	SCM result = eval_code_block(scm_from_locale_string(TextDatumGetCString(src_datum)));
 
 	return CStringGetTextDatum(result == SCM_UNSPECIFIED ? "" : scm_to_string(result));
 }

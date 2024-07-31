@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.24] - 2024-07-31
+
+This version renames the module management functions in the plguile3
+schema not to have the `guile3_` prefix. It also fixes a memory error
+that occurred when loading module source text from the module table.
+
 ## [0.21.23] - 2024-07-30
 
 This version removes `define-public-module` and related code.  It is
