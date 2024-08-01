@@ -920,7 +920,7 @@
 (define-syntax-rule (re-export-curated-builtin-module name)
   (let ((m (current-module))
         (bindings (hash-ref curated-bindings 'name))
-        (adjust-module (hash-ref curated-module-adjustments 'name (lambda (m) m))))
+        (adjust-module (hash-ref curated-module-adjustments 'name identity)))
 
     (module-use-interfaces! m (list (resolve-builtin-interface 'name bindings)))
     (module-re-export! m bindings)
@@ -938,7 +938,7 @@
 
 (define curated-module-adjustments
   (alist->hash-table
-   `(((srfi srfi-64)
+   `(((srfi srfi-64) .
       ,(lambda (m)
          ;; test-log-to-file defaults to true
          (set! (@ (srfi srfi-64) test-log-to-file) #f))))))
