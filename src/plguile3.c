@@ -2547,8 +2547,7 @@ SCM load_trusted_module(SCM name)
 		defining_public_module = prior_defining_public_module;
 		module_defined_during_call = prior_module_defined_during_call;
 
-		elog(WARNING, "Module validation failed: error while loading module %s",
-		     scm_to_string(name));
+		elog(WARNING, "error while loading module %s:", scm_to_string(name));
 		PG_RE_THROW();
 	}
 	PG_END_TRY();

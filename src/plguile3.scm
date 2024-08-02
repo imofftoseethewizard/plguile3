@@ -181,7 +181,8 @@
     (lambda (name version)
       (if (eq? (car name) 'trusted)
           (let ((m (resolve-module name #f version #:ensure #f)))
-            (or m (%load-trusted-module name)))
+            (or (and m (module-public-interface m))
+                (%load-trusted-module name)))
           (try-load-module name version)))))
 
 (set! (@@ (guile) try-load-module) try-load-trusted-module)
