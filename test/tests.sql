@@ -1,6 +1,6 @@
 begin;
 
-select plan(254);
+select plan(253);
 
 select lives_ok('create extension if not exists plguile3', 'install (if not exists)');
 select lives_ok('drop extension plguile3 cascade', 'de-install');
@@ -140,10 +140,10 @@ create function f_real(a real, b real) returns real as '(* a b)' language guile3
 create function f_int_as_real() returns real as '1' language guile3;
 create function f_rational_as_real() returns real as '1/2' language guile3;
 create function f_x_text_as_real() returns real as '"not a number"' language guile3;
-create function f_decimal_as_real() returns real as '(make-decimal 31415 4)' language guile3;
-create function f_decimal_inf_as_real() returns real as '(make-decimal "Infinity" 0)' language guile3;
-create function f_decimal_neg_inf_as_real() returns real as '(make-decimal "-Infinity" 0)' language guile3;
-create function f_decimal_nan_as_real() returns real as '(make-decimal "NaN" 0)' language guile3;
+create function f_decimal_as_real() returns real as '(use-modules (pg types)) (make-decimal 31415 4)' language guile3;
+create function f_decimal_inf_as_real() returns real as '(use-modules (pg types)) (make-decimal "Infinity" 0)' language guile3;
+create function f_decimal_neg_inf_as_real() returns real as '(use-modules (pg types)) (make-decimal "-Infinity" 0)' language guile3;
+create function f_decimal_nan_as_real() returns real as '(use-modules (pg types)) (make-decimal "NaN" 0)' language guile3;
 
 select is(f_real(2.0::real, 1.5::real), 3.0::real, 'float4: simple sum');
 select is(f_real(3.402823e38::real, 2.0::real), 'inf'::real, 'float4: inf overflow');
@@ -175,10 +175,10 @@ create function f_dp(a double precision, b double precision) returns double prec
 create function f_int_as_dp() returns double precision as '1' language guile3;
 create function f_rational_as_dp() returns double precision as '1/2' language guile3;
 create function f_x_text_as_dp() returns double precision as '"not a number"' language guile3;
-create function f_decimal_as_dp() returns double precision as '(make-decimal 31415 4)' language guile3;
-create function f_decimal_inf_as_dp() returns double precision as '(make-decimal "Infinity" 0)' language guile3;
-create function f_decimal_neg_inf_as_dp() returns double precision as '(make-decimal "-Infinity" 0)' language guile3;
-create function f_decimal_nan_as_dp() returns double precision as '(make-decimal "NaN" 0)' language guile3;
+create function f_decimal_as_dp() returns double precision as '(use-modules (pg types)) (make-decimal 31415 4)' language guile3;
+create function f_decimal_inf_as_dp() returns double precision as '(use-modules (pg types)) (make-decimal "Infinity" 0)' language guile3;
+create function f_decimal_neg_inf_as_dp() returns double precision as '(use-modules (pg types)) (make-decimal "-Infinity" 0)' language guile3;
+create function f_decimal_nan_as_dp() returns double precision as '(use-modules (pg types)) (make-decimal "NaN" 0)' language guile3;
 
 select is(f_dp(2.0, 1.5), 3.0::double precision, 'float8: simple sum');
 select is(f_dp(1.7976931348623157e308, 2.0), 'inf', 'float8: inf overflow');
@@ -213,11 +213,11 @@ create function f_neg_inf_as_numeric() returns numeric as '-inf.0' language guil
 create function f_rational_as_numeric() returns numeric as '1/2' language guile3;
 create function f_large_real_as_numeric() returns numeric as '6.02e23' language guile3;
 create function f_x_string_as_numeric() returns numeric as '"not a number"' language guile3;
-create function f_x_bad_decimal_1() returns numeric as '(define (r) (make-decimal "a" 0)) (r)' language guile3;
-create function f_x_bad_decimal_2() returns numeric as '(make-decimal 0.5 0)' language guile3;
-create function f_x_bad_decimal_3() returns numeric as '(make-decimal 5 -1)' language guile3;
-create function f_x_bad_decimal_4() returns numeric as '(make-decimal 5 0.2)' language guile3;
-create function f_x_bad_decimal_5() returns numeric as '(make-decimal 5 "2")' language guile3;
+create function f_x_bad_decimal_1() returns numeric as '(use-modules (pg types)) (define (r) (make-decimal "a" 0)) (r)' language guile3;
+create function f_x_bad_decimal_2() returns numeric as '(use-modules (pg types)) (make-decimal 0.5 0)' language guile3;
+create function f_x_bad_decimal_3() returns numeric as '(use-modules (pg types)) (make-decimal 5 -1)' language guile3;
+create function f_x_bad_decimal_4() returns numeric as '(use-modules (pg types)) (make-decimal 5 0.2)' language guile3;
+create function f_x_bad_decimal_5() returns numeric as '(use-modules (pg types)) (make-decimal 5 "2")' language guile3;
 
 select is(f_numeric_id(t.v), t.v, 'decimal: identity mapping test -- positive finite')
 from (select '3.1415'::numeric(5,3)) t(v);
@@ -822,10 +822,10 @@ select is(f_ret_array(), '{"a", "b"}'::text[], 'array: return 2 item text');
 
 create type simple_record as (name text, count int, weight float8);
 
-create function f_record_arg_by_name(r simple_record) returns text as '(record-ref r ''name)' language guile3;
-create function f_record_arg_by_number(r simple_record) returns numeric as '(record-ref r 2)' language guile3;
-create function f_record_arg_type_name(r simple_record) returns text as '(symbol->string (car (record-types r)))' language guile3;
-create function f_ret_record() returns record as '(make-record ''(text int4 float8) #("a" 98 2.99792458e8) ''(s c v) #f)' language guile3;
+create function f_record_arg_by_name(r simple_record) returns text as '(use-modules (pg types)) (record-ref r ''name)' language guile3;
+create function f_record_arg_by_number(r simple_record) returns numeric as '(use-modules (pg types)) (record-ref r 2)' language guile3;
+create function f_record_arg_type_name(r simple_record) returns text as '(use-modules (pg types)) (symbol->string (car (record-types r)))' language guile3;
+create function f_ret_record() returns record as '(use-modules (pg types)) (make-record ''(text int4 float8) #("a" 98 2.99792458e8) ''(s c v) #f)' language guile3;
 
 select is(f_record_arg_by_name(row('foo', 5, 1.41)::simple_record), 'foo', 'record: argument by name');
 select is(f_record_arg_by_number(row('foo', 5, 1.41)::simple_record), 1.41, 'record: argument by number');
@@ -855,10 +855,12 @@ select ok(f_int4multirange_id(t.v) = t.v, 'int4multirange: identity mapping test
 from (select '{[3,7), [8,9)}'::int4multirange) t(v);
 
 create function f_x_bad_multirange_1() returns int4multirange as $$
+(use-modules (pg types))
 (make-multirange (cons 1 2))
 $$ language guile3;
 
 create function f_x_bad_multirange_2() returns int4multirange as $$
+(use-modules (pg types))
 (make-multirange #f)
 $$ language guile3;
 
@@ -894,6 +896,7 @@ create function f_setof_text() returns setof text as $$(list "one" "two")$$ lang
 create function f_setof_int_array() returns setof int4[] as $$(list #(0 -1) #(1 0))$$ language guile3;
 
 create function f_setof_record() returns setof record as $$
+(use-modules (pg types))
 (let ((types '(int4 text float8))) ; '
   (make-table types
               (list (make-record types #(1 "one" 1.0) '() #f) ; '
@@ -923,6 +926,7 @@ select throws_ok(
   'setof: record');
 
 create function f_x_bad_record_types_1() returns setof record as $$
+(use-modules (pg types))
 (make-table (cons 'int4 0) ;; '
             '() ;; '
             '(a b) ;; '
@@ -936,6 +940,7 @@ select throws_ok(
   'setof: x record bad types');
 
 create function f_x_bad_record_types_2() returns setof record as $$
+(use-modules (pg types))
 (make-table '(int4 0) ;; '
             '() ;; '
             '(a b) ;; '
@@ -956,7 +961,7 @@ select throws_ok(
 create function f_execute_simple() returns int4 as '(scalar (execute "select 1"))'
 language guile3;
 
-create function f_execute_with_args_int2() returns int2 as '(scalar (execute "select $1" ''(3)))'
+create function f_execute_with_args_int2() returns int2 as '(use-modules (pg types)) (scalar (execute "select $1" ''(3)))'
 language guile3;
 
 create function f_execute_with_args_int4() returns int4 as '(scalar (execute "select $1" ''(3)))'
@@ -983,7 +988,7 @@ language guile3;
 create function f_execute_with_args_rat_numeric() returns numeric as '(scalar (execute "select $1" ''(314/100)))'
 language guile3;
 
-create function f_execute_with_args_decimal() returns numeric as '(scalar (execute "select $1" `(,(make-decimal 314159 5))))'
+create function f_execute_with_args_decimal() returns numeric as '(use-modules (pg types)) (scalar (execute "select $1" `(,(make-decimal 314159 5))))'
 language guile3;
 
 create function f_execute_with_args_money() returns money as '(scalar (execute "select $1" ''(1234)))'
@@ -1013,19 +1018,19 @@ language guile3;
 create function f_execute_with_args_boolean(x int) returns boolean as '(scalar (execute "select $1" `(,(> x 0))))'
 language guile3;
 
-create function f_execute_with_args_point() returns point as '(scalar (execute "select $1" `(,(make-point 1 2))))'
+create function f_execute_with_args_point() returns point as '(use-modules (pg types)) (scalar (execute "select $1" `(,(make-point 1 2))))'
 language guile3;
 
-create function f_execute_with_args_line() returns line as '(scalar (execute "select $1" `(,(make-line 3 2 1))))'
+create function f_execute_with_args_line() returns line as '(use-modules (pg types)) (scalar (execute "select $1" `(,(make-line 3 2 1))))'
 language guile3;
 
-create function f_execute_with_args_lseg() returns lseg as '(scalar (execute "select $1" `(,(make-lseg (make-point 0 1) (make-point 2 3)))))'
+create function f_execute_with_args_lseg() returns lseg as '(use-modules (pg types)) (scalar (execute "select $1" `(,(make-lseg (make-point 0 1) (make-point 2 3)))))'
 language guile3;
 
-create function f_execute_with_args_box() returns box as '(scalar (execute "select $1" `(,(make-box (make-point 0 1) (make-point 2 3)))))'
+create function f_execute_with_args_box() returns box as '(use-modules (pg types)) (scalar (execute "select $1" `(,(make-box (make-point 0 1) (make-point 2 3)))))'
 language guile3;
 
-create function f_execute_with_args_path() returns path as '(scalar (execute "select $1" `(,(make-path #f (list->vector (list (make-point 0 1) (make-point 2 3) (make-point 4 1)))))))'
+create function f_execute_with_args_path() returns path as '(use-modules (pg types)) (scalar (execute "select $1" `(,(make-path #f (list->vector (list (make-point 0 1) (make-point 2 3) (make-point 4 1)))))))'
 language guile3;
 
 create function f_execute_with_args_fruit() returns fruit as $$
@@ -1033,6 +1038,7 @@ create function f_execute_with_args_fruit() returns fruit as $$
 $$ language guile3;
 
 create function f_execute_with_args_polygon() returns polygon as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-polygon
                      (make-box (make-point 0 0) (make-point 2 2))
@@ -1045,12 +1051,14 @@ $$
 language guile3;
 
 create function f_execute_with_args_inet() returns inet as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-inet 'inet 32 #u8(192 168 1 42))))) ;; '
 $$
 language guile3;
 
 create function f_execute_with_args_inet6() returns inet as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-inet 'inet6 128 #u8(#x20 #x01 #x04 #xf8  ;; '
                                               #x00 #x03 #x00 #xba
@@ -1060,30 +1068,35 @@ $$
 language guile3;
 
 create function f_execute_with_args_cidr() returns cidr as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-inet 'inet 8 #u8(10 0 0 0))))) ;; '
 $$
 language guile3;
 
 create function f_execute_with_args_macaddr() returns macaddr as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-macaddr #u8(#x08 #x00 #x2b #x01 #x02 #x03)))))
 $$
 language guile3;
 
 create function f_execute_with_args_macaddr8() returns macaddr8 as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-macaddr8 #u8(#x08 #x00 #x2b #x01 #x02 #x03 #x04 #x05)))))
 $$
 language guile3;
 
 create function f_execute_with_args_bits() returns bit(6) as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-bit-string #u8(#xa9) 8))))
 $$
 language guile3;
 
 create function f_execute_with_args_tsvector() returns tsvector as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-tsvector (list (make-tslexeme "foo"
                                                         (list (make-tsposition 1 3))))))))
@@ -1091,6 +1104,7 @@ $$
 language guile3;
 
 create function f_execute_with_args_tsquery() returns tsquery as $$
+(use-modules (pg types))
 (scalar (execute "select $1"
                  `(,(make-tsquery '(and (value "fat" 8 #f)  ;; '
                                         (phrase (or (value "rat" 6 #f) (value "cat" 1 #t))
@@ -1387,6 +1401,7 @@ select throws_ok(
   'execute_with_receiver: wrong_type_receiver');
 
 create function f_cursor_simple() returns text as $$
+(use-modules (pg types))
 (let ((c (cursor-open "select * from things order by id")))
   (record-ref (car (fetch c)) 'name)) ;; '
 $$ language guile3;
@@ -1438,6 +1453,7 @@ $$ language plpgsql;
 select is(insert_thing(4, 'more'), 4, 'simple trigger test');
 
 create function f_tr_modify_id() returns trigger as $$
+(use-modules (pg types))
 (record-set! new 'id (+ 1 (record-ref new 'id)))
 new
 $$ language guile3;
@@ -1491,20 +1507,11 @@ select throws_ok(
   e'execute-error: ("P0001" "nested error" #f #f)\n',
   'nested error handling');
 
-select throws_ok(
-  'create function f1("x) 1) (define (f x" int) returns int as ''(+ x 1)'' language guile3',
-  NULL,
-  'pathological function 1');
+create function f_strange_param_name("x) 1) (define (f x" int) returns int as
+'(+ #{x) 1) (define (f x}# 1)'
+language guile3;
 
-select throws_ok(
-  'create function f2("x) 1)" int) returns int as ''(+ x 1)'' language guile3',
-  NULL,
-  'pathological function 2');
-
-select throws_ok(
-  'create function f3(x int) returns int as ''('' language guile3',
-  NULL,
-  'pathological function 3');
+select is(f_strange_param_name(2), 3, 'strange parameter names');
 
 create function f_execute_with_null_arg(x int) returns int as $$
   (scalar (execute "select coalesce($1, $2)" (list '() x))) ; '
@@ -1526,5 +1533,10 @@ select throws_ok(
   'do $$ (execute ''("select 1")) $$ language guile3',
   NULL,
   'check invalid command string');
+
+select throws_ok(
+  'create function f3(x int) returns int as ''('' language guile3',
+  NULL,
+  'pathological function 3');
 
 rollback;

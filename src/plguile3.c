@@ -215,11 +215,10 @@ static SCM load_base_module(void);
 static SCM base_module_loader(void *data);
 static SCM load_base_module_error_handler(void *data, SCM key, SCM args);
 static void role_remove_func_oid(SCM old_owner, SCM func);
-static SCM base_module_evaluator(void *data);
 static SCM eval_string_in_base_module(const char *text);
-static SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args);
-static SCM eval_lambda_expr(const char *src, SCM module);
-static SCM read_error_handler(void *data, SCM key, SCM args);
+static SCM eval_string_in_module(const char *text, SCM module);
+static SCM module_evaluator(void *data);
+static SCM module_evaluator_error_handler(void *data, SCM key, SCM args);
 static SCM call_1_executor(void *data);
 static SCM call_1(SCM func, SCM arg);
 static SCM call_2_executor(void *data);
@@ -239,10 +238,9 @@ static Datum call_trigger(FunctionCallInfo fcinfo);
 static Datum call_ordinary(FunctionCallInfo fcinfo);
 static SCM prepare_event_trigger_arguments(EventTriggerData *event_trigger_data);
 static SCM prepare_ordinary_arguments(FunctionCallInfo fcinfo);
-static SCM find_or_compile_proc(Oid func_oid);
+static SCM find_or_compile_module_and_proc(Oid func_oid);
 static SCM prepare_trigger_arguments(TriggerData *trigger_data);
 static SCM compile_proc(HeapTuple proc_tuple, SCM module);
-static void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple);
 static Datum convert_result_to_datum(SCM result, HeapTuple proc_tuple, FunctionCallInfo fcinfo);
 static Datum convert_boxed_datum_to_datum(SCM scm, Oid target_type_oid);
 static Datum scm_to_composite_datum(SCM result, TupleDesc tuple_desc);
@@ -335,15 +333,14 @@ static SCM spi_cursor_move(SCM cursor, SCM direction, SCM count);
 static FetchDirection scm_to_fetch_direction(SCM direction);
 static long scm_to_fetch_count(SCM count);
 static char set_current_volatility(char v);
-static SCM apply_in_sandbox(SCM proc, SCM args);
+static SCM apply_in_sandbox(SCM module, SCM proc, SCM args);
 static SCM apply_0_with_handlers(SCM proc, SCM args, int internal_backtrace_frame_count);
 static SCM apply_0_with_handlers_inner(void *data);
 static SCM apply_0_with_handlers_error_handler(void *data, SCM key, SCM args);
 static SCM apply_0_with_handlers_pre_unwind_handler(void *data, SCM key, SCM args);
-static SCM find_cached_proc(HeapTuple proc_tuple);
+static SCM find_cached_module_and_proc(HeapTuple proc_tuple);
 static SCM hash_proc_source(HeapTuple proc_tuple);
 static CallLimits *get_call_limits(CallLimits *limits);
-static void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc);
 
 static Oid float4_oid;
 static Oid float8_oid;
@@ -370,8 +367,6 @@ static SCM date_nanosecond_proc;
 static SCM date_second_proc;
 static SCM date_year_proc;
 static SCM date_zone_offset_proc;
-static SCM decimal_to_inexact_proc;
-static SCM decimal_to_string_proc;
 static SCM flush_function_cache_proc;
 static SCM inet_address_proc;
 static SCM inet_bits_proc;
@@ -382,11 +377,7 @@ static SCM is_boxed_datum_proc;
 static SCM is_circle_proc;
 static SCM is_cursor_proc;
 static SCM is_date_proc;
-static SCM is_decimal_proc;
 static SCM is_inet_proc;
-static SCM is_int2_proc;
-static SCM is_int4_proc;
-static SCM is_int8_proc;
 static SCM is_jsonb_proc;
 static SCM is_jsonpath_proc;
 static SCM is_line_proc;
@@ -398,14 +389,9 @@ static SCM is_path_proc;
 static SCM is_point_proc;
 static SCM is_polygon_proc;
 static SCM is_range_proc;
-static SCM is_record_proc;
-static SCM is_table_proc;
 static SCM is_time_proc;
-static SCM is_tsquery_proc;
 static SCM is_tsvector_proc;
 static SCM jsonb_expr_proc;
-static SCM jsonpath_expr_proc;
-static SCM jsonpath_is_strict_proc;
 static SCM line_a_proc;
 static SCM line_b_proc;
 static SCM line_c_proc;
@@ -421,7 +407,6 @@ static SCM make_cursor_proc;
 static SCM make_date_proc;
 static SCM make_inet_proc;
 static SCM make_jsonb_proc;
-static SCM make_jsonpath_proc;
 static SCM make_line_proc;
 static SCM make_lseg_proc;
 static SCM make_macaddr8_proc;
@@ -431,15 +416,10 @@ static SCM make_path_proc;
 static SCM make_point_proc;
 static SCM make_polygon_proc;
 static SCM make_range_proc;
-static SCM make_record_proc;
-static SCM make_table_proc;
 static SCM make_time_proc;
 static SCM make_tslexeme_proc;
 static SCM make_tsposition_proc;
-static SCM make_tsquery_proc;
-static SCM make_tsvector_proc;
 static SCM multirange_ranges_proc;
-static SCM normalize_tsvector_proc;
 static SCM path_is_closed_proc;
 static SCM path_points_proc;
 static SCM point_x_proc;
@@ -449,15 +429,8 @@ static SCM polygon_points_proc;
 static SCM range_flags_proc;
 static SCM range_lower_proc;
 static SCM range_upper_proc;
-static SCM record_attr_names_proc;
-static SCM record_attrs_proc;
-static SCM record_types_proc;
 static SCM role_add_func_oid_proc;
 static SCM role_to_func_oids_proc;
-static SCM string_to_decimal_proc;
-static SCM table_attr_names_proc;
-static SCM table_rows_proc;
-static SCM table_types_proc;
 static SCM time_duration_symbol;
 static SCM time_monotonic_symbol;
 static SCM time_nanosecond_proc;
@@ -468,11 +441,8 @@ static SCM tslexeme_lexeme_proc;
 static SCM tslexeme_positions_proc;
 static SCM tsposition_index_proc;
 static SCM tsposition_weight_proc;
-static SCM tsquery_expr_proc;
 static SCM tsvector_lexemes_proc;
-static SCM validate_tsquery_proc;
 //static SCM validate_jsonb_proc;
-static SCM validate_jsonpath_proc;
 
 // Symbols for modules
 static SCM public_symbol;
@@ -573,6 +543,7 @@ static SCM spi_rollback(void);
 static SCM spi_rollback_and_chain(void);
 
 static SCM base_module = SCM_UNDEFINED;
+static SCM types_module = SCM_UNDEFINED;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -692,7 +663,6 @@ void init_guile(void)
 	is_circle_proc              = eval_string_in_base_module("circle?");
 	is_cursor_proc              = eval_string_in_base_module("cursor?");
 	is_date_proc                = eval_string_in_base_module("date?");
-	is_decimal_proc             = eval_string_in_base_module("decimal?");
 	is_inet_proc                = eval_string_in_base_module("inet?");
 	is_jsonb_proc               = eval_string_in_base_module("jsonb?");
 	is_jsonpath_proc            = eval_string_in_base_module("jsonpath?");
@@ -705,14 +675,9 @@ void init_guile(void)
 	is_point_proc               = eval_string_in_base_module("point?");
 	is_polygon_proc             = eval_string_in_base_module("polygon?");
 	is_range_proc               = eval_string_in_base_module("range?");
-	is_record_proc              = eval_string_in_base_module("record?");
-	is_table_proc               = eval_string_in_base_module("table?");
 	is_time_proc                = eval_string_in_base_module("time?");
-	is_tsquery_proc             = eval_string_in_base_module("tsquery?");
 	is_tsvector_proc            = eval_string_in_base_module("tsvector?");
 	jsonb_expr_proc             = eval_string_in_base_module("jsonb-expr");
-	jsonpath_expr_proc          = eval_string_in_base_module("jsonpath-expr");
-	jsonpath_is_strict_proc     = eval_string_in_base_module("jsonpath-strict?");
 	line_a_proc                 = eval_string_in_base_module("line-a");
 	line_b_proc                 = eval_string_in_base_module("line-b");
 	line_c_proc                 = eval_string_in_base_module("line-c");
@@ -728,7 +693,6 @@ void init_guile(void)
 	make_date_proc              = eval_string_in_base_module("make-date");
 	make_inet_proc              = eval_string_in_base_module("make-inet");
 	make_jsonb_proc             = eval_string_in_base_module("make-jsonb");
-	make_jsonpath_proc          = eval_string_in_base_module("make-jsonpath");
 	make_line_proc              = eval_string_in_base_module("make-line");
 	make_lseg_proc              = eval_string_in_base_module("make-lseg");
 	make_multirange_proc        = eval_string_in_base_module("make-multirange");
@@ -738,15 +702,10 @@ void init_guile(void)
 	make_point_proc             = eval_string_in_base_module("make-point");
 	make_polygon_proc           = eval_string_in_base_module("make-polygon");
 	make_range_proc             = eval_string_in_base_module("make-range");
-	make_record_proc            = eval_string_in_base_module("make-record");
-	make_table_proc             = eval_string_in_base_module("make-table");
 	make_time_proc              = eval_string_in_base_module("make-time");
 	make_tslexeme_proc          = eval_string_in_base_module("make-tslexeme");
 	make_tsposition_proc        = eval_string_in_base_module("make-tsposition");
-	make_tsquery_proc           = eval_string_in_base_module("make-tsquery");
-	make_tsvector_proc          = eval_string_in_base_module("make-tsvector");
 	multirange_ranges_proc      = eval_string_in_base_module("multirange-ranges");
-	normalize_tsvector_proc     = eval_string_in_base_module("normalize-tsvector");
 	path_is_closed_proc         = eval_string_in_base_module("path-closed?");
 	path_points_proc            = eval_string_in_base_module("path-points");
 	point_x_proc                = eval_string_in_base_module("point-x");
@@ -756,14 +715,8 @@ void init_guile(void)
 	range_flags_proc            = eval_string_in_base_module("range-flags");
 	range_lower_proc            = eval_string_in_base_module("range-lower");
 	range_upper_proc            = eval_string_in_base_module("range-upper");
-	record_attr_names_proc      = eval_string_in_base_module("record-attr-names");
-	record_attrs_proc           = eval_string_in_base_module("record-attrs");
-	record_types_proc           = eval_string_in_base_module("record-types");
 	role_add_func_oid_proc      = eval_string_in_base_module("role-add-func-oid!");
 	role_to_func_oids_proc      = eval_string_in_base_module("role->func-oids");
-	table_attr_names_proc       = eval_string_in_base_module("table-attr-names");
-	table_rows_proc             = eval_string_in_base_module("table-rows");
-	table_types_proc            = eval_string_in_base_module("table-types");
 	time_duration_symbol        = eval_string_in_base_module("time-duration");
 	time_monotonic_symbol       = eval_string_in_base_module("time-monotonic");
 	time_nanosecond_proc        = eval_string_in_base_module("time-nanosecond");
@@ -773,19 +726,10 @@ void init_guile(void)
 	tslexeme_positions_proc     = eval_string_in_base_module("tslexeme-positions");
 	tsposition_index_proc       = eval_string_in_base_module("tsposition-index");
 	tsposition_weight_proc      = eval_string_in_base_module("tsposition-weight");
-	tsquery_expr_proc           = eval_string_in_base_module("tsquery-expr");
 	tsvector_lexemes_proc       = eval_string_in_base_module("tsvector-lexemes");
-	validate_jsonpath_proc      = eval_string_in_base_module("validate-jsonpath");
-	validate_tsquery_proc       = eval_string_in_base_module("validate-tsquery");
 
-	decimal_to_string_proc  = eval_string_in_base_module("decimal->string");
-	decimal_to_inexact_proc = eval_string_in_base_module("decimal->inexact");
-	is_int2_proc            = eval_string_in_base_module("int2-compatible?");
-	is_int4_proc            = eval_string_in_base_module("int4-compatible?");
-	is_int8_proc            = eval_string_in_base_module("int8-compatible?");
-	string_to_decimal_proc  = eval_string_in_base_module("string->decimal");
-
-	trusted_module         = eval_string_in_base_module("(resolve-module '(trusted))");
+	types_module   = scm_c_resolve_module("pg types");
+	trusted_module = scm_c_resolve_module("trusted");
 
 	public_symbol  = scm_from_utf8_symbol("public");
 	trusted_symbol = scm_from_utf8_symbol("trusted");
@@ -963,9 +907,17 @@ PG_FUNCTION_INFO_V1(plguile3_compile);
 static void flush_module_cache(void);
 static void unload_trusted_modules(void);
 static void flush_func_cache(void);
-static SCM compile_and_cache_proc(HeapTuple proc_tuple);
-static SCM find_or_create_module_for_role(Oid role_oid);
+static SCM compile_and_cache_module_and_proc(HeapTuple proc_tuple);
+static void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM module, SCM proc);
+static SCM create_module_for_role(Oid role_oid);
 static SCM untrusted_eval(SCM expr, SCM env);
+static SCM assemble_proc_definition(HeapTuple proc_tuple);
+static SCM create_proc_formals_expr(HeapTuple proc_tuple);
+static SCM create_event_trigger_proc_formals(HeapTuple proc_tuple);
+static SCM create_trigger_proc_formals(HeapTuple proc_tuple);
+static SCM create_ordinary_proc_formals(HeapTuple proc_tuple);
+static SCM guarded_read(SCM port, const char *src);
+static SCM read_error_handler(void *data, SCM key, SCM args);
 
 Datum plguile3_compile(PG_FUNCTION_ARGS)
 {
@@ -981,23 +933,23 @@ Datum plguile3_compile(PG_FUNCTION_ARGS)
 		unload_trusted_modules();
 	}
 
-	compile_and_cache_proc(proc_tuple);
+	compile_and_cache_module_and_proc(proc_tuple);
 
 	ReleaseSysCache(proc_tuple);
 
 	return (Datum) 1;
 }
 
-SCM compile_and_cache_proc(HeapTuple proc_tuple)
+SCM compile_and_cache_module_and_proc(HeapTuple proc_tuple)
 {
 	Form_pg_proc pg_proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
 	Oid owner_oid = pg_proc->proowner;
-	SCM module = find_or_create_module_for_role(owner_oid);
+	SCM module = create_module_for_role(owner_oid);
 	SCM proc = compile_proc(proc_tuple, module);
 
-	cache_proc(pg_proc->oid, owner_oid, hash_proc_source(proc_tuple), proc);
+	cache_proc(pg_proc->oid, owner_oid, hash_proc_source(proc_tuple), module, proc);
 
-	return proc;
+	return scm_cons(module, proc);
 }
 
 SCM hash_proc_source(HeapTuple proc_tuple)
@@ -1016,7 +968,7 @@ void flush_func_cache(void)
 	scm_gc_unprotect_object(old_func_cache);
 }
 
-void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
+void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM module, SCM proc)
 {
 	SCM func = scm_from_int(func_oid);
 	SCM owner = scm_from_int(owner_oid);
@@ -1032,117 +984,170 @@ void cache_proc(Oid func_oid, Oid owner_oid, SCM src_hash, SCM proc)
 	}
 
 	call_2(role_add_func_oid_proc, owner, func);
-	scm_hash_set_x(func_cache, func, scm_cons(proc, scm_cons(owner, src_hash)));
+	scm_hash_set_x(func_cache, scm_cons(module, func), scm_cons(proc, scm_cons(owner, src_hash)));
 }
 
 SCM compile_proc(HeapTuple proc_tuple, SCM module)
 {
-	StringInfoData buf;
-
-	assemble_lambda_expr(&buf, proc_tuple);
-
-	return eval_lambda_expr(buf.data, module);
+	SCM proc_expr = assemble_proc_definition(proc_tuple);
+	return untrusted_eval(proc_expr, module);
 }
 
-void assemble_lambda_expr(StringInfoData *buf, HeapTuple proc_tuple)
+SCM assemble_proc_definition(HeapTuple proc_tuple)
+{
+	static SCM begin_sym       = SCM_UNDEFINED;
+	static SCM lambda_sym      = SCM_UNDEFINED;
+	static SCM use_modules_sym = SCM_UNDEFINED;
+
+	bool is_null;
+	Datum prosrc_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
+
+	if (begin_sym == SCM_UNDEFINED) {
+		begin_sym       = scm_from_utf8_symbol("begin");
+		lambda_sym      = scm_from_utf8_symbol("lambda");
+		use_modules_sym = scm_from_utf8_symbol("use-modules");
+	}
+
+	if (is_null)
+		elog(ERROR, "compile_proc: source datum is null.");
+
+	else {
+		char *src = TextDatumGetCString(prosrc_datum);
+		SCM port = scm_open_input_string(scm_from_locale_string(src));
+		SCM x;
+		SCM use_modules_exprs = SCM_EOL;
+		SCM lambda_expr;
+		SCM formals_expr = create_proc_formals_expr(proc_tuple);
+		SCM body_exprs = SCM_EOL;
+
+		while (scm_eof_object_p(x = guarded_read(port, src)) == SCM_BOOL_F)
+			if (scm_pair_p(x) == SCM_BOOL_T && SCM_CAR(x) == use_modules_sym)
+				use_modules_exprs = scm_cons(x, use_modules_exprs);
+			else
+				body_exprs = scm_cons(x, body_exprs);
+
+		lambda_expr = scm_cons(lambda_sym, scm_cons(formals_expr, scm_reverse(body_exprs)));
+
+		return scm_cons(begin_sym, scm_reverse_x(use_modules_exprs, scm_list_1(lambda_expr)));
+	}
+}
+
+SCM create_proc_formals_expr(HeapTuple proc_tuple)
+{
+	if (is_event_trigger_handler(proc_tuple))
+		return create_event_trigger_proc_formals(proc_tuple);
+
+	else if (is_trigger_handler(proc_tuple))
+		return create_trigger_proc_formals(proc_tuple);
+
+	else
+		return create_ordinary_proc_formals(proc_tuple);
+}
+
+SCM create_event_trigger_proc_formals(HeapTuple proc_tuple)
+{
+	static SCM event_trigger_handler_formals = SCM_UNDEFINED;
+
+	if (event_trigger_handler_formals == SCM_UNDEFINED)
+
+		event_trigger_handler_formals = scm_list_3(
+			scm_from_utf8_symbol("event"),
+			scm_from_utf8_symbol("parse-tree"),
+			scm_from_utf8_symbol("tag"));
+
+	return event_trigger_handler_formals;
+}
+
+SCM create_trigger_proc_formals(HeapTuple proc_tuple)
+{
+	static SCM trigger_handler_formals = SCM_UNDEFINED;
+
+	if (trigger_handler_formals == SCM_UNDEFINED)
+
+		trigger_handler_formals = scm_append(
+			scm_list_3(
+				scm_list_5(
+					scm_from_utf8_symbol("new"),
+					scm_from_utf8_symbol("old"),
+					scm_from_utf8_symbol("tg-name"),
+					scm_from_utf8_symbol("tg-when"),
+					scm_from_utf8_symbol("tg-level")),
+				scm_list_5(
+					scm_from_utf8_symbol("tg-op"),
+					scm_from_utf8_symbol("tg-relid"),
+					scm_from_utf8_symbol("tg-relname"),
+					scm_from_utf8_symbol("tg-table-name"),
+					scm_from_utf8_symbol("tg-table-schema")),
+				scm_list_1(
+					scm_from_utf8_symbol("tg-argv"))));
+
+	return trigger_handler_formals;
+}
+
+SCM create_ordinary_proc_formals(HeapTuple proc_tuple)
 {
 	bool is_null;
 
-	Datum prosrc_datum;
-	char *prosrc;
+	Datum argnames_datum, argmodes_datum;
 
-	initStringInfo(buf);
+	ArrayType *argnames_array, *argmodes_array;
+	int num_args, num_modes, i;
 
-	appendStringInfo(buf, "(lambda (");
+	char *argmodes;
 
-	if (is_event_trigger_handler(proc_tuple))
-		appendStringInfo(buf, " event parse-tree tag");
+	SCM formals = SCM_EOL;
 
-	else if (is_trigger_handler(proc_tuple))
-		appendStringInfo(buf, " new old tg-name tg-when tg-level tg-op tg-relid tg-relname tg-table-name tg-table-schema tg-argv");
+	argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
 
-	else {
-		Datum argnames_datum, argmodes_datum;
+	if (!is_null) {
+		argnames_array = DatumGetArrayTypeP(argnames_datum);
+		num_args = ARR_DIMS(argnames_array)[0];
 
-		ArrayType *argnames_array, *argmodes_array;
-		int num_args, num_modes, i;
+		argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
 
-		char *argmodes;
+		if (is_null) {
+			argmodes = NULL;
+		}
+		else {
+			argmodes_array = DatumGetArrayTypeP(argmodes_datum);
+			argmodes = (char *) ARR_DATA_PTR(argmodes_array);
+			num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
 
-		argnames_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargnames, &is_null);
-
-		if (!is_null) {
-			argnames_array = DatumGetArrayTypeP(argnames_datum);
-			num_args = ARR_DIMS(argnames_array)[0];
-
-			argmodes_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_proargmodes, &is_null);
-
-			if (is_null) {
-				argmodes = NULL;
+			if (num_modes != num_args) {
+				elog(ERROR, "compile_proc: num arg modes %d and num args %d differ", num_modes, num_args);
 			}
-			else {
-				argmodes_array = DatumGetArrayTypeP(argmodes_datum);
-				argmodes = (char *) ARR_DATA_PTR(argmodes_array);
-				num_modes = ArrayGetNItems(ARR_NDIM(argmodes_array), ARR_DIMS(argmodes_array));
+		}
 
-				if (num_modes != num_args) {
-					elog(ERROR, "compile_proc: num arg modes %d and num args %d differ", num_modes, num_args);
+		for (i = 1; i <= num_args; i++) {
+			if (argmodes == NULL || argmodes[i-1] != 'o') {
+				Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
+				if (!is_null) {
+					char *name = TextDatumGetCString(name_datum);
+					formals = scm_cons(scm_from_utf8_symbol(name), formals);
 				}
-			}
-
-			for (i = 1; i <= num_args; i++) {
-				if (argmodes == NULL || argmodes[i-1] != 'o') {
-					Datum name_datum = array_get_element(argnames_datum, 1, &i, -1, -1, false, 'i', &is_null);
-					if (!is_null) {
-						char *name = TextDatumGetCString(name_datum);
-						appendStringInfo(buf, " %s", name);
-					}
-					else {
-						elog(NOTICE, "compile_proc: %d: name_datum is null", i);
-					}
+				else {
+					elog(ERROR, "compile_proc: %d: name_datum is null", i);
 				}
 			}
 		}
 	}
 
-	prosrc_datum = SysCacheGetAttr(PROCOID, proc_tuple, Anum_pg_proc_prosrc, &is_null);
-	prosrc = TextDatumGetCString(prosrc_datum);
-
-	if (is_null)
-		elog(ERROR, "compile_proc: source datum is null.");
-
-	appendStringInfo(buf, ")\n%s)", prosrc);
+	return scm_reverse(formals);
 }
 
-SCM eval_lambda_expr(const char *src, SCM module)
+SCM guarded_read(SCM port, const char *src)
 {
-	SCM scm_proc;
-	SCM port = scm_open_input_string(scm_from_locale_string(src));
-
-	SCM lambda_expr = scm_internal_catch(
-        SCM_BOOL_T,
+	return scm_internal_catch(
+		SCM_BOOL_T,
         (scm_t_catch_body)scm_read,
         (void *)port,
-        read_error_handler, (void *)src);
-
-	SCM expected_eof = scm_internal_catch(
-        SCM_BOOL_T,
-        (scm_t_catch_body)scm_read,
-        (void *)port,
-        read_error_handler, (void *)src);
-
-	if (!SCM_EOF_OBJECT_P(expected_eof))
-		elog(ERROR, "syntax error: object read after end of lambda expr: %s\n%s",
-		     scm_to_string(expected_eof), src);
-
-	scm_proc = untrusted_eval(lambda_expr, module);
-
-	return scm_proc;
+        read_error_handler,
+		(void *)src);
 }
 
 SCM read_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "%s %s \nfunction body: \n%s", scm_to_string(key),
+	elog(ERROR, "%s %s \nwhile reading: \n%s", scm_to_string(key),
 	     scm_to_string(args), (char *)data);
 }
 
@@ -1260,7 +1265,7 @@ SCM call_8_executor(void *data)
 
 SCM call_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "Unable to call %s in base module: \n        %s %s", scm_to_string(*(SCM *)data),
+	elog(ERROR, "Unable to call %s: \n        %s %s", scm_to_string(*(SCM *)data),
 	     scm_to_string(key), scm_to_string(args));
 }
 
@@ -1288,10 +1293,13 @@ Datum call_event_trigger(FunctionCallInfo fcinfo)
 {
 	EventTriggerData *event_trigger_data = (EventTriggerData *)fcinfo->context;
 
-	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
+	SCM pair = find_or_compile_module_and_proc(fcinfo->flinfo->fn_oid);
+	SCM module = SCM_CAR(pair);
+	SCM proc = SCM_CDR(pair);
+
 	SCM args = prepare_event_trigger_arguments(event_trigger_data);
 
-	apply_in_sandbox(proc, args);
+	apply_in_sandbox(module, proc, args);
 
 	return PointerGetDatum(NULL);
 }
@@ -1312,7 +1320,10 @@ Datum call_trigger(FunctionCallInfo fcinfo)
 	TriggerData	*trigger_data = (TriggerData *)fcinfo->context;
 	TriggerEvent event = trigger_data->tg_event;
 
-	SCM proc = find_or_compile_proc(fcinfo->flinfo->fn_oid);
+	SCM pair = find_or_compile_module_and_proc(fcinfo->flinfo->fn_oid);
+	SCM module = SCM_CAR(pair);
+	SCM proc = SCM_CDR(pair);
+
 	SCM args = prepare_trigger_arguments(trigger_data);
 
 	SCM scm_result;
@@ -1322,7 +1333,7 @@ Datum call_trigger(FunctionCallInfo fcinfo)
 
 	PG_TRY();
 	{
-		scm_result = apply_in_sandbox(proc, args);
+		scm_result = apply_in_sandbox(module, proc, args);
 	}
 	PG_FINALLY();
 	{
@@ -1348,21 +1359,21 @@ Datum call_trigger(FunctionCallInfo fcinfo)
 	return PointerGetDatum(NULL);
 }
 
-SCM find_or_compile_proc(Oid func_oid)
+SCM find_or_compile_module_and_proc(Oid func_oid)
 {
 	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
-	SCM proc = find_cached_proc(proc_tuple);
+	SCM pair = find_cached_module_and_proc(proc_tuple);
 
-	if (proc == SCM_BOOL_F)
-		proc = compile_and_cache_proc(proc_tuple);
+	if (pair == SCM_BOOL_F)
+		pair = compile_and_cache_module_and_proc(proc_tuple);
 
 	ReleaseSysCache(proc_tuple);
 
-	return proc;
+	return pair;
 }
 
-SCM find_cached_proc(HeapTuple proc_tuple)
+SCM find_cached_module_and_proc(HeapTuple proc_tuple)
 {
 	Form_pg_proc proc = (Form_pg_proc)GETSTRUCT(proc_tuple);
 
@@ -1378,7 +1389,7 @@ SCM find_cached_proc(HeapTuple proc_tuple)
 
 	// On changes to the evaluation environment, the function cache
 	// for this role will be cleared.
-	find_or_create_module_for_role(owner_oid);
+	create_module_for_role(owner_oid);
 
 	entry = scm_hash_ref(func_cache, func, SCM_BOOL_F);
 
@@ -1416,24 +1427,37 @@ void role_remove_func_oid(SCM old_owner, SCM func)
 
 SCM eval_string_in_base_module(const char *text)
 {
+	return eval_string_in_module(text, base_module);
+}
+
+SCM eval_string_in_module(const char *text, SCM module)
+{
+	SCM data = scm_cons(scm_from_locale_string(text), module);
 	return scm_internal_catch(
 		SCM_BOOL_T,
-		(scm_t_catch_body)base_module_evaluator,
-		(void *)scm_from_locale_string(text),
-		base_module_evaluator_error_handler,
-		(void *)text);
+		(scm_t_catch_body)module_evaluator,
+		(void *)data,
+		module_evaluator_error_handler,
+		(void *)data);
 }
 
-SCM base_module_evaluator_error_handler(void *data, SCM key, SCM args)
+SCM module_evaluator_error_handler(void *data, SCM key, SCM args)
 {
-	elog(ERROR, "internal error: failed to evaluate \"%s\" in base module: %s %s",
-	     (const char *)data, scm_to_string(key), scm_to_string(args));
+	const char *text = scm_to_locale_string(SCM_CAR((SCM)data));
+	SCM module = SCM_CDR((SCM)data);
+
+	elog(ERROR, "internal error: failed to evaluate \"%s\" in module %s: %s %s",
+	     text, scm_to_string(module), scm_to_string(key), scm_to_string(args));
 }
 
-SCM base_module_evaluator(void *data)
+SCM module_evaluator(void *data)
 {
-	return scm_eval_string_in_module((SCM)data, base_module);
+	SCM string = SCM_CAR((SCM)data);
+	SCM module = SCM_CDR((SCM)data);
+
+	return scm_eval_string_in_module(string, module);
 }
+
 
 SCM prepare_trigger_arguments(TriggerData *trigger_data)
 {
@@ -1503,6 +1527,19 @@ SCM heap_tuple_to_scm(HeapTuple heap_tuple, TupleDesc tuple_desc)
 	return datum_heap_tuple_to_scm(HeapTupleGetDatum(heap_tuple), tuple_desc);
 }
 
+static SCM make_record(SCM type_names, SCM values, SCM attr_names, SCM attr_names_hash);
+static SCM make_tsquery(SCM expr);
+static SCM make_tsvector(SCM lexemes);
+static SCM normalize_tsvector(SCM tsvector);
+static SCM record_attrs(SCM record);
+static SCM record_attr_names(SCM record);
+static SCM record_types(SCM record);
+static SCM table_attr_names(SCM table);
+static SCM table_rows(SCM table);
+static SCM table_types(SCM table);
+static SCM tsquery_expr(SCM tsquery);
+static SCM validate_tsquery(SCM tsquery);
+
 HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
 {
 	HeapTuple result;
@@ -1510,7 +1547,7 @@ HeapTuple scm_record_to_heap_tuple(SCM x, TupleDesc tuple_desc)
 	Datum *ret_values;
 	bool *ret_is_null;
 
-	SCM attrs = call_1(record_attrs_proc, x);
+	SCM attrs = record_attrs(x);
 
 	ret_values = (Datum *) palloc0(sizeof(Datum) * tuple_desc->natts);
 	ret_is_null = (bool *) palloc0(sizeof(bool) * tuple_desc->natts);
@@ -1538,12 +1575,15 @@ Datum call_ordinary(FunctionCallInfo fcinfo)
 {
 	Oid func_oid = fcinfo->flinfo->fn_oid;
 
-	SCM proc = find_or_compile_proc(func_oid);
+	SCM pair = find_or_compile_module_and_proc(func_oid);
+	SCM module = SCM_CAR(pair);
+	SCM proc = SCM_CDR(pair);
+
 	SCM args = prepare_ordinary_arguments(fcinfo);
 
 	char prior_volatility = set_current_volatility(func_volatile(func_oid));
 
-	SCM scm_result = apply_in_sandbox(proc, args);
+	SCM scm_result = apply_in_sandbox(module, proc, args);
 
 	HeapTuple proc_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
 
@@ -1573,9 +1613,9 @@ char set_current_volatility(char v)
 //
 // Sandboxed Apply
 
-static SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit);
+static SCM apply_with_limits(SCM module, SCM proc, SCM args, SCM time_limit, SCM allocation_limit);
 
-SCM apply_in_sandbox(SCM proc, SCM args)
+SCM apply_in_sandbox(SCM module, SCM proc, SCM args)
 {
 	CallLimits limits;
 	SCM time_limit, allocation_limit;
@@ -1585,10 +1625,10 @@ SCM apply_in_sandbox(SCM proc, SCM args)
 	time_limit = scm_from_double(limits.time_seconds);
 	allocation_limit = scm_from_int64(limits.allocation_bytes);
 
-	return apply_with_limits(proc, args, time_limit, allocation_limit);
+	return apply_with_limits(module, proc, args, time_limit, allocation_limit);
 }
 
-SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
+SCM apply_with_limits(SCM module, SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
 {
 	static SCM apply_with_limits_proc = SCM_UNDEFINED;
 
@@ -1597,7 +1637,7 @@ SCM apply_with_limits(SCM proc, SCM args, SCM time_limit, SCM allocation_limit)
 
 	return apply_0_with_handlers(
 		apply_with_limits_proc,
-		scm_list_4(proc, args, time_limit, allocation_limit),
+		scm_list_5(proc, args, time_limit, allocation_limit, module),
 		9);
 }
 
@@ -1817,7 +1857,7 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, ReturnSetInfo *r
     tupstore = tuplestore_begin_heap(true, false, work_mem);
 
     if (is_table(x))
-        rows = call_1(table_rows_proc, x);
+        rows = table_rows(x);
     else
         rows = x;
 
@@ -1828,7 +1868,7 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, ReturnSetInfo *r
         SCM item = scm_car(rows);
 
         if (is_record(item))
-	        item = call_1(record_attrs_proc, item);
+	        item = record_attrs(item);
 
         if (!scm_is_vector(item))
 	        elog(ERROR, "scm_to_setof_composite_datum: vector expected, not %s", scm_to_string(item));
@@ -1873,6 +1913,126 @@ Datum scm_to_setof_composite_datum(SCM x, TupleDesc tuple_desc, ReturnSetInfo *r
     return result;
 }
 
+SCM make_record(SCM type_names, SCM values, SCM attr_names, SCM attr_names_hash)
+{
+	static SCM make_record_proc = SCM_UNDEFINED;
+
+	if (make_record_proc == SCM_UNDEFINED)
+		make_record_proc = eval_string_in_base_module("make-record");
+
+	return call_4(make_record_proc, type_names, values, attr_names, attr_names_hash);
+}
+
+SCM make_tsquery(SCM expr)
+{
+	static SCM make_tsquery_proc = SCM_UNDEFINED;
+
+	if (make_tsquery_proc == SCM_UNDEFINED)
+		make_tsquery_proc = eval_string_in_base_module("make-tsquery");
+
+	return call_1(make_tsquery_proc, expr);
+}
+
+SCM make_tsvector(SCM lexemes)
+{
+	static SCM make_tsvector_proc = SCM_UNDEFINED;
+
+	if (make_tsvector_proc == SCM_UNDEFINED)
+		make_tsvector_proc = eval_string_in_base_module("make-tsvector");
+
+	return call_1(make_tsvector_proc, lexemes);
+}
+
+SCM normalize_tsvector(SCM tsvector)
+{
+	static SCM normalize_tsvector_proc = SCM_UNDEFINED;
+
+	if (normalize_tsvector_proc == SCM_UNDEFINED)
+		normalize_tsvector_proc = eval_string_in_base_module("normalize-tsvector");
+
+	return call_1(normalize_tsvector_proc, tsvector);
+}
+
+SCM record_attrs(SCM record)
+{
+	static SCM record_attrs_proc = SCM_UNDEFINED;
+
+	if (record_attrs_proc == SCM_UNDEFINED)
+		record_attrs_proc = eval_string_in_base_module("record-attrs");
+
+	return call_1(record_attrs_proc, record);
+}
+
+SCM record_attr_names(SCM record)
+{
+	static SCM record_attr_names_proc = SCM_UNDEFINED;
+
+	if (record_attr_names_proc == SCM_UNDEFINED)
+		record_attr_names_proc = eval_string_in_base_module("record-attr-names");
+
+	return call_1(record_attr_names_proc, record);
+}
+
+SCM record_types(SCM record)
+{
+	static SCM record_types_proc = SCM_UNDEFINED;
+
+	if (record_types_proc == SCM_UNDEFINED)
+		record_types_proc = eval_string_in_base_module("record-types");
+
+	return call_1(record_types_proc, record);
+}
+
+SCM table_rows(SCM table)
+{
+	static SCM table_rows_proc = SCM_UNDEFINED;
+
+	if (table_rows_proc == SCM_UNDEFINED)
+		table_rows_proc = eval_string_in_base_module("table-rows");
+
+	return call_1(table_rows_proc, table);
+}
+
+SCM table_attr_names(SCM table)
+{
+	static SCM table_attr_names_proc = SCM_UNDEFINED;
+
+	if (table_attr_names_proc == SCM_UNDEFINED)
+		table_attr_names_proc = eval_string_in_base_module("table-attr-names");
+
+	return call_1(table_attr_names_proc, table);
+}
+
+SCM table_types(SCM table)
+{
+	static SCM table_types_proc = SCM_UNDEFINED;
+
+	if (table_types_proc == SCM_UNDEFINED)
+		table_types_proc = eval_string_in_base_module("table-types");
+
+	return call_1(table_types_proc, table);
+}
+
+SCM tsquery_expr(SCM tsquery)
+{
+	static SCM tsquery_expr_proc = SCM_UNDEFINED;
+
+	if (tsquery_expr_proc == SCM_UNDEFINED)
+		tsquery_expr_proc = eval_string_in_base_module("tsquery-expr");
+
+	return call_1(tsquery_expr_proc, tsquery);
+}
+
+SCM validate_tsquery(SCM tsquery)
+{
+	static SCM validate_tsquery_proc = SCM_UNDEFINED;
+
+	if (validate_tsquery_proc == SCM_UNDEFINED)
+		validate_tsquery_proc = eval_string_in_base_module("validate-tsquery");
+
+	return call_1(validate_tsquery_proc, tsquery);
+}
+
 Datum scm_to_setof_record_datum(SCM x, ReturnSetInfo *rsinfo)
 {
     SCM rows;
@@ -1889,8 +2049,8 @@ Datum scm_to_setof_record_datum(SCM x, ReturnSetInfo *rsinfo)
         rows = x;
 
     else {
-	    default_types = call_1(table_types_proc, x);
-        rows = call_1(table_rows_proc, x);
+	    default_types = table_types(x);
+        rows = table_rows(x);
         default_tuple_desc = table_tuple_desc(x);
     }
 
@@ -1903,8 +2063,8 @@ Datum scm_to_setof_record_datum(SCM x, ReturnSetInfo *rsinfo)
         bool *is_null;
 
         if (is_record(item)) {
-	        rec_attrs = call_1(record_attrs_proc, item);
-	        types = call_1(record_types_proc, item);
+	        rec_attrs = record_attrs(item);
+	        types = record_types(item);
 
 	        if (scm_is_eq(types, default_types))
 		        tuple_desc = default_tuple_desc;
@@ -1975,16 +2135,16 @@ Datum scm_to_setof_record_datum(SCM x, ReturnSetInfo *rsinfo)
 
 TupleDesc record_tuple_desc(SCM x)
 {
-	SCM attr_names = call_1(record_attr_names_proc, x);
-	SCM type_desc_list = call_1(record_types_proc, x);
+	SCM attr_names = record_attr_names(x);
+	SCM type_desc_list = record_types(x);
 
 	return build_tuple_desc(attr_names, type_desc_list);
 }
 
 TupleDesc table_tuple_desc(SCM x)
 {
-	SCM attr_names = call_1(table_attr_names_proc, x);
-	SCM type_desc_list = call_1(table_types_proc, x);
+	SCM attr_names = table_attr_names(x);
+	SCM type_desc_list = table_types(x);
 
 	return build_tuple_desc(attr_names, type_desc_list);
 }
@@ -2119,7 +2279,7 @@ SCM eval_code_block(SCM source_text)
 
 SCM eval_source_text(SCM source_text)
 {
-	SCM module = find_or_create_module_for_role(GetUserId());
+	SCM module = create_module_for_role(GetUserId());
 	SCM port = scm_open_input_string(source_text);
 	SCM x;
 
@@ -2677,7 +2837,7 @@ static int64 get_cached_prelude_id(Oid role_oid);
 static SCM prepare_sandbox_module(int64 prelude_id);
 static SCM copy_module(SCM module);
 
-SCM find_or_create_module_for_role(Oid role_oid)
+SCM create_module_for_role(Oid role_oid)
 {
 	int64 default_prelude_id, prelude_id, role_prelude_id;
 	SCM module;
@@ -3130,6 +3290,8 @@ void insert_type_cache_entry(Oid type_oid, ToScmFunc to_scm, ToDatumFunc to_datu
 // Type Conversion
 //
 
+static double scm_decimal_to_double(SCM x, Oid type_oid);
+
 SCM datum_to_scm(Datum datum, Oid type_oid)
 {
 	bool found;
@@ -3226,7 +3388,7 @@ Datum scm_to_setof_datum(SCM x, Oid type_oid, ReturnSetInfo *rsinfo)
     TupleDescInitEntry(tupdesc, 1, "", type_oid, -1, 0);
 
     if (is_table(x))
-        rows = call_1(table_rows_proc, x);
+        rows = table_rows(x);
     else
         rows = x;
 
@@ -3488,7 +3650,7 @@ SCM datum_heap_tuple_to_scm(Datum x, TupleDesc tuple_desc)
 	pfree(is_null);
 	ReleaseTupleDesc(tuple_desc);
 
-	return call_4(make_record_proc, type_names, values, attr_names, attr_names_hash);
+	return make_record(type_names, values, attr_names, attr_names_hash);
 }
 
 SCM type_desc_expr(Oid type_oid)
@@ -3579,7 +3741,7 @@ Datum scm_to_datum_float4(SCM x, Oid type_oid)
 		return Float4GetDatum(scm_to_double(x));
 
 	else if (is_decimal(x))
-		return Float4GetDatum(scm_to_double(call_1(decimal_to_inexact_proc, x)));
+		return Float4GetDatum(scm_decimal_to_double(x, type_oid));
 
 	else {
 		elog(ERROR, "wrong type, number expected: %s", scm_to_string(x));
@@ -3597,11 +3759,21 @@ Datum scm_to_datum_float8(SCM x, Oid type_oid)
 		return Float8GetDatum(scm_to_double(x));
 
 	else if (is_decimal(x))
-		return Float8GetDatum(scm_to_double(call_1(decimal_to_inexact_proc, x)));
+		return Float8GetDatum(scm_decimal_to_double(x, type_oid));
 
 	else {
 		elog(ERROR, "wrong type, number expected: %s", scm_to_string(x));
 	}
+}
+
+double scm_decimal_to_double(SCM x, Oid type_oid)
+{
+	static SCM decimal_to_inexact_proc = SCM_UNDEFINED;
+
+	if (decimal_to_inexact_proc == SCM_UNDEFINED)
+		decimal_to_inexact_proc = eval_string_in_base_module("decimal->inexact");
+
+	return scm_to_double(call_1(decimal_to_inexact_proc, x));
 }
 
 Datum scm_to_datum_record(SCM result, Oid ignored)
@@ -3620,7 +3792,7 @@ Datum scm_to_datum_record(SCM result, Oid ignored)
 	if (!is_record(result))
 		elog(ERROR, "wrong type, record expected: %s", scm_to_string(result));
 
-	data = call_1(record_attrs_proc, result);
+	data = record_attrs(result);
 	len = scm_c_vector_length(data);
 	tuple_desc = record_tuple_desc(result);
 
@@ -3941,6 +4113,10 @@ Datum scm_to_datum_interval(SCM x, Oid type_oid)
 SCM datum_numeric_to_scm(Datum x, Oid type_oid)
 {
 	SCM s = scm_from_locale_string(DatumGetCString(DirectFunctionCall1(numeric_out, x)));
+	static SCM string_to_decimal_proc = SCM_UNDEFINED;
+
+	if (string_to_decimal_proc == SCM_UNDEFINED)
+		string_to_decimal_proc  = eval_string_in_base_module("string->decimal");
 
 	return call_1(string_to_decimal_proc, s);
 }
@@ -3948,8 +4124,13 @@ SCM datum_numeric_to_scm(Datum x, Oid type_oid)
 Datum scm_to_datum_numeric(SCM x, Oid type_oid)
 {
 	char *numeric_str = NULL;
+	static SCM decimal_to_string_proc = SCM_UNDEFINED;
 
 	if (is_decimal(x)) {
+
+		if (decimal_to_string_proc == SCM_UNDEFINED)
+			decimal_to_string_proc = eval_string_in_base_module("decimal->string");
+
 		numeric_str = scm_to_locale_string(call_1(decimal_to_string_proc, x));
 	}
 	else if (scm_is_number(x)) {
@@ -4879,9 +5060,14 @@ void jsonb_scalar_expr_to_jsbv(SCM expr, JsonbValue *jsbv)
 
 SCM datum_jsonpath_to_scm(Datum x, Oid type_oid)
 {
+	static SCM make_jsonpath_proc = SCM_UNDEFINED;
+
 	JsonPath *jsp = DatumGetJsonPathP(x);
 	JsonPathItem elem;
 	SCM expr = SCM_EOL;
+
+	if (make_jsonpath_proc == SCM_UNDEFINED)
+		make_jsonpath_proc = eval_string_in_base_module("make-jsonpath");
 
 	jsp_init(&elem, jsp);
 	expr = jsp_to_scm(&elem, expr);
@@ -4891,8 +5077,18 @@ SCM datum_jsonpath_to_scm(Datum x, Oid type_oid)
 
 Datum scm_to_datum_jsonpath(SCM x, Oid type_oid)
 {
+	static SCM jsonpath_expr_proc = SCM_UNDEFINED;
+	static SCM jsonpath_is_strict_proc = SCM_UNDEFINED;
+	static SCM validate_jsonpath_proc = SCM_UNDEFINED;
+
 	StringInfoData buf;
 	JsonPath *jsp;
+
+	if (jsonpath_expr_proc == SCM_UNDEFINED) {
+		jsonpath_expr_proc      = eval_string_in_base_module("jsonpath-expr");
+		jsonpath_is_strict_proc = eval_string_in_base_module("jsonpath-strict?");
+		validate_jsonpath_proc  = eval_string_in_base_module("validate-jsonpath");
+	}
 
 	call_1(validate_jsonpath_proc, x);
 
@@ -4941,8 +5137,7 @@ SCM jsp_item_to_scm(JsonPathItem *v, SCM expr)
 
 		case jpiNumeric:
 			n = NumericGetDatum(jsp_get_numeric(v));
-			arg = scm_from_locale_string(DatumGetCString(DirectFunctionCall1(numeric_out, n)));
-			return call_1(string_to_decimal_proc, arg);
+			return datum_numeric_to_scm(n, InvalidOid);
 
 		case jpiString:
 			return scm_from_locale_string(jsp_get_string(v));
@@ -5645,7 +5840,7 @@ SCM datum_tsquery_to_scm(Datum x, Oid type_oid)
 	QueryItem *query_items = GETQUERY(query);
 	char *operands = GETOPERAND(query);
 
-	return call_1(make_tsquery_proc, tsquery_items_to_scm(&query_items, operands));
+	return make_tsquery(tsquery_items_to_scm(&query_items, operands));
 }
 
 Datum scm_to_datum_tsquery(SCM x, Oid type_oid)
@@ -5662,9 +5857,9 @@ Datum scm_to_datum_tsquery(SCM x, Oid type_oid)
 	if (!is_tsquery(x))
 		elog(ERROR, "tsquery result expected, not: %s", scm_to_string(x));
 
-	call_1(validate_tsquery_proc, x);
+	validate_tsquery(x);
 
-	expr = call_1(tsquery_expr_proc, x);
+	expr = tsquery_expr(x);
 
 	tsquery_expr_size(expr, &item_count, &operand_bytes);
 
@@ -5872,14 +6067,14 @@ SCM datum_tsvector_to_scm(Datum x, Oid type_oid)
         tsvector_scm_list = scm_append(scm_list_2(tsvector_scm_list, scm_list_1(tslexeme_scm)));
     }
 
-    tsvector_scm = call_1(make_tsvector_proc, tsvector_scm_list);
+    tsvector_scm = make_tsvector(tsvector_scm_list);
 
     return tsvector_scm;
 }
 
 Datum scm_to_datum_tsvector(SCM x, Oid type_oid)
 {
-	SCM n = call_1(normalize_tsvector_proc, x);
+	SCM n = normalize_tsvector(x);
 	size_t buffer_size = calculate_tsvector_buffer_size(n);
 	SCM lexemes = call_1(tsvector_lexemes_proc, n);
 	long lexeme_count = scm_ilength(lexemes);
@@ -6214,6 +6409,11 @@ bool is_date(SCM x)
 
 bool is_decimal(SCM x)
 {
+	static SCM is_decimal_proc = SCM_UNDEFINED;
+
+	if (is_decimal_proc == SCM_UNDEFINED)
+		is_decimal_proc = eval_string_in_base_module("decimal?");
+
 	return scm_is_true(call_1(is_decimal_proc, x));
 }
 
@@ -6224,16 +6424,31 @@ bool is_inet(SCM x)
 
 bool is_int2(SCM x)
 {
+	static SCM is_int2_proc = SCM_UNDEFINED;
+
+	if (is_int2_proc == SCM_UNDEFINED)
+		is_int2_proc = eval_string_in_base_module("int2-compatible?");
+
 	return scm_is_true(call_1(is_int2_proc, x));
 }
 
 bool is_int4(SCM x)
 {
+	static SCM is_int4_proc = SCM_UNDEFINED;
+
+	if (is_int4_proc == SCM_UNDEFINED)
+		is_int4_proc = eval_string_in_base_module("int4-compatible?");
+
 	return scm_is_true(call_1(is_int4_proc, x));
 }
 
 bool is_int8(SCM x)
 {
+	static SCM is_int8_proc = SCM_UNDEFINED;
+
+	if (is_int8_proc == SCM_UNDEFINED)
+		is_int8_proc = eval_string_in_base_module("int8-compatible?");
+
 	return scm_is_true(call_1(is_int8_proc, x));
 }
 
@@ -6294,11 +6509,21 @@ bool is_range(SCM x)
 
 bool is_record(SCM x)
 {
+	static SCM is_record_proc = SCM_UNDEFINED;
+
+	if (is_record_proc == SCM_UNDEFINED)
+		is_record_proc = eval_string_in_base_module("record?");
+
 	return scm_is_true(call_1(is_record_proc, x));
 }
 
 bool is_table(SCM x)
 {
+	static SCM is_table_proc = SCM_UNDEFINED;
+
+	if (is_table_proc == SCM_UNDEFINED)
+		is_table_proc = eval_string_in_base_module("table?");
+
 	return scm_is_true(call_1(is_table_proc, x));
 }
 
@@ -6309,6 +6534,11 @@ bool is_time(SCM x)
 
 bool is_tsquery(SCM x)
 {
+	static SCM is_tsquery_proc = SCM_UNDEFINED;
+
+	if (is_tsquery_proc == SCM_UNDEFINED)
+		is_tsquery_proc = eval_string_in_base_module("tsquery?");
+
 	return scm_is_true(call_1(is_tsquery_proc, x));
 }
 
@@ -6355,11 +6585,16 @@ char *scm_to_string(SCM obj)
 
 SCM spi_execute(SCM command, SCM args, SCM count)
 {
+	static SCM make_table_proc = SCM_UNDEFINED;
+
 	int ret;
 	SCM rows_processed;
 	SCM table;
 
 	SPIExecuteOptions options = {0};
+
+	if (make_table_proc == SCM_UNDEFINED)
+		make_table_proc = eval_string_in_base_module("make-table");
 
 	if (module_defined_during_call)
 		throw_runtime_error("DO statements which define a module must be not access the database.");
@@ -6438,7 +6673,7 @@ SCM spi_execute(SCM command, SCM args, SCM count)
 					scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
 			}
 
-			record = call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
+			record = make_record(type_names, attrs, attr_names, attr_names_hash);
 			records = scm_cons(record, records);
 		}
 
@@ -6654,7 +6889,7 @@ bool dest_receive(TupleTableSlot *slot, DestReceiver *self)
 		args = scm_cons(is_null ? SCM_EOL : datum_to_scm(datum, type_oid), args);
 	}
 
-	result = apply_in_sandbox(proc, args);
+	result = apply_in_sandbox(SCM_BOOL_F, proc, args);
 
 	if (result == stop_marker)
 		return false;
@@ -6834,7 +7069,7 @@ SCM spi_cursor_fetch(SCM cursor, SCM direction, SCM count)
 				scm_c_vector_set_x(attrs, col, datum_to_scm(datum, type_oid));
 		}
 
-		record = call_4(make_record_proc, type_names, attrs, attr_names, attr_names_hash);
+		record = make_record(type_names, attrs, attr_names, attr_names_hash);
 		records = scm_cons(record, records);
 	}
 

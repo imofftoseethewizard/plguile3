@@ -145,7 +145,8 @@ values
   ('{web,http}',                  '(define-module (web http))                  (re-export-curated-builtin-module (web http))'),
   ('{web,request}',               '(define-module (web request))               (re-export-curated-builtin-module (web request))'),
   ('{web,response}',              '(define-module (web response))              (re-export-curated-builtin-module (web response))'),
-  ('{web,uri}',                   '(define-module (web uri))                   (re-export-curated-builtin-module (web uri))');
+  ('{web,uri}',                   '(define-module (web uri))                   (re-export-curated-builtin-module (web uri))'),
+  ('{pg,types}',                  '(define-module (pg types))                  (re-export-curated-builtin-module (pg types))');
 
 create function plguile3_notify_module_changed()
   returns void

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.27] - 2024-08-30
+
+This version reworks how functions are compiled and evaluated to
+enable the use of `use-modules` within their deinitions.  The module
+in which the function was defined is now retained and used as the
+current module for execution.  The transformation of source text to a
+lambda function was formerly just a string operation wrapping the
+source text in a lambda.  Now it reads the forms in the source text,
+separating the `use-modules` top-level forms, and constructs a `begin`
+expression consisting of any `use-modules` forms, followed by the
+`lambda`, the body of which has the remaining forms.  To allow some
+testing outside of Postgres, the `plguile base` module has been split
+into two pieces, a `pg types` module containing all of the record type
+definitions and some auxiliary functions.  The remainder is in the
+original module, which now includes `pg types`.
+
+All tests pass.
+
 ## [0.21.26] - 2024-08-02
 
 This version fixes a problem preventing loading of code when a

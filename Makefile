@@ -29,6 +29,7 @@ override CFLAGS := -Wall -Werror -fPIC $(CFLAGS)
 # Flags for compiling and linking against Guile
 GUILE_CFLAGS = $(shell pkg-config --cflags guile-3.0)
 GUILE_LIBS = $(shell pkg-config --libs guile-3.0)
+GUILE_SITEDIR = $(shell pkg-config --variable=sitedir guile-3.0)
 
 # Update the compile and link flags to include Guile dependencies
 override CPPFLAGS += $(GUILE_CFLAGS)
@@ -57,3 +58,9 @@ $(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plguile3.scm.h
 
 $(BUILD_DIR)/%.bc : src/%.c
 	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -c $< -o $@
+
+install : install-modules
+
+install-modules:
+	mkdir -p $(GUILE_SITEDIR)
+	cp -a src/modules/* $(GUILE_SITEDIR)

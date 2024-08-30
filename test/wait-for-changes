@@ -7,6 +7,7 @@ inotifywait -e modify \
             plguile3--1.0.sql \
             src/plguile3.c \
             src/plguile3.scm \
+            src/modules/pg/types.scm \
             test/Makefile \
             test/concurrent/user_env.sql \
             test/tests.sql
