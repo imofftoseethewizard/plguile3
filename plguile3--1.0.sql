@@ -146,7 +146,9 @@ values
   ('{web,request}',               '(define-module (web request))               (re-export-curated-builtin-module (web request))'),
   ('{web,response}',              '(define-module (web response))              (re-export-curated-builtin-module (web response))'),
   ('{web,uri}',                   '(define-module (web uri))                   (re-export-curated-builtin-module (web uri))'),
-  ('{pg,types}',                  '(define-module (pg types))                  (re-export-curated-builtin-module (pg types))');
+  ('{curated,bytevectors}',       '(define-module (curated bytevectors))       (re-export-curated-builtin-module (curated bytevectors))'),
+  ('{pg,types}',                  '(define-module (pg types))                  (re-export-curated-builtin-module (pg types))'),
+  ('{plguile3,spi}',              '(define-module (plguile3 spi))              (re-export-curated-builtin-module (plguile3 spi))');
 
 create function plguile3_notify_module_changed()
   returns void

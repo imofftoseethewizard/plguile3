@@ -85,6 +85,7 @@ select is(guile3_get_default_prelude(), '(define the-owner "anyone")');
 create or replace function who_owns_this() returns text as 'the-owner' language guile3;
 
 create or replace function sleep(t float4) returns void as $$
+  (use spi)
   (execute "select pg_sleep($1)" (list t))
 $$ language guile3;
 

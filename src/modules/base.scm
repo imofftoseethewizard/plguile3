@@ -4,6 +4,7 @@
 
 (define-module (plguile3 base)
   #:use-module (plguile3 primitives)
+  #:use-module (plguile3 spi)
   #:use-module (pg types)
   #:use-module (ice-9 hash-table)
   #:use-module (ice-9 match)
@@ -13,41 +14,27 @@
   #:use-module (srfi srfi-9)  ; define-record-type
   #:use-module (srfi srfi-11) ; let-values
   #:use-module (srfi srfi-19) ; date, time, etc (used in plguile3.c)
-  #:re-export (%cursor-open
-               %execute
-               %execute-with-receiver
-               %fetch
-               %move
-               notice
+  #:re-export (notice
                stop-command-execution
-               unbox-datum
                warning
                start-transaction
                commit
                commit-and-chain
                rollback
-               rollback-and-chain)
+               rollback-and-chain
+
+               execute
+               cursor-open
+               fetch
+
+               scalar)
 
   #:export ((safe-@ . @)
             (trusted-use-modules . use-modules)
             re-export-curated-builtin-module
             module-copy
-
-            to-string
-
-            execute
-            cursor-open
-            fetch
-
-            make-boxed-datum
-            boxed-datum?
-            boxed-datum-type
-            boxed-datum-value
-
-            scalar))
-
-(define (to-string x)
-  (format #f "~s" x))
+            use
+            ))
 
 (define try-load-trusted-module
   (let ((try-load-module try-load-module))
@@ -104,64 +91,13 @@
     (when (member func-oid func-oids)
       (hash-set! hash/role-id->func-oids role-id (delete func-oid func-oids)))))
 
-(define* (execute command
-                  #:optional (args '())
-                  #:key (count 0) receiver)
-  (if receiver
-      (%execute-with-receiver receiver command args count)
-      (%execute command args count)))
-
-(define* (cursor-open command
-                      #:optional (args '())
-                      #:key (hold #f) (name #f) (scroll '()))
-  (%cursor-open command args count hold name scroll))
-
-(define* (fetch cursor #:optional direction count)
-  (if count
-      (if (memq direction '(all first last next prior))
-          (raise-exception `(fetch-direction-takes-no-count ,direction))
-          (%fetch cursor direction count))
-      (case direction
-        ((absolute relative)
-         (raise-exception `(fetch-direction-requires-count ,direction)))
-
-        ((all)
-         (%fetch cursor 'forward 'all))
-
-        ((backward)
-         (%fetch cursor 'backward 1))
-
-        ((first)
-         (%fetch cursor 'absolute 1))
-
-        ((forward)
-         (%fetch cursor 'forward 1))
-
-        ((last)
-         (%fetch cursor 'absolute -1))
-
-        ((#f next)
-         (%fetch cursor 'forward 1))
-
-        ((prior)
-         (%fetch cursor 'backward 1))
-
-        (else
-         (if (number? direction)
-             (%fetch cursor 'forward direction)
-             (raise-exception `(fetch-unknown-direction ,direction)))))))
-
+;; todo, find a way to eliminate this
 (define-record-type boxed-datum
   ; the type is an Oid, the value is a Datum.
   (make-boxed-datum type value)
   boxed-datum?
   (type boxed-datum-type)
   (value boxed-datum-value))
-
-(define (scalar t)
-  (if (or (< 1 (table-length t)) (< 1 (table-width t)))
-      (raise-exception `(non-scalar-result #:length ,(table-length t) #:width ,(table-width t))))
-  (record-ref (table-row t 0) 0))
 
 (define* (apply-with-limits proc args time-limit allocation-limit #:optional module)
   (save-module-excursion
@@ -280,8 +216,24 @@
     (syntax-case x ()
       ((_ spec ...)
        (with-syntax (((resolved-specs ...) (resolve-module-specs #'(spec ...))))
-         #'(display (list resolved-specs ...))
          #'(use-modules resolved-specs ...))))))
+
+(define-syntax use
+  (lambda (x)
+    (define (resolve-named-interface name-stx)
+      (let ((name (syntax->datum name-stx)))
+        (case name
+          ((dates) (datum->syntax x '((srfi srfi-19))))
+          ((spi)   (datum->syntax x '((curated bytevectors) (pg types) (plguile3 spi) (srfi srfi-19))))
+          ((types) (datum->syntax x '((curated bytevectors) (pg types) (srfi srfi-19))))
+          (else
+           (error "Unknown interface for use: only spi and types are supported" name)))))
+    (syntax-case x ()
+      ((_ name)
+       (with-syntax (((modules ...) (resolve-named-interface #'name)))
+         #'(display (list modules ...))
+         #'(newline)
+         #'(trusted-use-modules modules ...))))))
 
 (define (eval-with-limits exp time-limit allocation-limit)
   (parameterize ((current-input-port   default-input-port)
@@ -2531,6 +2483,18 @@
       uri-userinfo
       uri?)
 
+     ((plguile3 spi)
+      commit
+      commit-and-chain
+      cursor-open
+      execute
+      fetch
+      rollback
+      rollback-and-chain
+      scalar
+      start-transaction
+      stop-command-execution)
+
      ((pg types)
       decimal?
       make-decimal
@@ -2657,212 +2621,102 @@
 
       make-cursor
       cursor?
-      cursor-name))))
+      cursor-name)
 
-(define bytevector-bindings
-  '(((guile)
-     string-utf8-length)
-    ((scheme base)
-     bytevector
-     bytevector-copy
-     bytevector-copy!
-     bytevector-append)
-    ((rnrs bytevectors)
-     make-bytevector
-     bytevector?
-     bytevector-length
-     bytevector=?
-     bytevector-fill!
-     bytevector-uint-ref
-     bytevector-sint-ref
-     bytevector-uint-set!
-     bytevector-sint-set!
-     bytevector-u8-ref
-     bytevector-s8-ref
-     bytevector-u16-ref
-     bytevector-s16-ref
-     bytevector-u32-ref
-     bytevector-s32-ref
-     bytevector-u64-ref
-     bytevector-s64-ref
-     bytevector-uint-ref
-     bytevector-sint-ref
-     bytevector-u8-set!
-     bytevector-s8-set!
-     bytevector-u16-set!
-     bytevector-s16-set!
-     bytevector-u32-set!
-     bytevector-s32-set!
-     bytevector-u64-set!
-     bytevector-s64-set!
-     bytevector-u16-native-ref
-     bytevector-s16-native-ref
-     bytevector-u32-native-ref
-     bytevector-s32-native-ref
-     bytevector-u64-native-ref
-     bytevector-s64-native-ref
-     bytevector-u16-native-set!
-     bytevector-s16-native-set!
-     bytevector-u32-native-set!
-     bytevector-s32-native-set!
-     bytevector-u64-native-set!
-     bytevector-s64-native-set!
-     bytevector->u8-list
-     u8-list->bytevector
-     bytevector->uint-list
-     bytevector->sint-list
-     uint-list->bytevector
-     sint-list->bytevector
-     bytevector-ieee-single-ref
-     bytevector-ieee-double-ref
-     bytevector-ieee-single-set!
-     bytevector-ieee-double-set!
-     bytevector-ieee-single-native-ref
-     bytevector-ieee-double-native-ref
-     bytevector-ieee-single-native-set!
-     bytevector-ieee-double-native-set!
-     string->utf8
-     string->utf16
-     string->utf32
-     utf8->string
-     utf16->string
-     utf32->string)))
-
-(define srfi-19-bindings
-  '(((srfi srfi-19)
-     time-utc
-     time-tai
-     time-monotonic
-     time-duration
-     time?
-     make-time
-     time-type
-     time-nanosecond
-     time-second
-     set-time-type!
-     set-time-nanosecond!
-     set-time-second!
-     copy-time
-     current-time
-     time-resolution
-     time<=?
-     time<?
-     time=?
-     time>=?
-     time>?
-     time-difference
-     time-difference!
-     add-duration
-     add-duration!
-     subtract-duration
-     subtract-duration!
-     date?
-     make-date
-     date-nanosecond
-     date-second
-     date-minute
-     date-hour
-     date-day
-     date-month
-     date-year
-     date-zone-offset
-     date-year-day
-     date-week-day
-     date-week-number
-     current-date
-     current-julian-day
-     current-modified-julian-day
-     date->julian-day
-     date->modified-julian-day
-     date->time-monotonic
-     date->time-tai
-     date->time-utc
-     julian-day->date
-     julian-day->time-monotonic
-     julian-day->time-tai
-     julian-day->time-utc
-     modified-julian-day->date
-     modified-julian-day->time-monotonic
-     modified-julian-day->time-tai
-     modified-julian-day->time-utc
-     time-monotonic->date
-     time-monotonic->time-tai
-     time-monotonic->time-tai!
-     time-monotonic->time-utc
-     time-monotonic->time-utc!
-     time-tai->date
-     time-tai->julian-day
-     time-tai->modified-julian-day
-     time-tai->time-monotonic
-     time-tai->time-monotonic!
-     time-tai->time-utc
-     time-tai->time-utc!
-     time-utc->date
-     time-utc->julian-day
-     time-utc->modified-julian-day
-     time-utc->time-monotonic
-     time-utc->time-monotonic!
-     time-utc->time-tai
-     time-utc->time-tai!
-     date->string
-     string->date)))
+     ((curated bytevectors)
+      string-utf8-length
+      bytevector
+      bytevector-copy
+      bytevector-copy!
+      bytevector-append
+      make-bytevector
+      bytevector?
+      bytevector-length
+      bytevector=?
+      bytevector-fill!
+      bytevector-uint-ref
+      bytevector-sint-ref
+      bytevector-uint-set!
+      bytevector-sint-set!
+      bytevector-u8-ref
+      bytevector-s8-ref
+      bytevector-u16-ref
+      bytevector-s16-ref
+      bytevector-u32-ref
+      bytevector-s32-ref
+      bytevector-u64-ref
+      bytevector-s64-ref
+      bytevector-uint-ref
+      bytevector-sint-ref
+      bytevector-u8-set!
+      bytevector-s8-set!
+      bytevector-u16-set!
+      bytevector-s16-set!
+      bytevector-u32-set!
+      bytevector-s32-set!
+      bytevector-u64-set!
+      bytevector-s64-set!
+      bytevector-u16-native-ref
+      bytevector-s16-native-ref
+      bytevector-u32-native-ref
+      bytevector-s32-native-ref
+      bytevector-u64-native-ref
+      bytevector-s64-native-ref
+      bytevector-u16-native-set!
+      bytevector-s16-native-set!
+      bytevector-u32-native-set!
+      bytevector-s32-native-set!
+      bytevector-u64-native-set!
+      bytevector-s64-native-set!
+      bytevector->u8-list
+      u8-list->bytevector
+      bytevector->uint-list
+      bytevector->sint-list
+      uint-list->bytevector
+      sint-list->bytevector
+      bytevector-ieee-single-ref
+      bytevector-ieee-double-ref
+      bytevector-ieee-single-set!
+      bytevector-ieee-double-set!
+      bytevector-ieee-single-native-ref
+      bytevector-ieee-double-native-ref
+      bytevector-ieee-single-native-set!
+      bytevector-ieee-double-native-set!
+      string->utf8
+      string->utf16
+      string->utf32
+      utf8->string
+      utf16->string
+      utf32->string))))
 
 (define plguile3-bindings
   '(((guile)
      define-module
      define-public
      display
-     newline
-     resolve-module
-     current-module
      format
+     newline
      with-exception-handler)
 
     ((plguile3 base)
      @
-     use-modules
-     re-export-curated-builtin-module
-
-     %cursor-open
-     %execute
-     %execute-with-receiver
-     %fetch
-     %move
      notice
-     stop-command-execution
-     unbox-datum
-     warning
-     start-transaction
-     commit
-     commit-and-chain
-     rollback
-     rollback-and-chain
-
-     execute
-     cursor-open
-     fetch
-
-     make-boxed-datum
-     boxed-datum?
-     boxed-datum-type
-     boxed-datum-value
-
-     scalar)))
+     re-export-curated-builtin-module
+     use
+     use-modules
+     warning)))
 
 (define trusted-bindings
   (append all-pure-and-impure-bindings
-          bytevector-bindings
-          srfi-19-bindings ; dates and times
+          ;srfi-19-bindings ; dates and times
           plguile3-bindings))
 
 (define sandbox-iface-specs
-  (let ((sandbox-bindings (append all-pure-and-impure-bindings
-                                  plguile3-bindings)))
-    (map (lambda (x)
-           (let ((mod-name (car x))
-                 (bindings (cdr x)))
-             (resolve-interface mod-name #:select bindings)))
-         sandbox-bindings)))
+  (map (lambda (x)
+         (let ((mod-name (car x))
+               (bindings (cdr x)))
+           (resolve-interface mod-name #:select bindings)))
+       trusted-bindings))
 
 (define indent "")
 (define output '())

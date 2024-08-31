@@ -14,10 +14,12 @@ BUILD_DIR = build
 # A wildcard expression to select all C source files in the src/
 # directory
 SRC_FILES = $(wildcard src/*.c)
+MODULE_FILES = $(wildcard src/modules/*.scm)
 
 # Generate the list of object files by replacing the .c extension with
 # .o and prefixing with the build directory
 OBJS = $(SRC_FILES:src/%.c=$(BUILD_DIR)/%.o)
+MODULE_HEADERS = $(MODULE_FILES:src/modules/%.scm=$(BUILD_DIR)/%.scm.h)
 
 # Include PGXS settings
 PGXS := $(shell $(PG_CONFIG) --pgxs)
@@ -50,17 +52,11 @@ all: $(BUILD_DIR) $(OBJS)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/plguile3.scm.h: src/plguile3.scm
-	xxd -i $< > $@
+$(BUILD_DIR)/%.scm.h: src/modules/%.scm
+	xxd -i $< $@
 
-$(BUILD_DIR)/%.o: src/%.c $(BUILD_DIR)/plguile3.scm.h
+$(BUILD_DIR)/%.o: src/%.c $(MODULE_HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.bc : src/%.c
 	$(COMPILE.c.bc) $(CCFLAGS) $(CPPFLAGS) -c $< -o $@
-
-install : install-modules
-
-install-modules:
-	mkdir -p $(GUILE_SITEDIR)
-	cp -a src/modules/* $(GUILE_SITEDIR)

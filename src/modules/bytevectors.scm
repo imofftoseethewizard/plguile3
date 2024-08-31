@@ -1,0 +1,136 @@
+(define-module (curated bytevectors)
+
+  #:use-module ((guile)
+                #:select (string-utf8-length))
+
+  #:use-module ((scheme base)
+                #:select (bytevector
+                          bytevector-copy
+                          bytevector-copy!
+                          bytevector-append))
+
+  #:use-module ((rnrs bytevectors)
+                #:select (make-bytevector
+                          bytevector?
+                          bytevector-length
+                          bytevector=?
+                          bytevector-fill!
+                          bytevector-uint-ref
+                          bytevector-sint-ref
+                          bytevector-uint-set!
+                          bytevector-sint-set!
+                          bytevector-u8-ref
+                          bytevector-s8-ref
+                          bytevector-u16-ref
+                          bytevector-s16-ref
+                          bytevector-u32-ref
+                          bytevector-s32-ref
+                          bytevector-u64-ref
+                          bytevector-s64-ref
+                          bytevector-uint-ref
+                          bytevector-sint-ref
+                          bytevector-u8-set!
+                          bytevector-s8-set!
+                          bytevector-u16-set!
+                          bytevector-s16-set!
+                          bytevector-u32-set!
+                          bytevector-s32-set!
+                          bytevector-u64-set!
+                          bytevector-s64-set!
+                          bytevector-u16-native-ref
+                          bytevector-s16-native-ref
+                          bytevector-u32-native-ref
+                          bytevector-s32-native-ref
+                          bytevector-u64-native-ref
+                          bytevector-s64-native-ref
+                          bytevector-u16-native-set!
+                          bytevector-s16-native-set!
+                          bytevector-u32-native-set!
+                          bytevector-s32-native-set!
+                          bytevector-u64-native-set!
+                          bytevector-s64-native-set!
+                          bytevector->u8-list
+                          u8-list->bytevector
+                          bytevector->uint-list
+                          bytevector->sint-list
+                          uint-list->bytevector
+                          sint-list->bytevector
+                          bytevector-ieee-single-ref
+                          bytevector-ieee-double-ref
+                          bytevector-ieee-single-set!
+                          bytevector-ieee-double-set!
+                          bytevector-ieee-single-native-ref
+                          bytevector-ieee-double-native-ref
+                          bytevector-ieee-single-native-set!
+                          bytevector-ieee-double-native-set!
+                          string->utf8
+                          string->utf16
+                          string->utf32
+                          utf8->string
+                          utf16->string
+                          utf32->string))
+
+  #:re-export (string-utf8-length
+               bytevector
+               bytevector-copy
+               bytevector-copy!
+               bytevector-append
+               make-bytevector
+               bytevector?
+               bytevector-length
+               bytevector=?
+               bytevector-fill!
+               bytevector-uint-ref
+               bytevector-sint-ref
+               bytevector-uint-set!
+               bytevector-sint-set!
+               bytevector-u8-ref
+               bytevector-s8-ref
+               bytevector-u16-ref
+               bytevector-s16-ref
+               bytevector-u32-ref
+               bytevector-s32-ref
+               bytevector-u64-ref
+               bytevector-s64-ref
+               bytevector-uint-ref
+               bytevector-sint-ref
+               bytevector-u8-set!
+               bytevector-s8-set!
+               bytevector-u16-set!
+               bytevector-s16-set!
+               bytevector-u32-set!
+               bytevector-s32-set!
+               bytevector-u64-set!
+               bytevector-s64-set!
+               bytevector-u16-native-ref
+               bytevector-s16-native-ref
+               bytevector-u32-native-ref
+               bytevector-s32-native-ref
+               bytevector-u64-native-ref
+               bytevector-s64-native-ref
+               bytevector-u16-native-set!
+               bytevector-s16-native-set!
+               bytevector-u32-native-set!
+               bytevector-s32-native-set!
+               bytevector-u64-native-set!
+               bytevector-s64-native-set!
+               bytevector->u8-list
+               u8-list->bytevector
+               bytevector->uint-list
+               bytevector->sint-list
+               uint-list->bytevector
+               sint-list->bytevector
+               bytevector-ieee-single-ref
+               bytevector-ieee-double-ref
+               bytevector-ieee-single-set!
+               bytevector-ieee-double-set!
+               bytevector-ieee-single-native-ref
+               bytevector-ieee-double-native-ref
+               bytevector-ieee-single-native-set!
+               bytevector-ieee-double-native-set!
+               string->utf8
+               string->utf16
+               string->utf32
+               utf8->string
+               utf16->string
+               utf32->string))

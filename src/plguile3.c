@@ -62,8 +62,12 @@
 // convenience for calling one of these where the appropriate type oid is not available.
 #define OID_NOT_USED ((Oid)0)
 
-// Defines const char *src_plguile3_scm.
-#include "plguile3.scm.h"
+// Defines const char *src_modules_base_scm, int src_modules_base_scm_len
+// and corresponding files for the others.
+#include "base.scm.h"
+#include "bytevectors.scm.h"
+#include "spi.scm.h"
+#include "types.scm.h"
 
 PG_MODULE_MAGIC;
 
@@ -211,9 +215,9 @@ static bool is_time(SCM x);
 static bool is_tsquery(SCM x);
 static bool is_tsvector(SCM x);
 
-static SCM load_base_module(void);
-static SCM base_module_loader(void *data);
-static SCM load_base_module_error_handler(void *data, SCM key, SCM args);
+static SCM load_builtin_modules(void);
+static SCM builtin_modules_loader(void *data);
+static SCM load_builtin_modules_error_handler(void *data, SCM key, SCM args);
 static void role_remove_func_oid(SCM old_owner, SCM func);
 static SCM eval_string_in_base_module(const char *text);
 static SCM eval_string_in_module(const char *text, SCM module);
@@ -543,7 +547,6 @@ static SCM spi_rollback(void);
 static SCM spi_rollback_and_chain(void);
 
 static SCM base_module = SCM_UNDEFINED;
-static SCM types_module = SCM_UNDEFINED;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -619,8 +622,8 @@ void init_guile(void)
 
 	define_primitives_module();
 
-	// Load plguile3.scm
-	base_module = load_base_module();
+	// Load base.scm and types.scm
+	base_module = load_builtin_modules();
 
 	func_cache = scm_c_make_hash_table(16);
 	scm_gc_protect_object(func_cache);
@@ -728,7 +731,6 @@ void init_guile(void)
 	tsposition_weight_proc      = eval_string_in_base_module("tsposition-weight");
 	tsvector_lexemes_proc       = eval_string_in_base_module("tsvector-lexemes");
 
-	types_module   = scm_c_resolve_module("pg types");
 	trusted_module = scm_c_resolve_module("trusted");
 
 	public_symbol  = scm_from_utf8_symbol("public");
@@ -997,6 +999,7 @@ SCM assemble_proc_definition(HeapTuple proc_tuple)
 {
 	static SCM begin_sym       = SCM_UNDEFINED;
 	static SCM lambda_sym      = SCM_UNDEFINED;
+	static SCM use_sym         = SCM_UNDEFINED;
 	static SCM use_modules_sym = SCM_UNDEFINED;
 
 	bool is_null;
@@ -1005,6 +1008,7 @@ SCM assemble_proc_definition(HeapTuple proc_tuple)
 	if (begin_sym == SCM_UNDEFINED) {
 		begin_sym       = scm_from_utf8_symbol("begin");
 		lambda_sym      = scm_from_utf8_symbol("lambda");
+		use_sym         = scm_from_utf8_symbol("use");
 		use_modules_sym = scm_from_utf8_symbol("use-modules");
 	}
 
@@ -1021,7 +1025,8 @@ SCM assemble_proc_definition(HeapTuple proc_tuple)
 		SCM body_exprs = SCM_EOL;
 
 		while (scm_eof_object_p(x = guarded_read(port, src)) == SCM_BOOL_F)
-			if (scm_pair_p(x) == SCM_BOOL_T && SCM_CAR(x) == use_modules_sym)
+			if (scm_pair_p(x) == SCM_BOOL_T &&
+			    (SCM_CAR(x) == use_sym || SCM_CAR(x) == use_modules_sym))
 				use_modules_exprs = scm_cons(x, use_modules_exprs);
 			else
 				body_exprs = scm_cons(x, body_exprs);
@@ -1161,23 +1166,32 @@ SCM untrusted_eval(SCM expr, SCM module)
 	return call_2(untrusted_eval_proc, expr, module);
 }
 
-SCM load_base_module(void)
+SCM load_builtin_modules(void)
 {
     return scm_internal_catch(
         SCM_BOOL_T,
-        base_module_loader, NULL,
-        load_base_module_error_handler, NULL);
+        builtin_modules_loader, NULL,
+        load_builtin_modules_error_handler, NULL);
 }
 
-SCM base_module_loader(void *data)
+SCM builtin_modules_loader(void *data)
 {
-	SCM text = scm_from_locale_string((const char *)src_plguile3_scm);
-	scm_eval_string_in_module(text, scm_current_module());
+	SCM base_src_text         = scm_from_locale_stringn((const char *)src_modules_base_scm, src_modules_base_scm_len);
+	SCM bytevectors_src_text  = scm_from_locale_stringn((const char *)src_modules_bytevectors_scm, src_modules_bytevectors_scm_len);
+	SCM spi_src_text          = scm_from_locale_stringn((const char *)src_modules_spi_scm, src_modules_spi_scm_len);
+	SCM types_src_text        = scm_from_locale_stringn((const char *)src_modules_types_scm, src_modules_types_scm_len);
+
+	scm_eval_string_in_module(bytevectors_src_text, scm_current_module());
+	scm_eval_string_in_module(types_src_text, scm_current_module());
+	scm_eval_string_in_module(spi_src_text, scm_current_module());
+	scm_eval_string_in_module(base_src_text, scm_current_module());
+
 	return scm_c_resolve_module("plguile3 base");
 }
 
-SCM load_base_module_error_handler(void *data, SCM key, SCM args)
+SCM load_builtin_modules_error_handler(void *data, SCM key, SCM args)
 {
+
 	elog(ERROR, "Unable to load plguile3 base module: %s %s", scm_to_string(key),
 	     scm_to_string(args));
 }
@@ -6561,16 +6575,16 @@ SCM scm_c_list_ref(SCM obj, size_t k)
 
 char *scm_to_string(SCM obj)
 {
-	static SCM proc = SCM_UNDEFINED;
+	static SCM to_string = SCM_UNDEFINED;
 
 	size_t len;
 	char *c_str;
 	char *result;
 
-	if (proc == SCM_UNDEFINED)
-		proc = base_module_lookup("to-string");
+	if (to_string == SCM_UNDEFINED)
+		to_string = scm_c_eval_string("(lambda (x) (format #f \"~s\" x))");
 
-	c_str = scm_to_locale_stringn(call_1(proc, obj), &len);
+	c_str = scm_to_locale_stringn(call_1(to_string, obj), &len);
 	result = pstrdup(c_str);
 
 	free(c_str);
